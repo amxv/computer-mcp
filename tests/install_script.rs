@@ -22,8 +22,12 @@ fn install_script_has_expected_structure() {
         "COMPUTER_MCP_PUBLISHER_USER",
         "COMPUTER_MCP_SERVICE_GROUP",
         "COMPUTER_MCP_READER_KEY_DIR",
+        "COMPUTER_MCP_HTTP_BIND_PORT",
+        "COMPUTER_MCP_PUBLIC_HOST",
         "ensure_service_accounts()",
         "detect_platform()",
+        "resolved_http_bind_port()",
+        "resolved_public_host()",
         "install_runtime_prerequisites()",
         "install_build_prerequisites()",
         "install_binaries_from_release()",
@@ -38,8 +42,9 @@ fn install_script_has_expected_structure() {
         "reader_app_id",
         "reader_installation_id",
         "rotate the installer-generated API key",
-        "curl -k \"https://${ip}/health\"",
-        "MCP URL shape: https://${ip}/mcp?key=<redacted>",
+        "curl -k \"https://${public_host}/health\"",
+        "MCP URL shape: https://${public_host}/mcp?key=<redacted>",
+        "expose HTTP port ${http_port}",
     ];
 
     for snippet in required_snippets {

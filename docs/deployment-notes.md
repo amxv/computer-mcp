@@ -36,6 +36,8 @@ sudo COMPUTER_MCP_BINARY_SOURCE_DIR="$PWD/target/release" bash scripts/install.s
 
 ## Runpod And Other Container Hosts
 
+If the target is Runpod, prefer the exact guide in [runpod-deployment.md](runpod-deployment.md).
+
 Before using the standard start flow, check whether the host actually has a usable `systemd`:
 
 ```bash
@@ -86,6 +88,8 @@ Important limits:
 - `COMPUTER_MCP_SERVICE_GROUP`
 - `COMPUTER_MCP_READER_KEY_DIR`
 - `COMPUTER_MCP_PUBLISHER_KEY_DIR`
+- `COMPUTER_MCP_HTTP_BIND_PORT`
+- `COMPUTER_MCP_PUBLIC_HOST`
 - `COMPUTER_MCP_ENABLE_CERTBOT`
 
 Example:

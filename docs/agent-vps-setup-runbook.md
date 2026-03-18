@@ -11,6 +11,8 @@ Use this document exactly as written. It is optimized for:
   - a **reader app** for read-only private repo access
   - a **publisher app** for branch push + PR creation
 
+If the target host is Runpod, also read [runpod-deployment.md](runpod-deployment.md).
+
 The human should not be asked to make product decisions during setup. The defaults are already chosen here.
 
 ## Outcome
