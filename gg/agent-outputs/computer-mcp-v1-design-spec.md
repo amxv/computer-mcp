@@ -186,7 +186,19 @@ Behavior:
 - If `kill_process=true`, server should ignore `chars` for that call.
 - unknown/expired `session_id` returns explicit `Unknown process id` style error.
 
-### 6.4 `apply_patch`
+### 6.4 Stateful Session Semantics
+- Shell state is session-scoped and persistent while the session is alive.
+- Changes made in one call persist to the next call for the same `session_id`, including:
+  - current working directory (`cd`)
+  - environment variables (`export`)
+  - shell-local state
+- This satisfies workflows like:
+  1. call A: change directory
+  2. call B: run command without passing `workdir`
+  3. result uses the directory from call A (same session)
+- A different/new session does not inherit state from other sessions.
+
+### 6.5 `apply_patch`
 Purpose: file mutation using Codex-style patch grammar.
 
 Requirements:
@@ -333,6 +345,9 @@ Required mitigations for v1:
 - `exec_command` returns `session_id` for long-running command
 - `write_stdin` drives interactive tty command to completion
 - `write_stdin` with `kill_process=true` terminates running process and returns exit state
+- stateful session behavior:
+  - `cd` in one call affects next command in same session
+  - environment variable exported in one call is visible in later calls in same session
 - `apply_patch` add/update/delete/move scenarios
 - auth rejection without valid `key`
 
@@ -353,6 +368,7 @@ Required mitigations for v1:
 - Running/finished signal model:
   - running -> `session_id` present, `exit_code` absent
   - finished -> `exit_code` present, `session_id` absent
+- Session-scoped state is persistent (`cd`, env, shell context) while session is alive.
 - `exec_command` supports optional `timeout_ms` with server-side caps.
 - `write_stdin` supports optional `kill_process`.
 - Codex-style `apply_patch` behavior reuse.
