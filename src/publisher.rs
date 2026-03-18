@@ -740,12 +740,12 @@ mod tests {
         let repo = tempdir.path().join("repo");
         std::fs::create_dir_all(&repo).expect("repo dir");
 
-        std::process::Command::new("git")
+        let init_status = std::process::Command::new("git")
             .current_dir(&repo)
             .args(["init", "-q"])
             .status()
-            .expect("git init")
-            .success();
+            .expect("git init");
+        assert!(init_status.success(), "git init should succeed");
         std::process::Command::new("git")
             .current_dir(&repo)
             .args(["config", "user.email", "test@example.com"])
