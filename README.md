@@ -11,6 +11,7 @@ For extra detail, see:
 - [docs/deployment-notes.md](docs/deployment-notes.md)
 - [docs/github-app-agent-auth.md](docs/github-app-agent-auth.md)
 - [docs/runpod-deployment.md](docs/runpod-deployment.md)
+- [docs/runpod-container-template.md](docs/runpod-container-template.md)
 
 If the target host is Runpod, use [docs/runpod-deployment.md](docs/runpod-deployment.md).
 The main README below is the standard Linux VPS path.

@@ -1,0 +1,7 @@
+.git
+.github
+target
+tmp
+gg
+.DS_Store
+src/.DS_Store
