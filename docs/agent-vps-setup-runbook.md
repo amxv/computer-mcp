@@ -13,21 +13,6 @@ Use this document exactly as written. It is optimized for:
 
 The human should not be asked to make product decisions during setup. The defaults are already chosen here.
 
-## One-Click GitHub App Creation URLs
-
-Use these personal-account GitHub App registration URLs to pre-fill the correct settings for this repo:
-
-- Reader app:
-  `https://github.com/settings/apps/new?name=amxv-computer-mcp-reader&description=Read-only%20private%20repo%20access%20for%20computer-mcp%20agent&url=https%3A%2F%2Fgithub.com%2Famxv%2Fcomputer-mcp&public=false&request_oauth_on_install=false&webhook_active=false&contents=read`
-- Publisher app:
-  `https://github.com/settings/apps/new?name=amxv-computer-mcp-publisher&description=Branch%20push%20and%20PR%20creation%20for%20computer-mcp&url=https%3A%2F%2Fgithub.com%2Famxv%2Fcomputer-mcp&public=false&request_oauth_on_install=false&webhook_active=false&contents=write&pull_requests=write`
-
-Notes:
-
-- These links are for personal-account apps. For an organization-owned app, use the same query string on `https://github.com/organizations/ORG/settings/apps/new`.
-- GitHub App names must be globally unique. If GitHub says the name is unavailable, change only the `name=` value and leave the rest unchanged.
-- Webhooks should stay disabled for both apps. These URLs already target the non-webhook flow, but if GitHub shows the webhook toggle as enabled for any reason, disable it manually before submitting.
-
 ## Outcome
 
 When this runbook is complete:
@@ -64,7 +49,7 @@ You need these inputs before you can finish setup:
 
 Do not ask the human to find installation IDs manually. You will derive them yourself after they create and install the apps.
 
-## Exact Message To Send The Human
+## Step 1: Send The Human The Exact Setup Message
 
 Send this message to the human exactly once:
 
@@ -72,9 +57,11 @@ Send this message to the human exactly once:
 I need you to create two private GitHub Apps and install both of them on only the repositories this VPS agent should touch.
 
 App 1: computer-mcp-reader
+- Create it from this pre-filled URL:
+  https://github.com/settings/apps/new?name=amxv-computer-mcp-reader&description=Read-only%20private%20repo%20access%20for%20computer-mcp%20agent&url=https%3A%2F%2Fgithub.com%2Famxv%2Fcomputer-mcp&public=false&request_oauth_on_install=false&webhook_active=false&contents=read
 - Purpose: read-only private repo access for the coding agent
 - Homepage URL: use your repo URL or GitHub profile URL
-- Webhook Active: OFF
+- After the form opens, uncheck Webhook Active before creating the app
 - Request user authorization during installation: OFF
 - Device Flow: OFF
 - Setup URL: blank
@@ -85,9 +72,11 @@ App 1: computer-mcp-reader
 - During install: choose Only select repositories and select only the repos this agent should be able to read
 
 App 2: computer-mcp-publisher
+- Create it from this pre-filled URL:
+  https://github.com/settings/apps/new?name=amxv-computer-mcp-publisher&description=Branch%20push%20and%20PR%20creation%20for%20computer-mcp&url=https%3A%2F%2Fgithub.com%2Famxv%2Fcomputer-mcp&public=false&request_oauth_on_install=false&webhook_active=false&contents=write&pull_requests=write
 - Purpose: create a branch and open a PR
 - Homepage URL: use your repo URL or GitHub profile URL
-- Webhook Active: OFF
+- After the form opens, uncheck Webhook Active before creating the app
 - Request user authorization during installation: OFF
 - Device Flow: OFF
 - Setup URL: blank
@@ -107,7 +96,24 @@ When both apps are created and installed, send me:
 - the VPS SSH command or the VPS host / port / user / key path
 ```
 
-## Local Variables
+Notes for the agent:
+
+- These links are for personal-account apps. For an organization-owned app, use the same query string on `https://github.com/organizations/ORG/settings/apps/new`.
+- GitHub App names must be globally unique. If GitHub says the name is unavailable, change only the `name=` value and leave the rest unchanged.
+- The webhook checkbox must be turned off manually for both apps before the human submits the form.
+
+## Step 2: Collect The Human's Reply
+
+Wait for the human to send:
+
+- Reader App ID
+- absolute local path to Reader PEM
+- Publisher App ID
+- absolute local path to Publisher PEM
+- target repo slug
+- VPS SSH command or VPS host / port / user / key path
+
+## Step 3: Set Local Variables
 
 After the human replies, set these variables locally:
 
@@ -138,7 +144,7 @@ vps_scp() {
 }
 ```
 
-## Step 1: Derive The Installation IDs Yourself
+## Step 4: Derive The Installation IDs Yourself
 
 Use the app ID and PEM file to query the exact installation for `TARGET_REPO`.
 
@@ -191,7 +197,7 @@ test -n "$PUBLISHER_INSTALLATION_ID"
 
 If either variable is empty, stop and inspect the app installation in GitHub before continuing.
 
-## Step 2: Validate The App Permissions Before Touching The VPS
+## Step 5: Validate The App Permissions Before Touching The VPS
 
 The repo already includes a token mint helper. Use it to verify that both apps authenticate correctly.
 
@@ -217,7 +223,7 @@ GITHUB_APP_PERMISSIONS_JSON='{"contents":"write","pull_requests":"write"}' \
 
 Do not continue if either command fails.
 
-## Step 3: Install `computer-mcp` On The VPS
+## Step 6: Install `computer-mcp` On The VPS
 
 Primary path for normal users:
 
@@ -225,9 +231,9 @@ Primary path for normal users:
 vps_ssh 'curl -fsSL https://raw.githubusercontent.com/amxv/computer-mcp/main/scripts/install.sh | bash'
 ```
 
-If that URL returns `404` because the repo is private, stop and switch to the local-source install flow from [docs/deployment-notes.md](/Users/ashray/code/amxv/computer-mcp/docs/deployment-notes.md).
+If that URL returns `404` because the repo is private, stop and switch to the local-source install flow from [deployment-notes.md](deployment-notes.md).
 
-## Step 4: Copy Both PEM Files To The VPS
+## Step 7: Copy Both PEM Files To The VPS
 
 Copy the PEM files to temporary root-owned paths:
 
@@ -251,7 +257,7 @@ Meaning:
 - the reader PEM is group-readable by `computer-mcp`
 - the publisher PEM is readable only by `computer-mcp-publisher`
 
-## Step 5: Write The Config
+## Step 8: Write The Config
 
 Append the app settings to `/etc/computer-mcp/config.toml`:
 
@@ -270,7 +276,7 @@ installation_id = ${PUBLISHER_INSTALLATION_ID}
 EOF"
 ```
 
-## Step 6: Start The Services
+## Step 9: Start The Stack
 
 Run exactly this command on the VPS:
 
@@ -286,7 +292,7 @@ vps_ssh 'computer-mcp start'
 - starts the publisher daemon
 - starts the MCP daemon
 
-## Step 7: Verify The Deployment
+## Step 10: Verify The Deployment
 
 Check the local status:
 
@@ -312,7 +318,7 @@ Expected MCP URL shape:
 https://<public_ip_or_host>/mcp?key=<api_key>
 ```
 
-## Step 8: What To Tell The Human After Setup
+## Step 11: Send The Final Summary To The Human
 
 Once everything is working, send the human this summary:
 
