@@ -1,121 +1,107 @@
-# GitHub App Auth For Agent PR Workflows
+# GitHub App Auth For The Publisher Architecture
 
-This repository includes a GitHub App based workflow for giving an agent the minimum GitHub access it needs:
+`computer-mcp` now uses a split model for PR creation:
 
-- create a branch
-- push commits to that branch
-- open a pull request
+- the coding agent edits code, runs tests, and makes a local commit
+- the local publisher daemon holds the GitHub App private key
+- `computer-mcp publish-pr` sends a local `git bundle` to the publisher daemon
+- the publisher daemon mints a short-lived installation token internally, pushes a generated branch, opens the PR, and returns the PR URL
 
-The goal is to avoid placing a broad personal access token on a VPS.
+The goal is simple: the agent can ask for a PR without ever holding the GitHub write credential itself.
 
-## What Is Manual
+## What The GitHub App Is Used For
 
-GitHub App registration is still a manual GitHub step.
+The publisher daemon uses the GitHub App to:
 
-GitHub's supported setup flow for a private GitHub App is documented in the GitHub UI and docs. Use a private app and install it only on the target repository.
+- push a feature branch
+- create a pull request
 
-One-time manual steps:
+Required repository permissions:
 
-1. Register a private GitHub App under your personal account or org.
-2. Grant only these repository permissions:
-   - `Contents: Read & write`
-   - `Pull requests: Read & write`
-3. Install the app on the single target repository.
-4. Generate and download the app private key (`.pem`).
-5. Record:
-   - `GITHUB_APP_ID`
-   - `GITHUB_APP_INSTALLATION_ID`
-   - `GITHUB_APP_PRIVATE_KEY_PATH`
+- `Contents: Read & write`
+- `Pull requests: Read & write`
+- `Metadata: Read-only`
 
-## Included Scripts
+## Manual GitHub Setup
 
-### Mint an installation token
+GitHub App registration is still a manual step.
 
-```bash
-GITHUB_APP_ID=123456 \
-GITHUB_APP_INSTALLATION_ID=789012 \
-GITHUB_APP_PRIVATE_KEY_PATH=/secure/path/app.private-key.pem \
-./scripts/mint-gh-app-installation-token.sh
+Create a private GitHub App, install it only on the repository you want to publish to, then record:
+
+- the App ID
+- the installation ID
+- the path to the downloaded `.pem` private key
+
+## Configure `computer-mcp`
+
+Example config:
+
+```toml
+publisher_app_id = 3123864
+agent_user = "computer-mcp-agent"
+publisher_user = "computer-mcp-publisher"
+service_group = "computer-mcp"
+
+[[publisher_targets]]
+id = "amxv/computer-mcp"
+repo = "amxv/computer-mcp"
+default_base = "main"
+installation_id = 117314785
 ```
 
-By default this prints only the short-lived installation token.
-
-### Protect main
-
-Before giving the repo to an agent, protect the default branch server-side:
+Place the private key where the publisher daemon expects it:
 
 ```bash
-./scripts/protect-main-branch.sh --repo OWNER/REPO --branch main --approvals 1
+sudo install -m 0600 -o computer-mcp-publisher -g computer-mcp \
+  /path/to/github-app.pem \
+  /etc/computer-mcp/publisher/private-key.pem
 ```
 
-This enforces the important part of the model:
-
-- the agent can push feature branches
-- the agent opens PRs
-- direct pushes to `main` are blocked by GitHub
-
-For a private repository, GitHub only enables protected branches with GitHub Pro, GitHub Team,
-GitHub Enterprise Cloud, or GitHub Enterprise Server. On a private personal-account repository
-without GitHub Pro, this command will fail with a GitHub plan error and `main` will not be
-protected server-side.
-
-If you want server-side blocking on a private repo, use one of these:
-
-- upgrade the owner account to GitHub Pro
-- move the repository to an organization on GitHub Team or Enterprise
-- make the repository public
-
-Without that plan support, the GitHub App still gives the agent scoped branch push and PR access,
-but preventing direct pushes to `main` becomes a local-policy problem instead of a GitHub-enforced
-rule.
-
-### Create branch, push, and open PR
-
-From a checkout of the target repository:
+Then start the publisher daemon:
 
 ```bash
-GITHUB_APP_ID=123456 \
-GITHUB_APP_INSTALLATION_ID=789012 \
-GITHUB_APP_PRIVATE_KEY_PATH=/secure/path/app.private-key.pem \
-./scripts/agent-create-pr.sh \
-  --repo OWNER/REPO \
-  --branch agent/example-change \
+computer-mcp --config /etc/computer-mcp/config.toml publisher start
+computer-mcp --config /etc/computer-mcp/config.toml publisher status
+```
+
+## How `publish-pr` Works
+
+Run `publish-pr` from inside the repo checkout after the change has already been committed:
+
+```bash
+computer-mcp --config /etc/computer-mcp/config.toml publish-pr \
+  --repo amxv/computer-mcp \
   --title "Agent: example change" \
-  --body "Automated change from computer-mcp agent." \
-  --commit-message "agent: implement example change"
+  --body "Automated change from computer-mcp."
 ```
 
-Optional author identity:
+Current requirements:
 
-```bash
-./scripts/agent-create-pr.sh \
-  --repo OWNER/REPO \
-  --branch agent/example-change \
-  --title "Agent: example change" \
-  --body "Automated change from computer-mcp agent." \
-  --commit-message "agent: implement example change" \
-  --name "computer-mcp-bot" \
-  --email "bot@users.noreply.github.com"
-```
+- the current directory must be inside a git repo
+- the worktree must be clean
+- the commit you want in the PR must already be on `HEAD`
+- the `--repo` value must match one of the configured `publisher_targets`
 
-## Recommended Storage On VPS
+`publish-pr` does not expose or print the GitHub installation token.
 
-Store only:
+## What This Does And Does Not Protect
 
-- `GITHUB_APP_ID`
-- `GITHUB_APP_INSTALLATION_ID`
-- the GitHub App private key file
+This architecture protects the GitHub write credential from the coding agent only if the agent is not running with unrestricted root-level access.
 
-Do not store a broad personal access token.
+Good:
+- `computer-mcpd` runs as `computer-mcp-agent`
+- `computer-mcp-prd` runs as `computer-mcp-publisher`
+- the publisher key is readable only by `computer-mcp-publisher`
 
-Recommended file permissions:
+Bad:
+- the coding agent runs as `root`
+- the coding agent has unrestricted `sudo`
+- the coding agent can read the publisher user's files or processes
 
-```bash
-chmod 600 /secure/path/app.private-key.pem
-```
+## Private Repo Branch Protection Note
 
-## Notes
+On a private personal GitHub repo without GitHub Pro, GitHub will not enforce protected branches server-side.
 
-- Installation tokens are short-lived, which reduces blast radius compared to a broad PAT.
-- The scripts here do not merge PRs. They stop at branch push + PR creation.
-- Branch protection is the real safety control. Prompt instructions are not enough on their own.
+With this architecture, the main safety property does not come from GitHub blocking `main`. It comes from keeping the GitHub write credential inside the publisher daemon instead of handing it to the coding agent.
+
+If the coding agent also needs to clone private repos directly, give it a separate read-only credential or prepare the checkout another way. This document only covers the publisher write-auth path.

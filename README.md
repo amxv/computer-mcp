@@ -2,36 +2,40 @@
 
 Remote coding MCP server for Linux VPS deployment.
 
-This README is the fast path for deploying the software on a VPS.
+This README is the fast path. It shows the shortest install and run flow for a fresh VPS.
 
-For detailed notes, see:
+For extra detail, see:
 - [deployment-notes.md](/Users/ashray/code/amxv/computer-mcp/docs/deployment-notes.md)
 - [github-app-agent-auth.md](/Users/ashray/code/amxv/computer-mcp/docs/github-app-agent-auth.md)
 
+## What You Need
+
+- A Linux VPS
+- `root` or `sudo`
+- A public IP or host for the MCP endpoint
+- A GitHub App private key if you want the agent to open PRs
+
 ## 1. Install
 
-Run as `root` or with `sudo`:
+If you have a public installer URL:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/amxv/computer-mcp/main/scripts/install.sh | sudo bash
 ```
 
-If this repository is private, that raw GitHub URL will return `404` without authenticated access. In that case, publish the installer somewhere public or use the installer overrides documented in [deployment-notes.md](/Users/ashray/code/amxv/computer-mcp/docs/deployment-notes.md).
+If this repository is private or the raw installer URL is not accessible, use the local-source install in [deployment-notes.md](/Users/ashray/code/amxv/computer-mcp/docs/deployment-notes.md).
 
-## 2. Configure
+## 2. Edit The Config
 
-Edit `/etc/computer-mcp/config.toml` and set the important values.
+Edit `/etc/computer-mcp/config.toml`.
 
 Minimum example:
 
 ```toml
 bind_host = "0.0.0.0"
 bind_port = 443
-api_key = "replace-me"
+api_key = "change-me"
 publisher_app_id = 3123864
-agent_user = "computer-mcp-agent"
-publisher_user = "computer-mcp-publisher"
-service_group = "computer-mcp"
 
 [[publisher_targets]]
 id = "amxv/computer-mcp"
@@ -40,45 +44,48 @@ default_base = "main"
 installation_id = 117314785
 ```
 
-Place the GitHub App private key at the configured publisher key path:
+## 3. Place The GitHub App Key
+
+Only required if you want `publish-pr`.
 
 ```bash
-install -m 0600 -o computer-mcp-publisher -g computer-mcp \
+sudo install -m 0600 -o computer-mcp-publisher -g computer-mcp \
   /path/to/github-app.pem \
   /etc/computer-mcp/publisher/private-key.pem
 ```
 
-## 3. Start Services
-
-Run these in order:
+## 4. Set The API Key And TLS
 
 ```bash
 computer-mcp --config /etc/computer-mcp/config.toml set-key "<strong-random-key>"
 computer-mcp --config /etc/computer-mcp/config.toml tls setup
-computer-mcp --config /etc/computer-mcp/config.toml publisher start
-computer-mcp --config /etc/computer-mcp/config.toml start
-computer-mcp --config /etc/computer-mcp/config.toml show-url --host "<public_ip>"
 ```
 
-On container-style hosts like Runpod, the CLI automatically uses process mode instead of `systemd` when PID 1 is not `systemd`.
+## 5. Start The Services
 
-## 4. Verify
+```bash
+computer-mcp --config /etc/computer-mcp/config.toml publisher start
+computer-mcp --config /etc/computer-mcp/config.toml start
+```
+
+## 6. Verify
 
 ```bash
 computer-mcp --config /etc/computer-mcp/config.toml publisher status
 computer-mcp --config /etc/computer-mcp/config.toml status
-curl -k "https://<public_ip>/health"
+computer-mcp --config /etc/computer-mcp/config.toml show-url --host "<public_ip_or_host>"
+curl -k "https://<public_ip_or_host>/health"
 ```
 
 Expected MCP URL shape:
 
 ```text
-https://<public_ip>/mcp?key=<your_api_key>
+https://<public_ip_or_host>/mcp?key=<api_key>
 ```
 
-## 5. Agent PR Workflow
+## 7. Open A PR From The Agent
 
-After the agent has finished work in a local git checkout and committed the change, it can open a PR through the local publisher daemon:
+After the agent has finished work in a local git checkout and committed the change:
 
 ```bash
 computer-mcp --config /etc/computer-mcp/config.toml publish-pr \
@@ -88,11 +95,11 @@ computer-mcp --config /etc/computer-mcp/config.toml publish-pr \
 ```
 
 Requirements:
-- current directory must be a git checkout
-- the worktree must be clean
-- the desired change must already be committed to `HEAD`
+- run it from inside the repo checkout
+- keep the worktree clean
+- make sure the change is already committed on `HEAD`
 
-## 6. Common Commands
+## Common Commands
 
 ```bash
 computer-mcp --config /etc/computer-mcp/config.toml status
