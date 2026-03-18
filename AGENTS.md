@@ -46,20 +46,21 @@ systemctl is-system-running || true
 
 If PID 1 is something like `/bin/bash /start.sh` and `systemctl is-system-running` returns `offline`, treat the pod as a container-style environment, not a normal systemd VM.
 
-## Current Repo Limitation
+## Current Runpod Behavior
 
-The current `computer-mcp` CLI service management flow assumes `systemd` is usable:
+This repository now supports Runpod-style container environments without `systemd`.
 
-- `computer-mcp install`
-- `computer-mcp start`
-- `computer-mcp stop`
-- `computer-mcp restart`
-- `computer-mcp status`
-- `computer-mcp logs`
+When PID 1 is not `systemd`, the CLI falls back to process mode:
 
-On Runpod pods where `systemd` is offline, that flow is not compatible as-is.
+- `computer-mcp start|stop|restart|status|logs`
+- `computer-mcp publisher start|stop|status|logs`
 
-Agents should detect this first and avoid pretending the standard install path will work.
+In that mode:
+
+- `computer-mcpd` is launched as the configured `agent_user`
+- `computer-mcp-prd` is launched as the configured `publisher_user`
+- pid/log files are written under the computer-mcp state directory
+- the publisher listens only on a local Unix socket, not a public TCP port
 
 ## Public Endpoint Requirement
 
@@ -83,8 +84,23 @@ For Runpod pods, use this sequence:
 1. Discover the direct SSH endpoint (`RUNPOD_PUBLIC_IP`, `RUNPOD_TCP_PORT_22`).
 2. Use direct SSH for all non-interactive commands.
 3. Detect whether `systemd` is usable.
-4. If `systemd` is offline, use a container-compatible process strategy instead of the current systemd flow.
+4. If `systemd` is offline, use the built-in process mode and verify both `computer-mcp status` and `computer-mcp publisher status`.
 5. Confirm the MCP port is publicly exposed before validating the final URL.
+
+## Security Notes
+
+For the publisher-key isolation model to be real on Runpod:
+
+- do not run the agent daemon as `root`
+- do not give the agent unrestricted `sudo`
+- do not give the agent generic root-level package-manager access
+- keep the publisher GitHub App key readable only by `publisher_user`
+
+The intended split is:
+
+- `computer-mcpd` under `agent_user`
+- `computer-mcp-prd` under `publisher_user`
+- `computer-mcp publish-pr` as the narrow handoff path between them
 
 ## URL Shape
 
@@ -94,6 +110,6 @@ The intended public MCP URL still follows this shape:
 https://<public_ip_or_host>:<public_port>/mcp?key=<apikey>
 ```
 
-If the deployment target is a normal VM with working `systemd`, the existing CLI flow is appropriate.
+If the deployment target is a normal VM with working `systemd`, the existing CLI flow is still appropriate.
 
-If the deployment target is a Runpod container-style pod, agents should assume additional adaptation is required.
+If the deployment target is a Runpod container-style pod, use process mode and verify the two-daemon split before claiming the deployment is secure.

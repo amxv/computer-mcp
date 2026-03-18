@@ -12,6 +12,10 @@ COMPUTER_MCP_INSTALL_DIR="${COMPUTER_MCP_INSTALL_DIR:-/usr/local/bin}"
 COMPUTER_MCP_CONFIG_PATH="${COMPUTER_MCP_CONFIG_PATH:-/etc/computer-mcp/config.toml}"
 COMPUTER_MCP_STATE_DIR="${COMPUTER_MCP_STATE_DIR:-/var/lib/computer-mcp}"
 COMPUTER_MCP_TLS_DIR="${COMPUTER_MCP_TLS_DIR:-${COMPUTER_MCP_STATE_DIR}/tls}"
+COMPUTER_MCP_AGENT_USER="${COMPUTER_MCP_AGENT_USER:-computer-mcp-agent}"
+COMPUTER_MCP_PUBLISHER_USER="${COMPUTER_MCP_PUBLISHER_USER:-computer-mcp-publisher}"
+COMPUTER_MCP_SERVICE_GROUP="${COMPUTER_MCP_SERVICE_GROUP:-computer-mcp}"
+COMPUTER_MCP_PUBLISHER_KEY_DIR="${COMPUTER_MCP_PUBLISHER_KEY_DIR:-/etc/computer-mcp/publisher}"
 COMPUTER_MCP_ENABLE_CERTBOT="${COMPUTER_MCP_ENABLE_CERTBOT:-0}"
 
 DISTRO_ID="unknown"
@@ -47,6 +51,47 @@ need_root() {
 
 command_exists() {
   command -v "$1" >/dev/null 2>&1
+}
+
+resolve_nologin_shell() {
+  if [[ -x /usr/sbin/nologin ]]; then
+    printf '/usr/sbin/nologin\n'
+    return
+  fi
+  if [[ -x /sbin/nologin ]]; then
+    printf '/sbin/nologin\n'
+    return
+  fi
+  printf '/bin/false\n'
+}
+
+ensure_service_accounts() {
+  local nologin
+  nologin="$(resolve_nologin_shell)"
+
+  if ! getent group "${COMPUTER_MCP_SERVICE_GROUP}" >/dev/null; then
+    groupadd --system "${COMPUTER_MCP_SERVICE_GROUP}"
+  fi
+
+  if ! id -u "${COMPUTER_MCP_AGENT_USER}" >/dev/null 2>&1; then
+    useradd \
+      --system \
+      --gid "${COMPUTER_MCP_SERVICE_GROUP}" \
+      --home-dir "${COMPUTER_MCP_STATE_DIR}/agent-home" \
+      --create-home \
+      --shell "${nologin}" \
+      "${COMPUTER_MCP_AGENT_USER}"
+  fi
+
+  if ! id -u "${COMPUTER_MCP_PUBLISHER_USER}" >/dev/null 2>&1; then
+    useradd \
+      --system \
+      --gid "${COMPUTER_MCP_SERVICE_GROUP}" \
+      --home-dir "${COMPUTER_MCP_STATE_DIR}/publisher-home" \
+      --create-home \
+      --shell "${nologin}" \
+      "${COMPUTER_MCP_PUBLISHER_USER}"
+  fi
 }
 
 detect_platform() {
@@ -201,9 +246,10 @@ ensure_dirs_and_config() {
   local config_dir
   config_dir="$(dirname "${COMPUTER_MCP_CONFIG_PATH}")"
 
-  install -d -m 0750 "${config_dir}"
-  install -d -m 0750 "${COMPUTER_MCP_STATE_DIR}"
-  install -d -m 0750 "${COMPUTER_MCP_TLS_DIR}"
+  install -d -m 0750 -o root -g "${COMPUTER_MCP_SERVICE_GROUP}" "${config_dir}"
+  install -d -m 0750 -o root -g "${COMPUTER_MCP_SERVICE_GROUP}" "${COMPUTER_MCP_STATE_DIR}"
+  install -d -m 0750 -o root -g "${COMPUTER_MCP_SERVICE_GROUP}" "${COMPUTER_MCP_TLS_DIR}"
+  install -d -m 0750 -o root -g "${COMPUTER_MCP_SERVICE_GROUP}" "${COMPUTER_MCP_PUBLISHER_KEY_DIR}"
 
   if [[ ! -f "${COMPUTER_MCP_CONFIG_PATH}" ]]; then
     local api_key
@@ -227,11 +273,15 @@ max_exec_timeout_ms = 7200000
 default_exec_yield_time_ms = 10000
 default_write_yield_time_ms = 10000
 max_output_chars = 200000
+agent_user = "${COMPUTER_MCP_AGENT_USER}"
+publisher_user = "${COMPUTER_MCP_PUBLISHER_USER}"
+service_group = "${COMPUTER_MCP_SERVICE_GROUP}"
 EOF
     log "created config at ${COMPUTER_MCP_CONFIG_PATH}"
   fi
 
-  chmod 0600 "${COMPUTER_MCP_CONFIG_PATH}"
+  chgrp "${COMPUTER_MCP_SERVICE_GROUP}" "${COMPUTER_MCP_CONFIG_PATH}"
+  chmod 0640 "${COMPUTER_MCP_CONFIG_PATH}"
 }
 
 run_cli_install() {
@@ -258,12 +308,16 @@ Install complete.
 
 Next steps:
   1. computer-mcp --config "${COMPUTER_MCP_CONFIG_PATH}" set-key "<strong-random-key>"
-  2. computer-mcp --config "${COMPUTER_MCP_CONFIG_PATH}" tls setup
-  3. computer-mcp --config "${COMPUTER_MCP_CONFIG_PATH}" start
-  4. computer-mcp --config "${COMPUTER_MCP_CONFIG_PATH}" show-url --host "${ip}"
+  2. place the publisher GitHub App key at "${COMPUTER_MCP_PUBLISHER_KEY_DIR}/private-key.pem" with owner ${COMPUTER_MCP_PUBLISHER_USER}
+  3. set publisher_app_id / publisher_targets in "${COMPUTER_MCP_CONFIG_PATH}"
+  4. computer-mcp --config "${COMPUTER_MCP_CONFIG_PATH}" tls setup
+  5. computer-mcp --config "${COMPUTER_MCP_CONFIG_PATH}" publisher start
+  6. computer-mcp --config "${COMPUTER_MCP_CONFIG_PATH}" start
+  7. computer-mcp --config "${COMPUTER_MCP_CONFIG_PATH}" show-url --host "${ip}"
 
 Verify:
   - computer-mcp --config "${COMPUTER_MCP_CONFIG_PATH}" status
+  - computer-mcp --config "${COMPUTER_MCP_CONFIG_PATH}" publisher status
   - curl -k "https://${ip}/health"
   - MCP URL shape: https://${ip}/mcp?key=<redacted>
 EOF
@@ -273,6 +327,7 @@ main() {
   need_root
   detect_platform
   install_prerequisites
+  ensure_service_accounts
 
   TMP_DIR="$(mktemp -d)"
   trap cleanup EXIT
