@@ -114,6 +114,48 @@ write_secret_file_from_env() {
   log "wrote ${env_name} to ${target_path}"
 }
 
+ensure_service_path_permissions() {
+  local config_dir
+  config_dir="$(dirname "${CONFIG_PATH}")"
+  local reader_dir
+  reader_dir="$(dirname "${READER_KEY_PATH}")"
+  local publisher_dir
+  publisher_dir="$(dirname "${PUBLISHER_KEY_PATH}")"
+  local tls_dir="/var/lib/computer-mcp/tls"
+
+  for dir_path in "${config_dir}" "${reader_dir}" "${publisher_dir}" "${tls_dir}"; do
+    if [[ -d "${dir_path}" ]]; then
+      chgrp "${SERVICE_GROUP}" "${dir_path}" || true
+      chmod 0750 "${dir_path}" || true
+    fi
+  done
+
+  if [[ -f "${CONFIG_PATH}" ]]; then
+    chown "root:${SERVICE_GROUP}" "${CONFIG_PATH}" || true
+    chmod 0640 "${CONFIG_PATH}" || true
+  fi
+
+  if [[ -f "${READER_KEY_PATH}" ]]; then
+    chown "root:${SERVICE_GROUP}" "${READER_KEY_PATH}" || true
+    chmod 0640 "${READER_KEY_PATH}" || true
+  fi
+
+  if [[ -f "${PUBLISHER_KEY_PATH}" ]]; then
+    chown "${PUBLISHER_USER}:${SERVICE_GROUP}" "${PUBLISHER_KEY_PATH}" || true
+    chmod 0640 "${PUBLISHER_KEY_PATH}" || true
+  fi
+
+  if [[ -f "${tls_dir}/cert.pem" ]]; then
+    chown "root:${SERVICE_GROUP}" "${tls_dir}/cert.pem" || true
+    chmod 0644 "${tls_dir}/cert.pem" || true
+  fi
+
+  if [[ -f "${tls_dir}/key.pem" ]]; then
+    chown "root:${SERVICE_GROUP}" "${tls_dir}/key.pem" || true
+    chmod 0640 "${tls_dir}/key.pem" || true
+  fi
+}
+
 has_auto_config_inputs() {
   [[ -n "${COMPUTER_MCP_READER_APP_ID:-}" ]] \
     && [[ -n "${COMPUTER_MCP_READER_INSTALLATION_ID:-}" ]] \
@@ -259,6 +301,7 @@ main() {
   write_secret_file_from_env "COMPUTER_MCP_PUBLISHER_PRIVATE_KEY" "${PUBLISHER_KEY_PATH}" "${PUBLISHER_USER}:${SERVICE_GROUP}"
 
   bootstrap_computer_mcp_config
+  ensure_service_path_permissions
   start_computer_mcp_if_ready
 
   if [[ "$#" -gt 0 ]]; then
