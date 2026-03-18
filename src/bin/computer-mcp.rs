@@ -57,6 +57,7 @@ enum ServiceManager {
 #[derive(Debug, Parser)]
 #[command(name = "computer-mcp")]
 #[command(about = "Computer MCP CLI")]
+#[command(version)]
 struct Cli {
     #[arg(long, default_value = DEFAULT_CONFIG_PATH)]
     config: String,
@@ -68,6 +69,10 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Commands {
     Install,
+    Upgrade {
+        #[arg(long, default_value = "latest")]
+        version: String,
+    },
     Start,
     Stop,
     Restart,
@@ -128,6 +133,10 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::Install => {
             install(&config_path)?;
+        }
+        Commands::Upgrade { version } => {
+            ensure_linux()?;
+            upgrade(&config_path, &version)?;
         }
         Commands::Start => {
             ensure_linux()?;
@@ -369,6 +378,37 @@ fn install(config_path: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn upgrade(config_path: &Path, version: &str) -> Result<()> {
+    let config = Config::load(Some(config_path))?;
+
+    let install_args = build_upgrade_shell_args(version, &config);
+    run_shell_script(&install_args)?;
+    restart_stack(config_path)?;
+    Ok(())
+}
+
+fn build_upgrade_shell_args(version: &str, config: &Config) -> Vec<String> {
+    let mut script = format!(
+        "set -euo pipefail\nexport COMPUTER_MCP_VERSION={}\n",
+        shell_escape_single_quotes(version)
+    );
+
+    if let Some(port) = config.http_bind_port {
+        script.push_str(&format!("export COMPUTER_MCP_HTTP_BIND_PORT={port}\n"));
+    }
+
+    script.push_str("curl -fsSL https://raw.githubusercontent.com/amxv/computer-mcp/main/scripts/install.sh | bash");
+    vec!["-lc".to_string(), script]
+}
+
+fn shell_escape_single_quotes(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+fn run_shell_script(args: &[String]) -> Result<String> {
+    run_command_capture("bash", args)
 }
 
 fn tls_setup(config_path: &Path) -> Result<()> {
@@ -1763,11 +1803,12 @@ mod tests {
         DEFAULT_LOG_LINES, ProcessModeState, SERVICE_NAME, ServiceManager, SystemctlAction,
         build_certbot_args, build_journalctl_args, build_process_status_lines,
         build_publisher_status_lines, build_reader_status_lines, build_status_summary_lines,
-        build_systemctl_args, certbot_cert_name, ensure_http_listener_ready_for_start,
-        generate_self_signed_certificate, parse_systemctl_show, process_log_path,
-        process_pid_path, read_tail_lines, render_systemd_unit, select_tls_san_ip,
-        service_manager_from_pid1, state_root_for_config, status_host_hint,
-        tls_artifacts_exist, write_if_changed,
+        build_systemctl_args, build_upgrade_shell_args, certbot_cert_name,
+        ensure_http_listener_ready_for_start, generate_self_signed_certificate,
+        parse_systemctl_show, process_log_path, process_pid_path, read_tail_lines,
+        render_systemd_unit, select_tls_san_ip, service_manager_from_pid1,
+        shell_escape_single_quotes, state_root_for_config, status_host_hint, tls_artifacts_exist,
+        write_if_changed,
     };
     use computer_mcp::config::Config;
     use std::fs;
@@ -1828,6 +1869,27 @@ mod tests {
             build_journalctl_args(),
             vec!["-u", SERVICE_NAME, "-n", DEFAULT_LOG_LINES, "--no-pager",]
         );
+    }
+
+    #[test]
+    fn build_upgrade_shell_args_include_requested_version_and_http_port() {
+        let mut config = Config::default();
+        config.http_bind_port = Some(8080);
+
+        let args = build_upgrade_shell_args("v0.1.5", &config);
+        assert_eq!(args[0], "-lc");
+        assert!(args[1].contains("export COMPUTER_MCP_VERSION='v0.1.5'"));
+        assert!(args[1].contains("export COMPUTER_MCP_HTTP_BIND_PORT=8080"));
+        assert!(
+            args[1].contains(
+                "curl -fsSL https://raw.githubusercontent.com/amxv/computer-mcp/main/scripts/install.sh | bash"
+            )
+        );
+    }
+
+    #[test]
+    fn shell_escape_single_quotes_handles_embedded_quotes() {
+        assert_eq!(shell_escape_single_quotes("v0.1.5's"), "'v0.1.5'\"'\"'s'");
     }
 
     #[test]
