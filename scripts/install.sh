@@ -261,21 +261,19 @@ ensure_dirs_and_config() {
 
     umask 077
     cat >"${COMPUTER_MCP_CONFIG_PATH}" <<EOF
-bind_host = "0.0.0.0"
-bind_port = 443
 api_key = "${api_key}"
-tls_mode = "auto"
-tls_cert_path = "${COMPUTER_MCP_TLS_DIR}/cert.pem"
-tls_key_path = "${COMPUTER_MCP_TLS_DIR}/key.pem"
-max_sessions = 64
-default_exec_timeout_ms = 7200000
-max_exec_timeout_ms = 7200000
-default_exec_yield_time_ms = 10000
-default_write_yield_time_ms = 10000
-max_output_chars = 200000
-agent_user = "${COMPUTER_MCP_AGENT_USER}"
-publisher_user = "${COMPUTER_MCP_PUBLISHER_USER}"
-service_group = "${COMPUTER_MCP_SERVICE_GROUP}"
+
+# Most installs can keep the built-in defaults.
+# Add only the settings you actually need to override.
+
+# Required only if you want \`computer-mcp publish-pr\`:
+# publisher_app_id = 123456
+#
+# [[publisher_targets]]
+# id = "owner/repo"
+# repo = "owner/repo"
+# default_base = "main"
+# installation_id = 123456789
 EOF
     log "created config at ${COMPUTER_MCP_CONFIG_PATH}"
   fi
@@ -306,20 +304,28 @@ print_next_steps() {
 
 Install complete.
 
+Config file:
+  ${COMPUTER_MCP_CONFIG_PATH}
+
+The commands below assume the default config path. If you changed it, add:
+  --config "${COMPUTER_MCP_CONFIG_PATH}"
+
 Next steps:
-  1. computer-mcp --config "${COMPUTER_MCP_CONFIG_PATH}" set-key "<strong-random-key>"
+  1. review "${COMPUTER_MCP_CONFIG_PATH}" and add publisher_app_id / publisher_targets if you want publish-pr
   2. place the publisher GitHub App key at "${COMPUTER_MCP_PUBLISHER_KEY_DIR}/private-key.pem" with owner ${COMPUTER_MCP_PUBLISHER_USER}
-  3. set publisher_app_id / publisher_targets in "${COMPUTER_MCP_CONFIG_PATH}"
-  4. computer-mcp --config "${COMPUTER_MCP_CONFIG_PATH}" tls setup
-  5. computer-mcp --config "${COMPUTER_MCP_CONFIG_PATH}" publisher start
-  6. computer-mcp --config "${COMPUTER_MCP_CONFIG_PATH}" start
-  7. computer-mcp --config "${COMPUTER_MCP_CONFIG_PATH}" show-url --host "${ip}"
+  3. computer-mcp tls setup
+  4. computer-mcp publisher start
+  5. computer-mcp start
+  6. computer-mcp show-url --host "${ip}"
 
 Verify:
-  - computer-mcp --config "${COMPUTER_MCP_CONFIG_PATH}" status
-  - computer-mcp --config "${COMPUTER_MCP_CONFIG_PATH}" publisher status
+  - computer-mcp status
+  - computer-mcp publisher status
   - curl -k "https://${ip}/health"
   - MCP URL shape: https://${ip}/mcp?key=<redacted>
+
+Optional:
+  - rotate the installer-generated API key with: computer-mcp set-key "<strong-random-key>"
 EOF
 }
 

@@ -45,7 +45,8 @@ fn github_app_docs_and_scripts_include_expected_permissions_and_flow() {
     assert!(docs.contains("Contents: Read & write"));
     assert!(docs.contains("Pull requests: Read & write"));
     assert!(docs.contains("private GitHub App"));
-    assert!(docs.contains("direct pushes to `main` are blocked by GitHub"));
+    assert!(docs.contains("publisher daemon holds the GitHub App private key"));
+    assert!(docs.contains("git bundle"));
     assert!(docs.contains("GitHub Pro"));
     assert!(mint_script.contains("GITHUB_APP_INSTALLATION_ID"));
     assert!(
