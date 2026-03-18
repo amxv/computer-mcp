@@ -11,6 +11,7 @@ const MAX_YIELD_MS: u64 = 60_000;
 const MIN_EXEC_TIMEOUT_MS: u64 = 1_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Config {
     pub bind_host: String,
     pub bind_port: u16,
@@ -24,6 +25,37 @@ pub struct Config {
     pub default_exec_yield_time_ms: u64,
     pub default_write_yield_time_ms: u64,
     pub max_output_chars: usize,
+    pub publisher_socket_path: String,
+    pub publisher_private_key_path: String,
+    pub publisher_app_id: Option<u64>,
+    pub agent_user: String,
+    pub publisher_user: String,
+    pub service_group: String,
+    pub publisher_branch_prefix: String,
+    pub publisher_max_bundle_bytes: usize,
+    pub publisher_max_title_chars: usize,
+    pub publisher_max_body_chars: usize,
+    pub publisher_targets: Vec<PublishTarget>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct PublishTarget {
+    pub id: String,
+    pub repo: String,
+    pub default_base: String,
+    pub installation_id: u64,
+}
+
+impl Default for PublishTarget {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            repo: String::new(),
+            default_base: "main".to_string(),
+            installation_id: 0,
+        }
+    }
 }
 
 impl Default for Config {
@@ -41,6 +73,18 @@ impl Default for Config {
             default_exec_yield_time_ms: 10_000,
             default_write_yield_time_ms: 10_000,
             max_output_chars: 200_000,
+            publisher_socket_path: "/var/lib/computer-mcp/publisher/run/computer-mcp-prd.sock"
+                .to_string(),
+            publisher_private_key_path: "/etc/computer-mcp/publisher/private-key.pem".to_string(),
+            publisher_app_id: None,
+            agent_user: "computer-mcp-agent".to_string(),
+            publisher_user: "computer-mcp-publisher".to_string(),
+            service_group: "computer-mcp".to_string(),
+            publisher_branch_prefix: "agent".to_string(),
+            publisher_max_bundle_bytes: 8 * 1024 * 1024,
+            publisher_max_title_chars: 240,
+            publisher_max_body_chars: 16_000,
+            publisher_targets: Vec::new(),
         }
     }
 }
@@ -93,7 +137,7 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
-    use super::Config;
+    use super::{Config, PublishTarget};
 
     #[test]
     fn clamp_yields_and_timeout() {
@@ -103,5 +147,61 @@ mod tests {
         assert_eq!(cfg.clamp_write_yield_ms(Some(100_000)), 60_000);
         assert_eq!(cfg.clamp_exec_timeout_ms(Some(1)), 1_000);
         assert_eq!(cfg.clamp_exec_timeout_ms(Some(9_000_000)), 7_200_000);
+    }
+
+    #[test]
+    fn config_defaults_include_publisher_settings() {
+        let cfg = Config::default();
+
+        assert!(cfg.publisher_socket_path.ends_with("computer-mcp-prd.sock"));
+        assert!(cfg.publisher_private_key_path.ends_with("private-key.pem"));
+        assert_eq!(cfg.agent_user, "computer-mcp-agent");
+        assert_eq!(cfg.publisher_user, "computer-mcp-publisher");
+        assert_eq!(cfg.service_group, "computer-mcp");
+        assert_eq!(cfg.publisher_branch_prefix, "agent");
+        assert_eq!(cfg.publisher_max_bundle_bytes, 8 * 1024 * 1024);
+        assert!(cfg.publisher_targets.is_empty());
+    }
+
+    #[test]
+    fn missing_publisher_fields_are_backfilled_from_defaults() {
+        let parsed: Config = toml::from_str(
+            r#"
+bind_host = "0.0.0.0"
+bind_port = 443
+api_key = "test"
+tls_mode = "auto"
+tls_cert_path = "/tmp/cert.pem"
+tls_key_path = "/tmp/key.pem"
+max_sessions = 64
+default_exec_timeout_ms = 1000
+max_exec_timeout_ms = 2000
+default_exec_yield_time_ms = 10000
+default_write_yield_time_ms = 10000
+max_output_chars = 200000
+"#,
+        )
+        .expect("config should parse");
+
+        assert_eq!(parsed.publisher_app_id, None);
+        assert_eq!(parsed.agent_user, "computer-mcp-agent");
+        assert_eq!(parsed.publisher_user, "computer-mcp-publisher");
+        assert_eq!(parsed.service_group, "computer-mcp");
+        assert_eq!(parsed.publisher_branch_prefix, "agent");
+        assert!(parsed.publisher_targets.is_empty());
+    }
+
+    #[test]
+    fn publish_target_defaults_to_main_base() {
+        let target: PublishTarget = toml::from_str(
+            r#"
+id = "amxv/computer-mcp"
+repo = "amxv/computer-mcp"
+installation_id = 123
+"#,
+        )
+        .expect("publish target should parse");
+
+        assert_eq!(target.default_base, "main");
     }
 }

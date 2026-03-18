@@ -48,7 +48,9 @@ fn github_app_docs_and_scripts_include_expected_permissions_and_flow() {
     assert!(docs.contains("direct pushes to `main` are blocked by GitHub"));
     assert!(docs.contains("GitHub Pro"));
     assert!(mint_script.contains("GITHUB_APP_INSTALLATION_ID"));
-    assert!(mint_script.contains(r#"permissions_json='{"contents":"write","pull_requests":"write"}'"#));
+    assert!(
+        mint_script.contains(r#"permissions_json='{"contents":"write","pull_requests":"write"}'"#)
+    );
     assert!(mint_script.contains("access_tokens"));
     assert!(protect_script.contains("Upgrade to GitHub Pro or make this repository public"));
     assert!(pr_script.contains("gh pr create"));

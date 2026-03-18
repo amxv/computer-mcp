@@ -15,13 +15,14 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand};
 use computer_mcp::config::{Config, DEFAULT_CONFIG_PATH};
+use computer_mcp::publisher::{build_publish_request, detect_repo_root, submit_publish_request};
 use computer_mcp::redaction::redact_api_key_query_params;
 #[cfg(unix)]
 use nix::errno::Errno;
 #[cfg(unix)]
 use nix::sys::signal::{Signal, kill};
 #[cfg(unix)]
-use nix::unistd::{Pid, setsid};
+use nix::unistd::{Group, Pid, Uid, User, chown, setsid};
 use rand::distr::{Alphanumeric, SampleString};
 use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, SanType};
 
@@ -38,6 +39,10 @@ const PROCESS_RUNTIME_DIRNAME: &str = "run";
 const PROCESS_LOG_DIRNAME: &str = "logs";
 const PROCESS_PID_FILENAME: &str = "computer-mcpd.pid";
 const PROCESS_LOG_FILENAME: &str = "computer-mcpd.log";
+const PUBLISHER_PROCESS_SUBDIR: &str = "publisher";
+const PUBLISHER_SERVICE_LABEL: &str = "computer-mcp-prd";
+const PUBLISHER_PROCESS_PID_FILENAME: &str = "computer-mcp-prd.pid";
+const PUBLISHER_PROCESS_LOG_FILENAME: &str = "computer-mcp-prd.log";
 const PROCESS_START_STABILIZE_MS: u64 = 300;
 const PROCESS_STOP_TIMEOUT_MS: u64 = 5_000;
 const PROCESS_STOP_POLL_MS: u64 = 100;
@@ -79,6 +84,24 @@ enum Commands {
         #[command(subcommand)]
         command: TlsCommand,
     },
+    PublishPr {
+        #[arg(long)]
+        repo: String,
+        #[arg(long)]
+        title: String,
+        #[arg(long)]
+        body: Option<String>,
+        #[arg(long)]
+        body_file: Option<String>,
+        #[arg(long)]
+        base: Option<String>,
+        #[arg(long, default_value_t = false)]
+        draft: bool,
+    },
+    Publisher {
+        #[command(subcommand)]
+        command: PublisherCommand,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -86,7 +109,16 @@ enum TlsCommand {
     Setup,
 }
 
-fn main() -> Result<()> {
+#[derive(Debug, Subcommand)]
+enum PublisherCommand {
+    Start,
+    Stop,
+    Status,
+    Logs,
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
     let cli = Cli::parse();
     let config_path = PathBuf::from(&cli.config);
 
@@ -173,6 +205,7 @@ fn main() -> Result<()> {
             let mut config = Config::load(Some(Path::new(&config_path)))?;
             config.api_key = value;
             config.save(&config_path)?;
+            ensure_shared_group_permissions(&config, &config_path)?;
             println!("updated API key in {}", config_path.display());
         }
         Commands::RotateKey => {
@@ -180,6 +213,7 @@ fn main() -> Result<()> {
             let mut rng = rand::rng();
             config.api_key = Alphanumeric.sample_string(&mut rng, 48);
             config.save(&config_path)?;
+            ensure_shared_group_permissions(&config, &config_path)?;
             println!("rotated API key in {}", config_path.display());
         }
         Commands::ShowUrl { host } => {
@@ -193,9 +227,62 @@ fn main() -> Result<()> {
         Commands::Tls { command } => match command {
             TlsCommand::Setup => tls_setup(&config_path)?,
         },
+        Commands::PublishPr {
+            repo,
+            title,
+            body,
+            body_file,
+            base,
+            draft,
+        } => {
+            ensure_linux()?;
+            let config = Config::load(Some(Path::new(&config_path)))?;
+            let body = resolve_pr_body(body, body_file.as_deref())?;
+            let cwd = std::env::current_dir().context("failed to resolve current directory")?;
+            let repo_root = detect_repo_root(&cwd)?;
+            let request =
+                build_publish_request(&config, repo, base, title, body, draft, &repo_root)?;
+            let response =
+                submit_publish_request(Path::new(&config.publisher_socket_path), &request).await?;
+            println!("pr-url: {}", response.pr_url);
+            println!("branch: {}", response.branch);
+            println!("pull-number: {}", response.pull_number);
+        }
+        Commands::Publisher { command } => {
+            ensure_linux()?;
+            let config = Config::load(Some(Path::new(&config_path)))?;
+            match command {
+                PublisherCommand::Start => start_publisher_process_mode(&config, &config_path)?,
+                PublisherCommand::Stop => stop_publisher_process_mode(&config)?,
+                PublisherCommand::Status => print_publisher_status_summary(&config),
+                PublisherCommand::Logs => {
+                    let logs =
+                        read_publisher_logs(&config, DEFAULT_LOG_LINES.parse().unwrap_or(200))?;
+                    if logs.is_empty() {
+                        println!(
+                            "no recent logs found for {}",
+                            publisher_process_log_path(&config).display()
+                        );
+                    } else {
+                        print!("{logs}");
+                    }
+                }
+            }
+        }
     }
 
     Ok(())
+}
+
+fn resolve_pr_body(body: Option<String>, body_file: Option<&str>) -> Result<String> {
+    match (body, body_file) {
+        (Some(_), Some(_)) => bail!("--body and --body-file are mutually exclusive"),
+        (Some(body), None) => Ok(body),
+        (None, Some(path)) => {
+            fs::read_to_string(path).with_context(|| format!("failed to read PR body file {path}"))
+        }
+        (None, None) => Ok(String::new()),
+    }
 }
 
 fn install(config_path: &Path) -> Result<()> {
@@ -221,6 +308,7 @@ fn install(config_path: &Path) -> Result<()> {
         }
         ServiceManager::Process => {
             ensure_process_mode_dirs(&config)?;
+            ensure_publisher_process_dirs(&config)?;
             println!(
                 "systemd not detected; configured process mode for container-style environments"
             );
@@ -228,6 +316,12 @@ fn install(config_path: &Path) -> Result<()> {
                 "process mode files: pid={}, log={}",
                 process_pid_path(&config).display(),
                 process_log_path(&config).display()
+            );
+            println!(
+                "publisher process mode files: pid={}, log={}, socket={}",
+                publisher_process_pid_path(&config).display(),
+                publisher_process_log_path(&config).display(),
+                config.publisher_socket_path
             );
         }
     }
@@ -261,6 +355,7 @@ fn tls_setup(config_path: &Path) -> Result<()> {
     }
 
     config.save(config_path)?;
+    ensure_shared_group_permissions(&config, config_path)?;
     println!("updated TLS settings in {}", config_path.display());
     restart_service_after_tls_setup(&config, config_path);
     Ok(())
@@ -302,6 +397,51 @@ fn command_exists(program: &str) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(unix)]
+fn current_euid_is_root() -> bool {
+    Uid::effective().is_root()
+}
+
+#[cfg(not(unix))]
+fn current_euid_is_root() -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn lookup_user(name: &str) -> Result<User> {
+    User::from_name(name)
+        .context("failed to query local user database")?
+        .ok_or_else(|| anyhow!("local user not found: {name}"))
+}
+
+#[cfg(unix)]
+fn lookup_group(name: &str) -> Result<Group> {
+    Group::from_name(name)
+        .context("failed to query local group database")?
+        .ok_or_else(|| anyhow!("local group not found: {name}"))
+}
+
+#[cfg(unix)]
+fn chown_path_to_user(path: &Path, user: &User) -> Result<()> {
+    chown(path, Some(user.uid), Some(user.gid))
+        .with_context(|| format!("failed to chown {} to {}", path.display(), user.name))
+}
+
+#[cfg(unix)]
+fn chown_path_to_group(path: &Path, group: &Group) -> Result<()> {
+    chown(path, None, Some(group.gid))
+        .with_context(|| format!("failed to chgrp {} to {}", path.display(), group.name))
+}
+
+#[cfg(unix)]
+fn ensure_runuser_available() -> Result<()> {
+    if command_exists("runuser") {
+        Ok(())
+    } else {
+        bail!("`runuser` is required to launch daemons under separate users")
+    }
+}
+
 fn create_required_dirs(config_path: &Path) -> Result<()> {
     if let Some(parent) = config_path.parent() {
         fs::create_dir_all(parent)
@@ -324,12 +464,49 @@ fn ensure_tls_dirs_for_config(config: &Config) -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
+fn ensure_shared_group_permissions(config: &Config, config_path: &Path) -> Result<()> {
+    if !current_euid_is_root() {
+        return Ok(());
+    }
+
+    let Ok(group) = lookup_group(&config.service_group) else {
+        return Ok(());
+    };
+
+    if config_path.exists() {
+        chown_path_to_group(config_path, &group)?;
+        set_file_mode(config_path, 0o640)?;
+    }
+
+    let cert_path = Path::new(&config.tls_cert_path);
+    if cert_path.exists() {
+        chown_path_to_group(cert_path, &group)?;
+        set_file_mode(cert_path, 0o644)?;
+    }
+
+    let key_path = Path::new(&config.tls_key_path);
+    if key_path.exists() {
+        chown_path_to_group(key_path, &group)?;
+        set_file_mode(key_path, 0o640)?;
+    }
+
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn ensure_shared_group_permissions(_config: &Config, _config_path: &Path) -> Result<()> {
+    Ok(())
+}
+
 fn ensure_config_exists(config_path: &Path) -> Result<()> {
     if config_path.exists() {
         return Ok(());
     }
 
-    Config::default().save(config_path)?;
+    let config = Config::default();
+    config.save(config_path)?;
+    ensure_shared_group_permissions(&config, config_path)?;
     println!("created default config at {}", config_path.display());
     Ok(())
 }
@@ -357,6 +534,31 @@ fn resolve_daemon_binary_path() -> Result<PathBuf> {
         .ok_or_else(|| anyhow!("failed to locate computer-mcpd binary"))
 }
 
+fn resolve_publisher_daemon_binary_path() -> Result<PathBuf> {
+    if let Ok(override_path) = std::env::var("COMPUTER_MCP_PRD_PATH") {
+        let path = PathBuf::from(&override_path);
+        if path.exists() {
+            return Ok(path);
+        }
+        bail!("COMPUTER_MCP_PRD_PATH does not exist: {override_path}");
+    }
+
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    let current_exe = std::env::current_exe().context("failed to resolve current executable")?;
+    if let Some(parent) = current_exe.parent() {
+        candidates.push(parent.join(PUBLISHER_SERVICE_LABEL));
+    }
+    candidates.push(PathBuf::from(format!(
+        "/usr/local/bin/{PUBLISHER_SERVICE_LABEL}"
+    )));
+    candidates.push(PathBuf::from(format!("/usr/bin/{PUBLISHER_SERVICE_LABEL}")));
+
+    candidates
+        .into_iter()
+        .find(|path| path.exists())
+        .ok_or_else(|| anyhow!("failed to locate {PUBLISHER_SERVICE_LABEL} binary"))
+}
+
 fn state_root_for_config(config: &Config) -> PathBuf {
     let cert_path = Path::new(&config.tls_cert_path);
     if let Some(parent) = cert_path.parent().and_then(Path::parent) {
@@ -381,11 +583,88 @@ fn process_log_path(config: &Config) -> PathBuf {
     process_log_dir(config).join(PROCESS_LOG_FILENAME)
 }
 
+fn publisher_process_root(config: &Config) -> PathBuf {
+    state_root_for_config(config).join(PUBLISHER_PROCESS_SUBDIR)
+}
+
+fn publisher_process_runtime_dir(config: &Config) -> PathBuf {
+    publisher_process_root(config).join(PROCESS_RUNTIME_DIRNAME)
+}
+
+fn publisher_process_log_dir(config: &Config) -> PathBuf {
+    publisher_process_root(config).join(PROCESS_LOG_DIRNAME)
+}
+
+fn publisher_process_pid_path(config: &Config) -> PathBuf {
+    publisher_process_runtime_dir(config).join(PUBLISHER_PROCESS_PID_FILENAME)
+}
+
+fn publisher_process_log_path(config: &Config) -> PathBuf {
+    publisher_process_log_dir(config).join(PUBLISHER_PROCESS_LOG_FILENAME)
+}
+
 fn ensure_process_mode_dirs(config: &Config) -> Result<()> {
     fs::create_dir_all(process_runtime_dir(config))
         .with_context(|| format!("failed to create {}", process_runtime_dir(config).display()))?;
     fs::create_dir_all(process_log_dir(config))
         .with_context(|| format!("failed to create {}", process_log_dir(config).display()))?;
+    Ok(())
+}
+
+fn ensure_publisher_process_dirs(config: &Config) -> Result<()> {
+    fs::create_dir_all(publisher_process_runtime_dir(config)).with_context(|| {
+        format!(
+            "failed to create {}",
+            publisher_process_runtime_dir(config).display()
+        )
+    })?;
+    fs::create_dir_all(publisher_process_log_dir(config)).with_context(|| {
+        format!(
+            "failed to create {}",
+            publisher_process_log_dir(config).display()
+        )
+    })?;
+    if let Some(parent) = Path::new(&config.publisher_socket_path).parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn prepare_agent_process_ownership(config: &Config) -> Result<()> {
+    if !current_euid_is_root() {
+        return Ok(());
+    }
+
+    let user = lookup_user(&config.agent_user)?;
+    chown_path_to_user(&process_runtime_dir(config), &user)?;
+    chown_path_to_user(&process_log_dir(config), &user)?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn prepare_agent_process_ownership(_config: &Config) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn prepare_publisher_process_ownership(config: &Config) -> Result<()> {
+    if !current_euid_is_root() {
+        return Ok(());
+    }
+
+    let user = lookup_user(&config.publisher_user)?;
+    chown_path_to_user(&publisher_process_runtime_dir(config), &user)?;
+    chown_path_to_user(&publisher_process_log_dir(config), &user)?;
+    if let Some(parent) = Path::new(&config.publisher_socket_path).parent() {
+        chown_path_to_user(parent, &user)?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn prepare_publisher_process_ownership(_config: &Config) -> Result<()> {
     Ok(())
 }
 
@@ -404,8 +683,47 @@ fn read_process_pid(config: &Config) -> Result<Option<i32>> {
     Ok(Some(pid))
 }
 
+fn read_publisher_pid(config: &Config) -> Result<Option<i32>> {
+    let pid_path = publisher_process_pid_path(config);
+    if !pid_path.exists() {
+        return Ok(None);
+    }
+
+    let raw = fs::read_to_string(&pid_path)
+        .with_context(|| format!("failed to read {}", pid_path.display()))?;
+    let pid = raw
+        .trim()
+        .parse::<i32>()
+        .with_context(|| format!("invalid pid in {}", pid_path.display()))?;
+    Ok(Some(pid))
+}
+
 fn pid_is_running(pid: i32) -> bool {
     Path::new(&format!("/proc/{pid}")).exists()
+}
+
+fn daemon_launch_command(
+    binary_path: &Path,
+    config_path: &Path,
+    run_user: &str,
+) -> Result<Command> {
+    #[cfg(unix)]
+    if current_euid_is_root() {
+        ensure_runuser_available()?;
+        let mut command = Command::new("runuser");
+        command
+            .arg("-u")
+            .arg(run_user)
+            .arg("--")
+            .arg(binary_path)
+            .arg("--config")
+            .arg(config_path);
+        return Ok(command);
+    }
+
+    let mut command = Command::new(binary_path);
+    command.arg("--config").arg(config_path);
+    Ok(command)
 }
 
 fn remove_pid_file_if_present(config: &Config) -> Result<()> {
@@ -417,8 +735,18 @@ fn remove_pid_file_if_present(config: &Config) -> Result<()> {
     Ok(())
 }
 
+fn remove_publisher_pid_file_if_present(config: &Config) -> Result<()> {
+    let pid_path = publisher_process_pid_path(config);
+    if pid_path.exists() {
+        fs::remove_file(&pid_path)
+            .with_context(|| format!("failed to remove {}", pid_path.display()))?;
+    }
+    Ok(())
+}
+
 fn start_process_mode(config: &Config, config_path: &Path) -> Result<()> {
     ensure_process_mode_dirs(config)?;
+    prepare_agent_process_ownership(config)?;
 
     if let Some(pid) = read_process_pid(config)? {
         if pid_is_running(pid) {
@@ -440,10 +768,8 @@ fn start_process_mode(config: &Config, config_path: &Path) -> Result<()> {
         .try_clone()
         .with_context(|| format!("failed to clone {}", log_path.display()))?;
 
-    let mut command = Command::new(&daemon_path);
+    let mut command = daemon_launch_command(&daemon_path, config_path, &config.agent_user)?;
     command
-        .arg("--config")
-        .arg(config_path)
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr))
@@ -523,6 +849,114 @@ fn read_process_logs(config: &Config, max_lines: usize) -> Result<String> {
     read_tail_lines(&log_path, max_lines)
 }
 
+fn start_publisher_process_mode(config: &Config, config_path: &Path) -> Result<()> {
+    ensure_publisher_process_dirs(config)?;
+    prepare_publisher_process_ownership(config)?;
+
+    if let Some(pid) = read_publisher_pid(config)? {
+        if pid_is_running(pid) {
+            println!("{PUBLISHER_SERVICE_LABEL} already running in process mode (pid {pid})");
+            println!("log file: {}", publisher_process_log_path(config).display());
+            return Ok(());
+        }
+        remove_publisher_pid_file_if_present(config)?;
+    }
+
+    let daemon_path = resolve_publisher_daemon_binary_path()?;
+    let log_path = publisher_process_log_path(config);
+    let stdout = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .with_context(|| format!("failed to open {}", log_path.display()))?;
+    let stderr = stdout
+        .try_clone()
+        .with_context(|| format!("failed to clone {}", log_path.display()))?;
+
+    let mut command = daemon_launch_command(&daemon_path, config_path, &config.publisher_user)?;
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr))
+        .current_dir("/");
+
+    #[cfg(unix)]
+    unsafe {
+        command.pre_exec(|| {
+            setsid().map_err(|e| io::Error::other(e.to_string()))?;
+            Ok(())
+        });
+    }
+
+    let mut child = command
+        .spawn()
+        .with_context(|| format!("failed to spawn {}", daemon_path.display()))?;
+    let pid = child.id() as i32;
+
+    thread::sleep(Duration::from_millis(PROCESS_START_STABILIZE_MS));
+    if let Some(status) = child.try_wait().context("failed to inspect child status")? {
+        let recent_logs = read_publisher_logs(config, 50).unwrap_or_default();
+        let details = if recent_logs.trim().is_empty() {
+            "no recent process log output".to_string()
+        } else {
+            format!("recent log output:\n{}", recent_logs)
+        };
+        bail!(
+            "{PUBLISHER_SERVICE_LABEL} exited immediately in process mode (status: {status})\n{details}"
+        );
+    }
+
+    fs::write(publisher_process_pid_path(config), format!("{pid}\n")).with_context(|| {
+        format!(
+            "failed to write {}",
+            publisher_process_pid_path(config).display()
+        )
+    })?;
+    println!("started {PUBLISHER_SERVICE_LABEL} in process mode (pid {pid})");
+    println!("log file: {}", log_path.display());
+    Ok(())
+}
+
+fn stop_publisher_process_mode(config: &Config) -> Result<()> {
+    let Some(pid) = read_publisher_pid(config)? else {
+        println!("{PUBLISHER_SERVICE_LABEL} is not running in process mode");
+        return Ok(());
+    };
+
+    if !pid_is_running(pid) {
+        remove_publisher_pid_file_if_present(config)?;
+        println!("removed stale pid file for {PUBLISHER_SERVICE_LABEL} (pid {pid})");
+        return Ok(());
+    }
+
+    send_signal_if_running(pid, Signal::SIGTERM)?;
+    let deadline = Instant::now() + Duration::from_millis(PROCESS_STOP_TIMEOUT_MS);
+    while pid_is_running(pid) && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(PROCESS_STOP_POLL_MS));
+    }
+
+    if pid_is_running(pid) {
+        send_signal_if_running(pid, Signal::SIGKILL)?;
+        let kill_deadline = Instant::now() + Duration::from_millis(PROCESS_STOP_TIMEOUT_MS);
+        while pid_is_running(pid) && Instant::now() < kill_deadline {
+            thread::sleep(Duration::from_millis(PROCESS_STOP_POLL_MS));
+        }
+    }
+
+    remove_publisher_pid_file_if_present(config)?;
+    println!("stopped {PUBLISHER_SERVICE_LABEL} in process mode");
+    Ok(())
+}
+
+fn read_publisher_logs(config: &Config, max_lines: usize) -> Result<String> {
+    let log_path = publisher_process_log_path(config);
+    if !log_path.exists() {
+        return Ok(String::new());
+    }
+
+    read_tail_lines(&log_path, max_lines)
+}
+
 fn read_tail_lines(path: &Path, max_lines: usize) -> Result<String> {
     let content =
         fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
@@ -569,6 +1003,25 @@ fn print_process_status_summary(config: &Config) {
     }
 }
 
+fn publisher_process_mode_state(config: &Config) -> Result<ProcessModeState> {
+    match read_publisher_pid(config)? {
+        Some(pid) if pid_is_running(pid) => Ok(ProcessModeState::Running(pid)),
+        Some(pid) => Ok(ProcessModeState::Stale(pid)),
+        None => Ok(ProcessModeState::Stopped),
+    }
+}
+
+fn print_publisher_status_summary(config: &Config) {
+    match build_publisher_status_lines(config, publisher_process_mode_state(config)) {
+        Ok(lines) => {
+            for line in lines {
+                println!("{line}");
+            }
+        }
+        Err(err) => eprintln!("warning: failed to build publisher status: {err}"),
+    }
+}
+
 fn build_process_status_lines(
     config: &Config,
     public_ip: Option<IpAddr>,
@@ -599,6 +1052,7 @@ fn build_process_status_lines(
         format!("exec-main-status: {exec_status}"),
         format!("pid-file: {}", process_pid_path(config).display()),
         format!("log-file: {}", process_log_path(config).display()),
+        format!("run-user: {}", config.agent_user),
         format!("listen: {}:{}", config.bind_host, config.bind_port),
         format!("tls-mode: {}", config.tls_mode),
         format!("tls-cert: {}", config.tls_cert_path),
@@ -618,6 +1072,58 @@ fn build_process_status_lines(
             "hint: stale pid file detected; `computer-mcp restart` will cleanly recover"
                 .to_string(),
         );
+    }
+
+    Ok(lines)
+}
+
+fn build_publisher_status_lines(
+    config: &Config,
+    state: Result<ProcessModeState>,
+) -> Result<Vec<String>> {
+    let state = state?;
+    let active = match state {
+        ProcessModeState::Running(_) => "active (running)",
+        ProcessModeState::Stale(_) => "inactive (stale pid file)",
+        ProcessModeState::Stopped => "inactive (dead)",
+    };
+    let exec_status = match state {
+        ProcessModeState::Running(pid) => format!("running pid {pid}"),
+        ProcessModeState::Stale(pid) => format!("stale pid file {pid}"),
+        ProcessModeState::Stopped => "not running".to_string(),
+    };
+
+    let mut lines = vec![
+        format!("service: {PUBLISHER_SERVICE_LABEL}"),
+        "service-mode: process".to_string(),
+        format!("active: {active}"),
+        format!("exec-main-status: {exec_status}"),
+        format!("pid-file: {}", publisher_process_pid_path(config).display()),
+        format!("log-file: {}", publisher_process_log_path(config).display()),
+        format!("run-user: {}", config.publisher_user),
+        format!("socket: {}", config.publisher_socket_path),
+        format!(
+            "publisher-app-id: {}",
+            config
+                .publisher_app_id
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| "<unset>".to_string())
+        ),
+        format!("publisher-key: {}", config.publisher_private_key_path),
+        format!("allowed-repos: {}", config.publisher_targets.len()),
+    ];
+
+    if !matches!(state, ProcessModeState::Running(_)) {
+        lines.push("hint: run `computer-mcp publisher start`".to_string());
+    }
+    if config.publisher_app_id.is_none() {
+        lines.push("hint: set `publisher_app_id` in config".to_string());
+    }
+    if !Path::new(&config.publisher_private_key_path).exists() {
+        lines.push("hint: place the publisher private key at the configured path".to_string());
+    }
+    if config.publisher_targets.is_empty() {
+        lines.push("hint: add at least one `publisher_targets` entry to config".to_string());
     }
 
     Ok(lines)
@@ -1078,11 +1584,11 @@ mod tests {
     use super::{
         DEFAULT_LOG_LINES, ProcessModeState, SERVICE_NAME, ServiceManager, SystemctlAction,
         build_certbot_args, build_journalctl_args, build_process_status_lines,
-        build_status_summary_lines, build_systemctl_args, certbot_cert_name,
-        ensure_tls_ready_for_start, generate_self_signed_certificate, parse_systemctl_show,
-        process_log_path, process_pid_path, read_tail_lines, render_systemd_unit,
-        select_tls_san_ip, service_manager_from_pid1, state_root_for_config, status_host_hint,
-        tls_artifacts_exist, write_if_changed,
+        build_publisher_status_lines, build_status_summary_lines, build_systemctl_args,
+        certbot_cert_name, ensure_tls_ready_for_start, generate_self_signed_certificate,
+        parse_systemctl_show, process_log_path, process_pid_path, read_tail_lines,
+        render_systemd_unit, select_tls_san_ip, service_manager_from_pid1, state_root_for_config,
+        status_host_hint, tls_artifacts_exist, write_if_changed,
     };
     use computer_mcp::config::Config;
     use std::fs;
@@ -1332,6 +1838,21 @@ mod tests {
         assert!(joined.contains(
             "hint: stale pid file detected; `computer-mcp restart` will cleanly recover"
         ));
+    }
+
+    #[test]
+    fn build_publisher_status_lines_includes_socket_and_run_user() {
+        let config = Config::default();
+        let lines = build_publisher_status_lines(&config, Ok(ProcessModeState::Running(5150)))
+            .expect("build publisher status");
+        let joined = lines.join("\n");
+        assert!(joined.contains("service: computer-mcp-prd"));
+        assert!(joined.contains("run-user: computer-mcp-publisher"));
+        assert!(
+            joined.contains("socket: /var/lib/computer-mcp/publisher/run/computer-mcp-prd.sock")
+        );
+        assert!(joined.contains("allowed-repos: 0"));
+        assert!(joined.contains("hint: set `publisher_app_id` in config"));
     }
 
     #[test]
