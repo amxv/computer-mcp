@@ -122,7 +122,7 @@ If you just want to refresh binaries on an existing Pod that uses this image:
 
 ```bash
 computer-mcp --version
-computer-mcp upgrade --version v0.1.7
+computer-mcp upgrade --version v0.1.8
 ```
 
 ## Source Notes

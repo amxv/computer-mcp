@@ -38,11 +38,12 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          labels: |
+            org.opencontainers.image.description=Runpod-ready computer-mcp image with Node.js, Python, Go, Rust, git, GitHub CLI, SSH, and common Unix tools preinstalled.
           tags: |
             type=ref,event=tag
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest
             type=sha,format=short,prefix=sha-
 
       - name: Build and push container image
