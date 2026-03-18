@@ -10,6 +10,10 @@ For extra detail, see:
 - [docs/agent-vps-setup-runbook.md](docs/agent-vps-setup-runbook.md)
 - [docs/deployment-notes.md](docs/deployment-notes.md)
 - [docs/github-app-agent-auth.md](docs/github-app-agent-auth.md)
+- [docs/runpod-deployment.md](docs/runpod-deployment.md)
+
+If the target host is Runpod, use [docs/runpod-deployment.md](docs/runpod-deployment.md).
+The main README below is the standard Linux VPS path.
 
 ## What You Need
 

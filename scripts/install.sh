@@ -17,6 +17,8 @@ COMPUTER_MCP_PUBLISHER_USER="${COMPUTER_MCP_PUBLISHER_USER:-computer-mcp-publish
 COMPUTER_MCP_SERVICE_GROUP="${COMPUTER_MCP_SERVICE_GROUP:-computer-mcp}"
 COMPUTER_MCP_READER_KEY_DIR="${COMPUTER_MCP_READER_KEY_DIR:-/etc/computer-mcp/reader}"
 COMPUTER_MCP_PUBLISHER_KEY_DIR="${COMPUTER_MCP_PUBLISHER_KEY_DIR:-/etc/computer-mcp/publisher}"
+COMPUTER_MCP_HTTP_BIND_PORT="${COMPUTER_MCP_HTTP_BIND_PORT:-}"
+COMPUTER_MCP_PUBLIC_HOST="${COMPUTER_MCP_PUBLIC_HOST:-}"
 COMPUTER_MCP_ENABLE_CERTBOT="${COMPUTER_MCP_ENABLE_CERTBOT:-0}"
 
 DISTRO_ID="unknown"
@@ -132,6 +134,35 @@ is_runpod() {
 runpod_proxy_host() {
   local pod_id="${RUNPOD_POD_ID:-<pod-id>}"
   printf '%s-8080.proxy.runpod.net\n' "${pod_id}"
+}
+
+resolved_http_bind_port() {
+  if [[ -n "${COMPUTER_MCP_HTTP_BIND_PORT}" ]]; then
+    printf '%s\n' "${COMPUTER_MCP_HTTP_BIND_PORT}"
+    return
+  fi
+
+  if is_runpod; then
+    printf '8080\n'
+  fi
+}
+
+should_use_http_proxy_path() {
+  [[ -n "$(resolved_http_bind_port)" ]]
+}
+
+resolved_public_host() {
+  if [[ -n "${COMPUTER_MCP_PUBLIC_HOST}" ]]; then
+    printf '%s\n' "${COMPUTER_MCP_PUBLIC_HOST}"
+    return
+  fi
+
+  if is_runpod; then
+    runpod_proxy_host
+    return
+  fi
+
+  detect_public_ip
 }
 
 install_runtime_prerequisites() {
@@ -297,8 +328,8 @@ ensure_dirs_and_config() {
       api_key="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 48)"
     fi
 
-    if is_runpod; then
-      runpod_http_port_line='http_bind_port = 8080'
+    if [[ -n "$(resolved_http_bind_port)" ]]; then
+      runpod_http_port_line="http_bind_port = $(resolved_http_bind_port)"
     fi
 
     umask 077
@@ -343,12 +374,12 @@ detect_public_ip() {
 }
 
 print_next_steps() {
-  local ip
-  ip="$(detect_public_ip)"
+  local public_host
+  public_host="$(resolved_public_host)"
 
-  if is_runpod; then
-    local proxy_host
-    proxy_host="$(runpod_proxy_host)"
+  if should_use_http_proxy_path; then
+    local http_port
+    http_port="$(resolved_http_bind_port)"
     cat <<EOF
 
 Install complete.
@@ -360,17 +391,17 @@ The commands below assume the default config path. If you changed it, add:
   --config "${COMPUTER_MCP_CONFIG_PATH}"
 
 Next steps:
-  1. in Runpod, expose HTTP port 8080
+  1. expose HTTP port ${http_port} on your container platform
   2. review "${COMPUTER_MCP_CONFIG_PATH}" and add reader_app_id / reader_installation_id / publisher_app_id / publisher_targets
   3. place the reader GitHub App key at "${COMPUTER_MCP_READER_KEY_DIR}/private-key.pem"
   4. place the publisher GitHub App key at "${COMPUTER_MCP_PUBLISHER_KEY_DIR}/private-key.pem" with owner ${COMPUTER_MCP_PUBLISHER_USER}
   5. computer-mcp start
-  6. computer-mcp show-url --host "${proxy_host}"
+  6. computer-mcp show-url --host "${public_host}"
 
 Verify:
   - computer-mcp status
-  - curl "https://${proxy_host}/health"
-  - MCP URL shape: https://${proxy_host}/mcp?key=<redacted>
+  - curl "https://${public_host}/health"
+  - MCP URL shape: https://${public_host}/mcp?key=<redacted>
 
 Optional:
   - rotate the installer-generated API key with: computer-mcp set-key "<strong-random-key>"
@@ -393,12 +424,12 @@ Next steps:
   2. place the reader GitHub App key at "${COMPUTER_MCP_READER_KEY_DIR}/private-key.pem"
   3. place the publisher GitHub App key at "${COMPUTER_MCP_PUBLISHER_KEY_DIR}/private-key.pem" with owner ${COMPUTER_MCP_PUBLISHER_USER}
   4. computer-mcp start
-  5. computer-mcp show-url --host "${ip}"
+  5. computer-mcp show-url --host "${public_host}"
 
 Verify:
   - computer-mcp status
-  - curl -k "https://${ip}/health"
-  - MCP URL shape: https://${ip}/mcp?key=<redacted>
+  - curl -k "https://${public_host}/health"
+  - MCP URL shape: https://${public_host}/mcp?key=<redacted>
 
 Optional:
   - rotate the installer-generated API key with: computer-mcp set-key "<strong-random-key>"
