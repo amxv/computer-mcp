@@ -14,10 +14,12 @@ path = "src/bin/computer-mcpd.rs"
 [dependencies]
 anyhow = "1.0"
 axum = { version = "0.8", features = ["macros"] }
+axum-server = { version = "0.8", features = ["tls-rustls"] }
 clap = { version = "4.5", features = ["derive"] }
 codex-apply-patch = { git = "https://github.com/openai/codex.git", rev = "a265d6043edc8b41e42ae508291f4cfb9ed46805" }
 nix = { version = "0.30", features = ["signal", "process", "term"] }
 rand = "0.10"
+rcgen = "0.14"
 rmcp = { version = "1", features = [
     "server",
     "macros",

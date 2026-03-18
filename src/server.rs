@@ -1,12 +1,16 @@
+use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use axum::extract::{Request, State};
 use axum::http::StatusCode;
 use axum::middleware::{self, Next};
 use axum::response::Response;
 use axum::routing::get;
 use axum::{Json, Router};
+use axum_server::Handle;
+use axum_server::tls_rustls::RustlsConfig;
 use rmcp::handler::server::{router::tool::ToolRouter, wrapper::Parameters};
 use rmcp::model::{ServerCapabilities, ServerInfo};
 use rmcp::transport::streamable_http_server::{
@@ -14,7 +18,6 @@ use rmcp::transport::streamable_http_server::{
 };
 use rmcp::{Json as McpJson, ServerHandler, tool, tool_handler, tool_router};
 use serde_json::{Value, json};
-use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -98,9 +101,27 @@ impl ServerHandler for ComputerMcpService {
 
 pub async fn run_server(config: Config) -> Result<()> {
     let bind = format!("{}:{}", config.bind_host, config.bind_port);
-    let listener = TcpListener::bind(&bind)
+    let cert_path = Path::new(&config.tls_cert_path);
+    let key_path = Path::new(&config.tls_key_path);
+    if !cert_path.exists() || !key_path.exists() {
+        bail!(
+            "TLS cert/key not found (cert: {}, key: {}). Run `computer-mcp tls setup` first.",
+            config.tls_cert_path,
+            config.tls_key_path
+        );
+    }
+
+    let rustls = RustlsConfig::from_pem_file(cert_path, key_path)
         .await
-        .with_context(|| format!("failed to bind {}", bind))?;
+        .with_context(|| {
+            format!(
+                "failed to load TLS cert/key from {} and {}",
+                config.tls_cert_path, config.tls_key_path
+            )
+        })?;
+    let addr: std::net::SocketAddr = bind
+        .parse()
+        .with_context(|| format!("invalid bind address {bind}"))?;
 
     let shared_state = SharedState {
         sessions: Arc::new(Mutex::new(SessionManager::new(
@@ -136,14 +157,20 @@ pub async fn run_server(config: Config) -> Result<()> {
         .route("/health", get(health))
         .merge(protected_mcp_router);
 
-    info!("computer-mcpd listening on http://{bind}");
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async move {
-            let _ = tokio::signal::ctrl_c().await;
-            cancellation.cancel();
-        })
+    let handle = Handle::new();
+    let shutdown_handle = handle.clone();
+    tokio::spawn(async move {
+        let _ = tokio::signal::ctrl_c().await;
+        cancellation.cancel();
+        shutdown_handle.graceful_shutdown(Some(Duration::from_secs(5)));
+    });
+
+    info!("computer-mcpd listening on https://{bind}");
+    axum_server::bind_rustls(addr, rustls)
+        .handle(handle)
+        .serve(app.into_make_service())
         .await
-        .context("axum server terminated unexpectedly")
+        .context("axum TLS server terminated unexpectedly")
 }
 
 async fn health() -> Json<Value> {
