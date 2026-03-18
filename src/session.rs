@@ -491,6 +491,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn kill_unknown_session_returns_error() {
+        let mut mgr = SessionManager::new(64, 20_000);
+        let cfg = Config::default();
+
+        let err = mgr
+            .write_stdin(
+                WriteStdinInput {
+                    session_id: 505,
+                    chars: Some("echo hi\n".to_string()),
+                    yield_time_ms: Some(50),
+                    kill_process: Some(true),
+                },
+                &cfg,
+            )
+            .await
+            .expect_err("expected unknown session id error");
+
+        assert!(err.to_string().contains("Unknown process id: 505"));
+    }
+
+    #[tokio::test]
     async fn running_vs_finished_response_shape() {
         let mut mgr = SessionManager::new(64, 20_000);
         let cfg = Config::default();
@@ -711,5 +732,37 @@ mod tests {
         assert!(killed.session_id.is_none());
         assert!(killed.exit_code.is_some());
         assert!(killed.output.contains("terminated by kill_process"));
+        assert!(!killed.output.contains("should-be-ignored"));
+    }
+
+    #[tokio::test]
+    async fn exec_timeout_terminates_process_and_returns_notice() {
+        let mut mgr = SessionManager::new(64, 20_000);
+        let mut cfg = Config::default();
+        cfg.default_exec_timeout_ms = 1_000;
+        cfg.max_exec_timeout_ms = 1_000;
+
+        let timed_out = mgr
+            .exec_command(
+                ExecCommandInput {
+                    cmd: "sleep 30".to_string(),
+                    yield_time_ms: Some(4_000),
+                    workdir: None,
+                    timeout_ms: Some(1_000),
+                },
+                &cfg,
+            )
+            .await
+            .expect("timeout command should complete after termination");
+
+        assert!(timed_out.session_id.is_none());
+        assert!(timed_out.exit_code.is_some());
+        assert!(
+            timed_out
+                .output
+                .contains("process timed out and was terminated"),
+            "expected timeout notice in output: {}",
+            timed_out.output
+        );
     }
 }
