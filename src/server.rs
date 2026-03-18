@@ -50,7 +50,15 @@ impl ComputerMcpService {
 
 #[tool_router]
 impl ComputerMcpService {
-    #[tool(name = "exec_command", description = "Run a shell command")]
+    #[tool(
+        name = "exec_command",
+        description = "Run a shell command",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            open_world_hint = false
+        )
+    )]
     async fn exec_command(
         &self,
         Parameters(input): Parameters<ExecCommandInput>,
@@ -65,7 +73,12 @@ impl ComputerMcpService {
 
     #[tool(
         name = "write_stdin",
-        description = "Write to or poll a running session"
+        description = "Write to or poll a running session",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn write_stdin(
         &self,
@@ -81,7 +94,12 @@ impl ComputerMcpService {
 
     #[tool(
         name = "apply_patch",
-        description = "Apply a Codex-style patch to files"
+        description = "Apply a Codex-style patch to files",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            open_world_hint = false
+        )
     )]
     async fn apply_patch(
         &self,
@@ -245,6 +263,7 @@ mod tests {
     use super::{ComputerMcpService, SharedState};
     use crate::config::Config;
     use crate::session::SessionManager;
+    use rmcp::model::ToolAnnotations;
     use std::sync::Arc;
     use tokio::sync::Mutex;
 
@@ -266,5 +285,40 @@ mod tests {
         assert!(names.iter().any(|name| name == "exec_command"));
         assert!(names.iter().any(|name| name == "write_stdin"));
         assert!(names.iter().any(|name| name == "apply_patch"));
+    }
+
+    #[test]
+    fn tools_have_expected_annotations() {
+        let state = SharedState {
+            config: Arc::new(Config::default()),
+            sessions: Arc::new(Mutex::new(SessionManager::new(64, 200_000))),
+        };
+
+        let service = ComputerMcpService::new(state);
+
+        let by_name = |name: &str| {
+            service
+                .tool_router
+                .list_all()
+                .iter()
+                .find(|tool| tool.name == name)
+                .and_then(|tool| tool.annotations.clone())
+                .unwrap_or_else(ToolAnnotations::default)
+        };
+
+        let exec = by_name("exec_command");
+        assert_eq!(exec.read_only_hint, Some(true));
+        assert_eq!(exec.destructive_hint, Some(false));
+        assert_eq!(exec.open_world_hint, Some(false));
+
+        let write = by_name("write_stdin");
+        assert_eq!(write.read_only_hint, Some(true));
+        assert_eq!(write.destructive_hint, Some(false));
+        assert_eq!(write.open_world_hint, Some(false));
+
+        let patch = by_name("apply_patch");
+        assert_eq!(patch.read_only_hint, Some(true));
+        assert_eq!(patch.destructive_hint, Some(false));
+        assert_eq!(patch.open_world_hint, Some(false));
     }
 }
