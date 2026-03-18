@@ -9,6 +9,13 @@
 
 The goal is simple: the agent can ask for a PR without ever holding the GitHub write credential itself.
 
+Default config file: `/etc/computer-mcp/config.toml`
+
+Most installs only need to add:
+
+- `publisher_app_id`
+- one or more `publisher_targets`
+
 ## What The GitHub App Is Used For
 
 The publisher daemon uses the GitHub App to:
@@ -38,9 +45,6 @@ Example config:
 
 ```toml
 publisher_app_id = 3123864
-agent_user = "computer-mcp-agent"
-publisher_user = "computer-mcp-publisher"
-service_group = "computer-mcp"
 
 [[publisher_targets]]
 id = "amxv/computer-mcp"
@@ -60,8 +64,8 @@ sudo install -m 0600 -o computer-mcp-publisher -g computer-mcp \
 Then start the publisher daemon:
 
 ```bash
-computer-mcp --config /etc/computer-mcp/config.toml publisher start
-computer-mcp --config /etc/computer-mcp/config.toml publisher status
+computer-mcp publisher start
+computer-mcp publisher status
 ```
 
 ## How `publish-pr` Works
@@ -69,7 +73,7 @@ computer-mcp --config /etc/computer-mcp/config.toml publisher status
 Run `publish-pr` from inside the repo checkout after the change has already been committed:
 
 ```bash
-computer-mcp --config /etc/computer-mcp/config.toml publish-pr \
+computer-mcp publish-pr \
   --repo amxv/computer-mcp \
   --title "Agent: example change" \
   --body "Automated change from computer-mcp."

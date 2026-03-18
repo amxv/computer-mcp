@@ -32,6 +32,9 @@ fn install_script_has_expected_structure() {
         "tls setup",
         "publisher start",
         "publisher status",
+        "The commands below assume the default config path",
+        "Most installs can keep the built-in defaults.",
+        "rotate the installer-generated API key",
         "curl -k \"https://${ip}/health\"",
         "MCP URL shape: https://${ip}/mcp?key=<redacted>",
     ];

@@ -2,7 +2,7 @@
 
 Remote coding MCP server for Linux VPS deployment.
 
-This README is the fast path. It shows the shortest install and run flow for a fresh VPS.
+This README is the fast path for a fresh VPS.
 
 For extra detail, see:
 - [deployment-notes.md](/Users/ashray/code/amxv/computer-mcp/docs/deployment-notes.md)
@@ -15,6 +15,10 @@ For extra detail, see:
 - A public IP or host for the MCP endpoint
 - A GitHub App private key if you want the agent to open PRs
 
+Default config file: `/etc/computer-mcp/config.toml`
+
+The commands below assume that default path. If you use a different config file, add `--config /path/to/config.toml`.
+
 ## 1. Install
 
 If you have a public installer URL:
@@ -25,16 +29,15 @@ curl -fsSL https://raw.githubusercontent.com/amxv/computer-mcp/main/scripts/inst
 
 If this repository is private or the raw installer URL is not accessible, use the local-source install in [deployment-notes.md](/Users/ashray/code/amxv/computer-mcp/docs/deployment-notes.md).
 
-## 2. Edit The Config
+## 2. Edit Only What You Need
 
 Edit `/etc/computer-mcp/config.toml`.
 
-Minimum example:
+Most installs can keep the defaults. The installer already creates a strong random API key, default users, default paths, and the default HTTPS bind.
+
+You usually only need to add GitHub publishing settings:
 
 ```toml
-bind_host = "0.0.0.0"
-bind_port = 443
-api_key = "change-me"
 publisher_app_id = 3123864
 
 [[publisher_targets]]
@@ -46,7 +49,7 @@ installation_id = 117314785
 
 ## 3. Place The GitHub App Key
 
-Only required if you want `publish-pr`.
+Only required if you want `publish-pr`. The default key path is `/etc/computer-mcp/publisher/private-key.pem`.
 
 ```bash
 sudo install -m 0600 -o computer-mcp-publisher -g computer-mcp \
@@ -54,26 +57,33 @@ sudo install -m 0600 -o computer-mcp-publisher -g computer-mcp \
   /etc/computer-mcp/publisher/private-key.pem
 ```
 
-## 4. Set The API Key And TLS
+## 4. Set Up TLS
 
 ```bash
-computer-mcp --config /etc/computer-mcp/config.toml set-key "<strong-random-key>"
-computer-mcp --config /etc/computer-mcp/config.toml tls setup
+computer-mcp tls setup
 ```
 
-## 5. Start The Services
+The installer already generated an API key. Rotate it only if you want a new one:
 
 ```bash
-computer-mcp --config /etc/computer-mcp/config.toml publisher start
-computer-mcp --config /etc/computer-mcp/config.toml start
+computer-mcp set-key "<strong-random-key>"
+```
+
+## 5. Start
+
+If you want PR publishing, start the publisher first:
+
+```bash
+computer-mcp publisher start
+computer-mcp start
 ```
 
 ## 6. Verify
 
 ```bash
-computer-mcp --config /etc/computer-mcp/config.toml publisher status
-computer-mcp --config /etc/computer-mcp/config.toml status
-computer-mcp --config /etc/computer-mcp/config.toml show-url --host "<public_ip_or_host>"
+computer-mcp publisher status
+computer-mcp status
+computer-mcp show-url --host "<public_ip_or_host>"
 curl -k "https://<public_ip_or_host>/health"
 ```
 
@@ -88,7 +98,7 @@ https://<public_ip_or_host>/mcp?key=<api_key>
 After the agent has finished work in a local git checkout and committed the change:
 
 ```bash
-computer-mcp --config /etc/computer-mcp/config.toml publish-pr \
+computer-mcp publish-pr \
   --repo amxv/computer-mcp \
   --title "Agent: example change" \
   --body "Automated change from computer-mcp."
@@ -102,9 +112,9 @@ Requirements:
 ## Common Commands
 
 ```bash
-computer-mcp --config /etc/computer-mcp/config.toml status
-computer-mcp --config /etc/computer-mcp/config.toml logs
-computer-mcp --config /etc/computer-mcp/config.toml publisher status
-computer-mcp --config /etc/computer-mcp/config.toml publisher logs
-computer-mcp --config /etc/computer-mcp/config.toml restart
+computer-mcp status
+computer-mcp logs
+computer-mcp publisher status
+computer-mcp publisher logs
+computer-mcp restart
 ```

@@ -2,6 +2,24 @@
 
 This file holds the details that were intentionally kept out of the main README.
 
+## Default Paths And Defaults
+
+These are the main defaults:
+
+- config file: `/etc/computer-mcp/config.toml`
+- publisher key: `/etc/computer-mcp/publisher/private-key.pem`
+- bind address: `0.0.0.0:443`
+- agent user: `computer-mcp-agent`
+- publisher user: `computer-mcp-publisher`
+- publisher socket: `/var/lib/computer-mcp/publisher/run/computer-mcp-prd.sock`
+
+Most deployments only need to change:
+
+- `publisher_app_id`
+- `publisher_targets`
+
+Use overrides only when you actually need them, for example a non-443 port or a custom config path.
+
 ## Install From A Private Repo Checkout
 
 If the public installer URL is not usable, build from a local checkout and point the installer at the built binaries:
@@ -72,3 +90,5 @@ COMPUTER_MCP_VERSION=v0.1.0 \
 COMPUTER_MCP_INSTALL_DIR=/usr/local/bin \
 curl -fsSL https://raw.githubusercontent.com/amxv/computer-mcp/main/scripts/install.sh | sudo -E bash
 ```
+
+If you use a non-default config file, add `--config /path/to/config.toml` to the `computer-mcp` commands from the main README.
