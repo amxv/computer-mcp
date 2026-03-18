@@ -4,10 +4,12 @@ Remote coding MCP server for Linux VPS deployment.
 
 This README is the fast path for a fresh VPS.
 
+Agents doing a full operator-led setup should read [docs/agent-vps-setup-runbook.md](docs/agent-vps-setup-runbook.md) first.
+
 For extra detail, see:
-- [agent-vps-setup-runbook.md](/Users/ashray/code/amxv/computer-mcp/docs/agent-vps-setup-runbook.md)
-- [deployment-notes.md](/Users/ashray/code/amxv/computer-mcp/docs/deployment-notes.md)
-- [github-app-agent-auth.md](/Users/ashray/code/amxv/computer-mcp/docs/github-app-agent-auth.md)
+- [docs/agent-vps-setup-runbook.md](docs/agent-vps-setup-runbook.md)
+- [docs/deployment-notes.md](docs/deployment-notes.md)
+- [docs/github-app-agent-auth.md](docs/github-app-agent-auth.md)
 
 ## What You Need
 
@@ -29,7 +31,7 @@ If you have a public installer URL:
 curl -fsSL https://raw.githubusercontent.com/amxv/computer-mcp/main/scripts/install.sh | sudo bash
 ```
 
-If this repository is private or the raw installer URL is not accessible, use the local-source install in [deployment-notes.md](/Users/ashray/code/amxv/computer-mcp/docs/deployment-notes.md).
+If this repository is private or the raw installer URL is not accessible, use the local-source install in [docs/deployment-notes.md](docs/deployment-notes.md).
 
 ## 2. Edit Only What You Need
 
