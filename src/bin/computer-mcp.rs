@@ -359,6 +359,7 @@ fn install(config_path: &Path) -> Result<()> {
             println!("enabled {SERVICE_NAME} for boot persistence");
         }
         ServiceManager::Process => {
+            ensure_process_mode_accounts(&config)?;
             ensure_process_mode_dirs(&config)?;
             ensure_publisher_process_dirs(&config)?;
             println!(
@@ -530,6 +531,52 @@ fn ensure_runuser_available() -> Result<()> {
     } else {
         bail!("`runuser` is required to launch daemons under separate users")
     }
+}
+
+#[cfg(unix)]
+fn ensure_process_mode_accounts(config: &Config) -> Result<()> {
+    if !current_euid_is_root() {
+        return Ok(());
+    }
+
+    if lookup_group(&config.service_group).is_err() {
+        run_command_capture(
+            "groupadd",
+            &["--system".to_string(), config.service_group.clone()],
+        )?;
+    }
+
+    ensure_process_mode_user(&config.agent_user, &config.service_group)?;
+    ensure_process_mode_user(&config.publisher_user, &config.service_group)?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn ensure_process_mode_accounts(_config: &Config) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn ensure_process_mode_user(name: &str, group: &str) -> Result<()> {
+    if lookup_user(name).is_ok() {
+        return Ok(());
+    }
+
+    run_command_capture(
+        "useradd",
+        &[
+            "--system".to_string(),
+            "--no-create-home".to_string(),
+            "--home-dir".to_string(),
+            "/nonexistent".to_string(),
+            "--shell".to_string(),
+            "/usr/sbin/nologin".to_string(),
+            "--gid".to_string(),
+            group.to_string(),
+            name.to_string(),
+        ],
+    )?;
+    Ok(())
 }
 
 fn create_required_dirs(config_path: &Path) -> Result<()> {
@@ -914,6 +961,7 @@ fn remove_publisher_pid_file_if_present(config: &Config) -> Result<()> {
 }
 
 fn start_process_mode(config: &Config, config_path: &Path) -> Result<()> {
+    ensure_process_mode_accounts(config)?;
     ensure_process_mode_dirs(config)?;
     prepare_agent_process_ownership(config)?;
 
@@ -1019,6 +1067,7 @@ fn read_process_logs(config: &Config, max_lines: usize) -> Result<String> {
 }
 
 fn start_publisher_process_mode(config: &Config, config_path: &Path) -> Result<()> {
+    ensure_process_mode_accounts(config)?;
     ensure_publisher_process_dirs(config)?;
     prepare_publisher_process_ownership(config)?;
 
