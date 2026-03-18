@@ -25,6 +25,8 @@ Use overrides only when you actually need them, for example a non-443 port or a 
 
 ## Install From A Private Repo Checkout
 
+The public installer tries GitHub Release artifacts first. If no matching release asset exists, it falls back to a source build.
+
 If the public installer URL is not usable, build from a local checkout and point the installer at the built binaries:
 
 ```bash

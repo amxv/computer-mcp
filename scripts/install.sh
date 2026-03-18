@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_VERSION="0.1.0"
+SCRIPT_VERSION="0.1.1"
 
 COMPUTER_MCP_VERSION="${COMPUTER_MCP_VERSION:-latest}"
 COMPUTER_MCP_REPO="${COMPUTER_MCP_REPO:-amxv/computer-mcp}"
@@ -125,13 +125,12 @@ detect_platform() {
   log "detected distro=${DISTRO_ID} arch=${ARCH} target=${TARGET_TRIPLE}"
 }
 
-install_prerequisites() {
+install_runtime_prerequisites() {
   if command_exists apt-get; then
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -y
     apt-get install -y --no-install-recommends \
-      build-essential pkg-config libssl-dev \
-      curl ca-certificates systemd tar gzip git
+      curl ca-certificates systemd tar gzip
 
     if [[ "${COMPUTER_MCP_ENABLE_CERTBOT}" == "1" ]]; then
       apt-get install -y --no-install-recommends certbot || warn "certbot install failed"
@@ -140,8 +139,7 @@ install_prerequisites() {
   fi
 
   if command_exists dnf; then
-    dnf install -y gcc gcc-c++ make pkgconf-pkg-config openssl-devel \
-      curl ca-certificates systemd tar gzip git
+    dnf install -y curl ca-certificates systemd tar gzip
     if [[ "${COMPUTER_MCP_ENABLE_CERTBOT}" == "1" ]]; then
       dnf install -y certbot || warn "certbot install failed"
     fi
@@ -149,8 +147,7 @@ install_prerequisites() {
   fi
 
   if command_exists yum; then
-    yum install -y gcc gcc-c++ make pkgconfig openssl-devel \
-      curl ca-certificates systemd tar gzip git
+    yum install -y curl ca-certificates systemd tar gzip
     if [[ "${COMPUTER_MCP_ENABLE_CERTBOT}" == "1" ]]; then
       yum install -y certbot || warn "certbot install failed"
     fi
@@ -158,6 +155,28 @@ install_prerequisites() {
   fi
 
   die "unsupported package manager (expected apt-get, dnf, or yum)"
+}
+
+install_build_prerequisites() {
+  if command_exists apt-get; then
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -y
+    apt-get install -y --no-install-recommends \
+      build-essential pkg-config libssl-dev git
+    return
+  fi
+
+  if command_exists dnf; then
+    dnf install -y gcc gcc-c++ make pkgconf-pkg-config openssl-devel git
+    return
+  fi
+
+  if command_exists yum; then
+    yum install -y gcc gcc-c++ make pkgconfig openssl-devel git
+    return
+  fi
+
+  die "unsupported package manager for source builds (expected apt-get, dnf, or yum)"
 }
 
 resolve_release_api_url() {
@@ -234,6 +253,7 @@ install_rust_toolchain_if_needed() {
 
 install_binaries_from_source() {
   log "falling back to source build from ${COMPUTER_MCP_REPO}@${COMPUTER_MCP_SOURCE_REF}"
+  install_build_prerequisites
   install_rust_toolchain_if_needed
 
   local src_dir="${TMP_DIR}/source"
@@ -340,7 +360,7 @@ EOF
 main() {
   need_root
   detect_platform
-  install_prerequisites
+  install_runtime_prerequisites
   ensure_service_accounts
 
   TMP_DIR="$(mktemp -d)"
