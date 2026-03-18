@@ -9,6 +9,7 @@ use std::process::Command;
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand};
 use computer_mcp::config::{Config, DEFAULT_CONFIG_PATH};
+use computer_mcp::redaction::redact_api_key_query_params;
 use rand::distr::{Alphanumeric, SampleString};
 use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, SanType};
 
@@ -70,6 +71,8 @@ fn main() -> Result<()> {
         }
         Commands::Start => {
             ensure_linux()?;
+            let config = Config::load(Some(Path::new(&config_path)))?;
+            ensure_tls_ready_for_start(&config, &config_path)?;
             run_systemctl(&build_systemctl_args(SystemctlAction::Start))?;
             println!("started {SERVICE_NAME}");
         }
@@ -95,7 +98,7 @@ fn main() -> Result<()> {
             if logs.is_empty() {
                 println!("no recent logs found for {SERVICE_NAME}");
             } else {
-                print!("{logs}");
+                print!("{}", redact_api_key_query_params(&logs));
             }
         }
         Commands::SetKey { value } => {
@@ -113,7 +116,11 @@ fn main() -> Result<()> {
         }
         Commands::ShowUrl { host } => {
             let config = Config::load(Some(Path::new(&config_path)))?;
-            println!("https://{host}/mcp?key={}", config.api_key);
+            let raw_url = format!("https://{host}/mcp?key={}", config.api_key);
+            println!(
+                "{} (key redacted in CLI output)",
+                redact_api_key_query_params(&raw_url)
+            );
         }
         Commands::Tls { command } => match command {
             TlsCommand::Setup => tls_setup(&config_path)?,
@@ -345,8 +352,8 @@ fn run_command_capture(program: &str, args: &[String]) -> Result<String> {
         .output()
         .with_context(|| format!("failed to run {program}"))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let stdout = redact_api_key_query_params(&String::from_utf8_lossy(&output.stdout));
+    let stderr = redact_api_key_query_params(&String::from_utf8_lossy(&output.stderr));
 
     if output.status.success() {
         return Ok(stdout);
@@ -419,7 +426,9 @@ fn build_status_summary_lines(
         .unwrap_or("unknown");
 
     let host_hint = status_host_hint(&config.bind_host, public_ip);
-    let url_hint = format!("https://{host_hint}/mcp?key={}", config.api_key);
+    let url_hint =
+        redact_api_key_query_params(&format!("https://{host_hint}/mcp?key={}", config.api_key));
+    let health_hint = format!("https://{host_hint}/health");
 
     let mut lines = vec![
         format!("service: {SERVICE_NAME}"),
@@ -432,6 +441,7 @@ fn build_status_summary_lines(
         format!("tls-cert: {}", config.tls_cert_path),
         format!("tls-key: {}", config.tls_key_path),
         format!("url-hint: {url_hint}"),
+        format!("health-hint: {health_hint}"),
     ];
 
     if active != "active" {
@@ -440,7 +450,37 @@ fn build_status_summary_lines(
     if unit_file_state != "enabled" {
         lines.push("hint: run `computer-mcp install`".to_string());
     }
+    if !tls_artifacts_exist(config) {
+        lines.push("hint: run `computer-mcp tls setup`".to_string());
+    }
     lines
+}
+
+fn tls_artifacts_exist(config: &Config) -> bool {
+    Path::new(&config.tls_cert_path).exists() && Path::new(&config.tls_key_path).exists()
+}
+
+fn ensure_tls_ready_for_start(config: &Config, config_path: &Path) -> Result<()> {
+    if tls_artifacts_exist(config) {
+        return Ok(());
+    }
+
+    let cert_missing = !Path::new(&config.tls_cert_path).exists();
+    let key_missing = !Path::new(&config.tls_key_path).exists();
+
+    let mut missing = Vec::new();
+    if cert_missing {
+        missing.push(format!("cert: {}", config.tls_cert_path));
+    }
+    if key_missing {
+        missing.push(format!("key: {}", config.tls_key_path));
+    }
+
+    bail!(
+        "TLS artifacts are required before start and are missing ({})\nrun `computer-mcp --config \"{}\" tls setup` and retry",
+        missing.join(", "),
+        config_path.display()
+    )
 }
 
 fn detect_public_ip() -> Option<IpAddr> {
@@ -639,8 +679,9 @@ mod tests {
     use super::{
         DEFAULT_LOG_LINES, SERVICE_NAME, SystemctlAction, build_certbot_args,
         build_journalctl_args, build_status_summary_lines, build_systemctl_args, certbot_cert_name,
-        generate_self_signed_certificate, parse_systemctl_show, render_systemd_unit,
-        select_tls_san_ip, status_host_hint, write_if_changed,
+        ensure_tls_ready_for_start, generate_self_signed_certificate, parse_systemctl_show,
+        render_systemd_unit, select_tls_san_ip, status_host_hint, tls_artifacts_exist,
+        write_if_changed,
     };
     use computer_mcp::config::Config;
     use std::fs;
@@ -811,7 +852,52 @@ mod tests {
         assert!(joined.contains("tls-mode: self_signed"));
         assert!(joined.contains("tls-cert: /var/lib/computer-mcp/tls/cert.pem"));
         assert!(joined.contains("tls-key: /var/lib/computer-mcp/tls/key.pem"));
-        assert!(joined.contains("url-hint: https://198.51.100.88/mcp?key=abc123"));
+        assert!(joined.contains("url-hint: https://198.51.100.88/mcp?key=<redacted>"));
+        assert!(joined.contains("health-hint: https://198.51.100.88/health"));
+    }
+
+    #[test]
+    fn build_status_summary_lines_suggests_tls_setup_when_files_missing() {
+        let raw = "ActiveState=inactive\nSubState=dead\nUnitFileState=enabled\nExecMainStatus=1\n";
+        let mut config = Config::default();
+        let dir = tempdir().expect("tempdir");
+        config.tls_cert_path = dir.path().join("missing-cert.pem").display().to_string();
+        config.tls_key_path = dir.path().join("missing-key.pem").display().to_string();
+
+        let lines = build_status_summary_lines(raw, &config, None);
+        let joined = lines.join("\n");
+
+        assert!(joined.contains("hint: run `computer-mcp tls setup`"));
+    }
+
+    #[test]
+    fn tls_artifacts_exist_checks_both_files() {
+        let dir = tempdir().expect("tempdir");
+        let cert = dir.path().join("cert.pem");
+        let key = dir.path().join("key.pem");
+        fs::write(&cert, "cert").expect("write cert");
+
+        let mut config = Config::default();
+        config.tls_cert_path = cert.display().to_string();
+        config.tls_key_path = key.display().to_string();
+        assert!(!tls_artifacts_exist(&config));
+
+        fs::write(&key, "key").expect("write key");
+        assert!(tls_artifacts_exist(&config));
+    }
+
+    #[test]
+    fn ensure_tls_ready_for_start_returns_actionable_error() {
+        let dir = tempdir().expect("tempdir");
+        let mut config = Config::default();
+        config.tls_cert_path = dir.path().join("missing-cert.pem").display().to_string();
+        config.tls_key_path = dir.path().join("missing-key.pem").display().to_string();
+
+        let err = ensure_tls_ready_for_start(&config, Path::new("/etc/computer-mcp/config.toml"))
+            .expect_err("expected missing tls error");
+        let msg = err.to_string();
+        assert!(msg.contains("TLS artifacts are required before start"));
+        assert!(msg.contains("computer-mcp --config \"/etc/computer-mcp/config.toml\" tls setup"));
     }
 
     #[test]

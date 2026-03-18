@@ -258,8 +258,14 @@ Install complete.
 
 Next steps:
   1. computer-mcp --config "${COMPUTER_MCP_CONFIG_PATH}" set-key "<strong-random-key>"
-  2. computer-mcp --config "${COMPUTER_MCP_CONFIG_PATH}" start
-  3. computer-mcp --config "${COMPUTER_MCP_CONFIG_PATH}" show-url --host "${ip}"
+  2. computer-mcp --config "${COMPUTER_MCP_CONFIG_PATH}" tls setup
+  3. computer-mcp --config "${COMPUTER_MCP_CONFIG_PATH}" start
+  4. computer-mcp --config "${COMPUTER_MCP_CONFIG_PATH}" show-url --host "${ip}"
+
+Verify:
+  - computer-mcp --config "${COMPUTER_MCP_CONFIG_PATH}" status
+  - curl -k "https://${ip}/health"
+  - MCP URL shape: https://${ip}/mcp?key=<redacted>
 EOF
 }
 

@@ -16,9 +16,35 @@ What the installer does:
 - Installs `computer-mcp` and `computer-mcpd` binaries.
 - Creates config/state directories with restricted permissions.
 - Runs `computer-mcp install` to configure and enable the systemd service.
-- Prints next-step commands for `set-key`, `start`, and `show-url`.
+- Prints next-step commands for `set-key`, `tls setup`, `start`, and `show-url`.
 
 The installer is non-interactive and idempotent on re-run.
+
+## VPS Quickstart (HTTPS-Only)
+
+After installation, use this deploy-ready sequence:
+
+```bash
+computer-mcp --config /etc/computer-mcp/config.toml set-key "<strong-random-key>"
+computer-mcp --config /etc/computer-mcp/config.toml tls setup
+computer-mcp --config /etc/computer-mcp/config.toml start
+computer-mcp --config /etc/computer-mcp/config.toml show-url --host "<vps_public_ip>"
+```
+
+Verification commands:
+
+```bash
+computer-mcp --config /etc/computer-mcp/config.toml status
+curl -k "https://<vps_public_ip>/health"
+```
+
+Sample MCP URL shape:
+
+```text
+https://<vps_public_ip>/mcp?key=<your_api_key>
+```
+
+`computer-mcp` CLI output redacts `key=` query values by default to reduce accidental key leaks.
 
 ## Installer Environment Overrides
 

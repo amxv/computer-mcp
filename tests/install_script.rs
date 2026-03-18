@@ -25,6 +25,9 @@ fn install_script_has_expected_structure() {
         "run_cli_install()",
         "print_next_steps()",
         "apt-get install -y --no-install-recommends",
+        "tls setup",
+        "curl -k \"https://${ip}/health\"",
+        "MCP URL shape: https://${ip}/mcp?key=<redacted>",
     ];
 
     for snippet in required_snippets {
