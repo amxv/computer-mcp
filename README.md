@@ -53,6 +53,10 @@ On Runpod-style container pods, `computer-mcp` uses process mode instead of `sys
 - `computer-mcp stop` / `restart` / `status` / `logs` use pid and log files under the computer-mcp state directory
 - boot persistence depends on the platform/container lifecycle rather than `systemd`
 
+## GitHub App Agent Auth
+
+For repository-scoped agent push/branch/PR access without placing a broad personal token on a VPS, see [docs/github-app-agent-auth.md](/Users/ashray/code/amxv/computer-mcp/docs/github-app-agent-auth.md).
+
 ## Installer Environment Overrides
 
 `scripts/install.sh` supports the following optional overrides:
