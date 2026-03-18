@@ -15,7 +15,8 @@ What the installer does:
 - Installs prerequisites (`curl`, `ca-certificates`, `systemd`, plus `git`/archive tools for fallback path).
 - Installs `computer-mcp` and `computer-mcpd` binaries.
 - Creates config/state directories with restricted permissions.
-- Runs `computer-mcp install` to configure and enable the systemd service.
+- Runs `computer-mcp install` to configure the service backend.
+- Uses `systemd` on normal VMs and falls back to process mode on container-style environments where PID 1 is not `systemd`.
 - Prints next-step commands for `set-key`, `tls setup`, `start`, and `show-url`.
 
 The installer is non-interactive and idempotent on re-run.
@@ -45,6 +46,12 @@ https://<vps_public_ip>/mcp?key=<your_api_key>
 ```
 
 `computer-mcp` CLI output redacts `key=` query values by default to reduce accidental key leaks.
+
+On Runpod-style container pods, `computer-mcp` uses process mode instead of `systemd`. In that mode:
+
+- `computer-mcp start` launches `computer-mcpd` as a detached process
+- `computer-mcp stop` / `restart` / `status` / `logs` use pid and log files under the computer-mcp state directory
+- boot persistence depends on the platform/container lifecycle rather than `systemd`
 
 ## Installer Environment Overrides
 
