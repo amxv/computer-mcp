@@ -5,6 +5,9 @@ CONFIG_PATH="${COMPUTER_MCP_CONFIG_PATH:-/etc/computer-mcp/config.toml}"
 READER_KEY_PATH="${COMPUTER_MCP_READER_KEY_PATH:-/etc/computer-mcp/reader/private-key.pem}"
 PUBLISHER_KEY_PATH="${COMPUTER_MCP_PUBLISHER_KEY_PATH:-/etc/computer-mcp/publisher/private-key.pem}"
 BOOT_LOG_PREFIX="[computer-mcp container]"
+SERVICE_GROUP="${COMPUTER_MCP_SERVICE_GROUP:-computer-mcp}"
+AGENT_USER="${COMPUTER_MCP_AGENT_USER:-computer-mcp-agent}"
+PUBLISHER_USER="${COMPUTER_MCP_PUBLISHER_USER:-computer-mcp-publisher}"
 
 log() {
   printf '%s %s\n' "${BOOT_LOG_PREFIX}" "$*"
@@ -47,6 +50,33 @@ start_sshd() {
 
   /usr/sbin/sshd
   log "started sshd"
+}
+
+ensure_process_mode_accounts() {
+  if ! getent group "${SERVICE_GROUP}" >/dev/null 2>&1; then
+    groupadd --system "${SERVICE_GROUP}"
+    log "created service group ${SERVICE_GROUP}"
+  fi
+
+  if ! id -u "${AGENT_USER}" >/dev/null 2>&1; then
+    useradd --system \
+      --no-create-home \
+      --home-dir /nonexistent \
+      --shell /usr/sbin/nologin \
+      --gid "${SERVICE_GROUP}" \
+      "${AGENT_USER}"
+    log "created agent user ${AGENT_USER}"
+  fi
+
+  if ! id -u "${PUBLISHER_USER}" >/dev/null 2>&1; then
+    useradd --system \
+      --no-create-home \
+      --home-dir /nonexistent \
+      --shell /usr/sbin/nologin \
+      --gid "${SERVICE_GROUP}" \
+      "${PUBLISHER_USER}"
+    log "created publisher user ${PUBLISHER_USER}"
+  fi
 }
 
 export_env_vars_for_shells() {
@@ -223,9 +253,10 @@ main() {
   ensure_ssh_host_keys
   export_env_vars_for_shells
   start_sshd
+  ensure_process_mode_accounts
 
-  write_secret_file_from_env "COMPUTER_MCP_READER_PRIVATE_KEY" "${READER_KEY_PATH}" "root:computer-mcp"
-  write_secret_file_from_env "COMPUTER_MCP_PUBLISHER_PRIVATE_KEY" "${PUBLISHER_KEY_PATH}" "computer-mcp-publisher:computer-mcp"
+  write_secret_file_from_env "COMPUTER_MCP_READER_PRIVATE_KEY" "${READER_KEY_PATH}" "root:${SERVICE_GROUP}"
+  write_secret_file_from_env "COMPUTER_MCP_PUBLISHER_PRIVATE_KEY" "${PUBLISHER_KEY_PATH}" "${PUBLISHER_USER}:${SERVICE_GROUP}"
 
   bootstrap_computer_mcp_config
   start_computer_mcp_if_ready
