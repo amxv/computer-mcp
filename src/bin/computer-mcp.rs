@@ -323,6 +323,9 @@ fn print_stack_ready_summary(config: &Config) {
         redact_api_key_query_params(&format!("https://{host_hint}/mcp?key={}", config.api_key));
     println!("stack-ready: {SERVICE_NAME} + {PUBLISHER_SERVICE_LABEL}");
     println!("url-hint: {url_hint}");
+    if let Some(port) = config.http_bind_port {
+        println!("http-proxy-listen: {}:{port}", config.bind_host);
+    }
 }
 
 fn install(config_path: &Path) -> Result<()> {
@@ -561,6 +564,17 @@ fn ensure_config_exists(config_path: &Path) -> Result<()> {
 fn ensure_stack_config_ready(config: &Config) -> Result<()> {
     ensure_reader_ready_for_start(config)?;
     ensure_publisher_ready_for_start(config)?;
+    ensure_http_listener_ready_for_start(config)?;
+    Ok(())
+}
+
+fn ensure_http_listener_ready_for_start(config: &Config) -> Result<()> {
+    if let Some(port) = config.http_bind_port {
+        if port == config.bind_port {
+            bail!("http_bind_port must differ from bind_port");
+        }
+    }
+
     Ok(())
 }
 
@@ -1243,6 +1257,9 @@ fn build_process_status_lines(
     if !matches!(state, ProcessModeState::Running(_)) {
         lines.push("hint: run `computer-mcp start`".to_string());
     }
+    if let Some(port) = config.http_bind_port {
+        lines.push(format!("http-proxy-listen: {}:{port}", config.bind_host));
+    }
     if !tls_artifacts_exist(config) {
         lines
             .push("note: `computer-mcp start` will create TLS artifacts automatically".to_string());
@@ -1502,6 +1519,9 @@ fn build_status_summary_lines(
     if active != "active" {
         lines.push("hint: run `computer-mcp start`".to_string());
     }
+    if let Some(port) = config.http_bind_port {
+        lines.push(format!("http-proxy-listen: {}:{port}", config.bind_host));
+    }
     if unit_file_state != "enabled" {
         lines.push("hint: run `computer-mcp install`".to_string());
     }
@@ -1743,10 +1763,11 @@ mod tests {
         DEFAULT_LOG_LINES, ProcessModeState, SERVICE_NAME, ServiceManager, SystemctlAction,
         build_certbot_args, build_journalctl_args, build_process_status_lines,
         build_publisher_status_lines, build_reader_status_lines, build_status_summary_lines,
-        build_systemctl_args, certbot_cert_name, generate_self_signed_certificate,
-        parse_systemctl_show, process_log_path, process_pid_path, read_tail_lines,
-        render_systemd_unit, select_tls_san_ip, service_manager_from_pid1, state_root_for_config,
-        status_host_hint, tls_artifacts_exist, write_if_changed,
+        build_systemctl_args, certbot_cert_name, ensure_http_listener_ready_for_start,
+        generate_self_signed_certificate, parse_systemctl_show, process_log_path,
+        process_pid_path, read_tail_lines, render_systemd_unit, select_tls_san_ip,
+        service_manager_from_pid1, state_root_for_config, status_host_hint,
+        tls_artifacts_exist, write_if_changed,
     };
     use computer_mcp::config::Config;
     use std::fs;
@@ -1943,6 +1964,7 @@ mod tests {
         let mut config = Config::default();
         config.bind_host = "0.0.0.0".to_string();
         config.bind_port = 8443;
+        config.http_bind_port = Some(8080);
         config.api_key = "abc123".to_string();
         config.tls_mode = "self_signed".to_string();
         config.tls_cert_path = "/var/lib/computer-mcp/tls/cert.pem".to_string();
@@ -1960,6 +1982,7 @@ mod tests {
         assert!(joined.contains("tls-key: /var/lib/computer-mcp/tls/key.pem"));
         assert!(joined.contains("url-hint: https://198.51.100.88/mcp?key=<redacted>"));
         assert!(joined.contains("health-hint: https://198.51.100.88/health"));
+        assert!(joined.contains("http-proxy-listen: 0.0.0.0:8080"));
     }
 
     #[test]
@@ -1967,6 +1990,7 @@ mod tests {
         let mut config = Config::default();
         config.bind_host = "0.0.0.0".to_string();
         config.bind_port = 9443;
+        config.http_bind_port = Some(8080);
         config.api_key = "abc123".to_string();
         config.tls_mode = "self_signed".to_string();
         config.tls_cert_path = "/var/lib/computer-mcp/tls/cert.pem".to_string();
@@ -1984,6 +2008,7 @@ mod tests {
         assert!(joined.contains("exec-main-status: running pid 4242"));
         assert!(joined.contains("url-hint: https://198.51.100.88/mcp?key=<redacted>"));
         assert!(joined.contains("health-hint: https://198.51.100.88/health"));
+        assert!(joined.contains("http-proxy-listen: 0.0.0.0:8080"));
     }
 
     #[test]
@@ -2011,6 +2036,19 @@ mod tests {
         );
         assert!(joined.contains("allowed-repos: 0"));
         assert!(joined.contains("hint: set `publisher_app_id` in config"));
+    }
+
+    #[test]
+    fn ensure_http_listener_ready_rejects_same_port_as_https() {
+        let mut config = Config::default();
+        config.bind_port = 443;
+        config.http_bind_port = Some(443);
+
+        let err = ensure_http_listener_ready_for_start(&config).expect_err("should fail");
+        assert!(
+            err.to_string()
+                .contains("http_bind_port must differ from bind_port")
+        );
     }
 
     #[test]

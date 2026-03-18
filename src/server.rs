@@ -101,6 +101,9 @@ impl ServerHandler for ComputerMcpService {
 
 pub async fn run_server(config: Config) -> Result<()> {
     let bind = format!("{}:{}", config.bind_host, config.bind_port);
+    let http_bind = config
+        .http_bind_port
+        .map(|port| format!("{}:{port}", config.bind_host));
     let cert_path = Path::new(&config.tls_cert_path);
     let key_path = Path::new(&config.tls_key_path);
     if !cert_path.exists() || !key_path.exists() {
@@ -122,6 +125,14 @@ pub async fn run_server(config: Config) -> Result<()> {
     let addr: std::net::SocketAddr = bind
         .parse()
         .with_context(|| format!("invalid bind address {bind}"))?;
+    let http_addr: Option<std::net::SocketAddr> = http_bind
+        .as_deref()
+        .map(|value| {
+            value
+                .parse()
+                .with_context(|| format!("invalid HTTP bind address {value}"))
+        })
+        .transpose()?;
 
     let shared_state = SharedState {
         sessions: Arc::new(Mutex::new(SessionManager::new(
@@ -159,6 +170,7 @@ pub async fn run_server(config: Config) -> Result<()> {
 
     let handle = Handle::new();
     let shutdown_handle = handle.clone();
+    let http_shutdown = cancellation.child_token();
     tokio::spawn(async move {
         let _ = tokio::signal::ctrl_c().await;
         cancellation.cancel();
@@ -166,11 +178,35 @@ pub async fn run_server(config: Config) -> Result<()> {
     });
 
     info!("computer-mcpd listening on https://{bind}");
-    axum_server::bind_rustls(addr, rustls)
-        .handle(handle)
-        .serve(app.into_make_service())
-        .await
-        .context("axum TLS server terminated unexpectedly")
+    let tls_app = app.clone();
+    let tls_server = async move {
+        axum_server::bind_rustls(addr, rustls)
+            .handle(handle)
+            .serve(tls_app.into_make_service())
+            .await
+            .context("axum TLS server terminated unexpectedly")
+    };
+
+    if let Some(http_addr) = http_addr {
+        info!("computer-mcpd also listening on http://{http_addr}");
+        let listener = tokio::net::TcpListener::bind(http_addr)
+            .await
+            .with_context(|| format!("failed to bind HTTP listener on {http_addr}"))?;
+
+        let http_server = async move {
+            axum::serve(listener, app.into_make_service())
+                .with_graceful_shutdown(async move {
+                    http_shutdown.cancelled().await;
+                })
+                .await
+                .context("axum HTTP server terminated unexpectedly")
+        };
+
+        let (_tls, _http) = tokio::try_join!(tls_server, http_server)?;
+        Ok(())
+    } else {
+        tls_server.await
+    }
 }
 
 async fn health() -> Json<Value> {

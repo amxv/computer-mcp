@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_VERSION="0.1.2"
+SCRIPT_VERSION="0.1.3"
 
 COMPUTER_MCP_VERSION="${COMPUTER_MCP_VERSION:-latest}"
 COMPUTER_MCP_REPO="${COMPUTER_MCP_REPO:-amxv/computer-mcp}"
@@ -123,6 +123,15 @@ detect_platform() {
   fi
 
   log "detected distro=${DISTRO_ID} arch=${ARCH} target=${TARGET_TRIPLE}"
+}
+
+is_runpod() {
+  [[ -n "${RUNPOD_POD_ID:-}" || -n "${RUNPOD_PUBLIC_IP:-}" ]]
+}
+
+runpod_proxy_host() {
+  local pod_id="${RUNPOD_POD_ID:-<pod-id>}"
+  printf '%s-8080.proxy.runpod.net\n' "${pod_id}"
 }
 
 install_runtime_prerequisites() {
@@ -281,15 +290,21 @@ ensure_dirs_and_config() {
 
   if [[ ! -f "${COMPUTER_MCP_CONFIG_PATH}" ]]; then
     local api_key
+    local runpod_http_port_line=""
     if command_exists openssl; then
       api_key="$(openssl rand -hex 24)"
     else
       api_key="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 48)"
     fi
 
+    if is_runpod; then
+      runpod_http_port_line='http_bind_port = 8080'
+    fi
+
     umask 077
     cat >"${COMPUTER_MCP_CONFIG_PATH}" <<EOF
 api_key = "${api_key}"
+${runpod_http_port_line}
 
 # Most installs can keep the built-in defaults.
 # Add only the settings you actually need to override.
@@ -330,6 +345,39 @@ detect_public_ip() {
 print_next_steps() {
   local ip
   ip="$(detect_public_ip)"
+
+  if is_runpod; then
+    local proxy_host
+    proxy_host="$(runpod_proxy_host)"
+    cat <<EOF
+
+Install complete.
+
+Config file:
+  ${COMPUTER_MCP_CONFIG_PATH}
+
+The commands below assume the default config path. If you changed it, add:
+  --config "${COMPUTER_MCP_CONFIG_PATH}"
+
+Next steps:
+  1. in Runpod, expose HTTP port 8080
+  2. review "${COMPUTER_MCP_CONFIG_PATH}" and add reader_app_id / reader_installation_id / publisher_app_id / publisher_targets
+  3. place the reader GitHub App key at "${COMPUTER_MCP_READER_KEY_DIR}/private-key.pem"
+  4. place the publisher GitHub App key at "${COMPUTER_MCP_PUBLISHER_KEY_DIR}/private-key.pem" with owner ${COMPUTER_MCP_PUBLISHER_USER}
+  5. computer-mcp start
+  6. computer-mcp show-url --host "${proxy_host}"
+
+Verify:
+  - computer-mcp status
+  - curl "https://${proxy_host}/health"
+  - MCP URL shape: https://${proxy_host}/mcp?key=<redacted>
+
+Optional:
+  - rotate the installer-generated API key with: computer-mcp set-key "<strong-random-key>"
+EOF
+    return
+  fi
+
   cat <<EOF
 
 Install complete.

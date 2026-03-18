@@ -15,6 +15,7 @@ const MIN_EXEC_TIMEOUT_MS: u64 = 1_000;
 pub struct Config {
     pub bind_host: String,
     pub bind_port: u16,
+    pub http_bind_port: Option<u16>,
     pub api_key: String,
     pub tls_mode: String,
     pub tls_cert_path: String,
@@ -66,6 +67,7 @@ impl Default for Config {
         Self {
             bind_host: "0.0.0.0".to_string(),
             bind_port: 443,
+            http_bind_port: None,
             api_key: "change-me".to_string(),
             tls_mode: "auto".to_string(),
             tls_cert_path: "/var/lib/computer-mcp/tls/cert.pem".to_string(),
@@ -159,6 +161,7 @@ mod tests {
     fn config_defaults_include_publisher_settings() {
         let cfg = Config::default();
 
+        assert_eq!(cfg.http_bind_port, None);
         assert_eq!(cfg.reader_app_id, None);
         assert_eq!(cfg.reader_installation_id, None);
         assert!(
@@ -181,6 +184,7 @@ mod tests {
             r#"
 bind_host = "0.0.0.0"
 bind_port = 443
+http_bind_port = 8080
 api_key = "test"
 tls_mode = "auto"
 tls_cert_path = "/tmp/cert.pem"
@@ -197,6 +201,7 @@ max_output_chars = 200000
 
         assert_eq!(parsed.reader_app_id, None);
         assert_eq!(parsed.reader_installation_id, None);
+        assert_eq!(parsed.http_bind_port, Some(8080));
         assert_eq!(
             parsed.reader_private_key_path,
             "/etc/computer-mcp/reader/private-key.pem"
