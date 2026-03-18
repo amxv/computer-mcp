@@ -17,6 +17,11 @@ pub struct WriteStdinInput {
     pub kill_process: Option<bool>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub struct ApplyPatchInput {
+    pub patch: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ToolOutput {
     pub output: String,

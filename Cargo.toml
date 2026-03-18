@@ -15,6 +15,7 @@ path = "src/bin/computer-mcpd.rs"
 anyhow = "1.0"
 axum = { version = "0.8", features = ["macros"] }
 clap = { version = "4.5", features = ["derive"] }
+codex-apply-patch = { git = "https://github.com/openai/codex.git", rev = "a265d6043edc8b41e42ae508291f4cfb9ed46805" }
 nix = { version = "0.30", features = ["signal", "process", "term"] }
 rand = "0.10"
 rmcp = { version = "1", features = [
@@ -34,3 +35,4 @@ tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 
 [dev-dependencies]
 pretty_assertions = "1.4"
+tempfile = "3.14"

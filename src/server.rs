@@ -19,8 +19,9 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
+use crate::apply_patch;
 use crate::config::Config;
-use crate::protocol::{ExecCommandInput, ToolOutput, WriteStdinInput};
+use crate::protocol::{ApplyPatchInput, ExecCommandInput, ToolOutput, WriteStdinInput};
 use crate::session::SessionManager;
 
 #[derive(Clone)]
@@ -73,6 +74,17 @@ impl ComputerMcpService {
             .await
             .map(McpJson)
             .map_err(|e| e.to_string())
+    }
+
+    #[tool(
+        name = "apply_patch",
+        description = "Apply a Codex-style patch to files"
+    )]
+    async fn apply_patch(
+        &self,
+        Parameters(input): Parameters<ApplyPatchInput>,
+    ) -> Result<String, String> {
+        apply_patch::apply_patch(&input.patch).map_err(|e| e.to_string())
     }
 }
 
@@ -163,4 +175,33 @@ fn key_from_query(query: Option<&str>) -> Option<String> {
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ComputerMcpService, SharedState};
+    use crate::config::Config;
+    use crate::session::SessionManager;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    #[test]
+    fn registers_apply_patch_tool() {
+        let state = SharedState {
+            config: Arc::new(Config::default()),
+            sessions: Arc::new(Mutex::new(SessionManager::new(64, 200_000))),
+        };
+
+        let service = ComputerMcpService::new(state);
+        let names: Vec<String> = service
+            .tool_router
+            .list_all()
+            .iter()
+            .map(|tool| tool.name.to_string())
+            .collect();
+
+        assert!(names.iter().any(|name| name == "exec_command"));
+        assert!(names.iter().any(|name| name == "write_stdin"));
+        assert!(names.iter().any(|name| name == "apply_patch"));
+    }
 }
