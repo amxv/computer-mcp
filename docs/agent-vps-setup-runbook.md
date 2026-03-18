@@ -58,7 +58,7 @@ I need you to create two private GitHub Apps and install both of them on only th
 
 App 1: computer-mcp-reader
 - Create it from this pre-filled URL:
-  https://github.com/settings/apps/new?name=amxv-computer-mcp-reader&description=Read-only%20private%20repo%20access%20for%20computer-mcp%20agent&url=https%3A%2F%2Fgithub.com%2Famxv%2Fcomputer-mcp&public=false&request_oauth_on_install=false&webhook_active=false&contents=read
+  https://github.com/settings/apps/new?name=computer-mcp-reader&description=Read-only%20private%20repo%20access%20for%20computer-mcp%20agent&url=https%3A%2F%2Fgithub.com%2Famxv%2Fcomputer-mcp&public=false&request_oauth_on_install=false&webhook_active=false&contents=read
 - Purpose: read-only private repo access for the coding agent
 - Homepage URL: use your repo URL or GitHub profile URL
 - After the form opens, uncheck Webhook Active before creating the app
@@ -69,11 +69,13 @@ App 1: computer-mcp-reader
   - Contents: Read-only
   - Everything else: No access
 - Where can this GitHub App be installed?: Only on this account
-- During install: choose Only select repositories and select only the repos this agent should be able to read
+- After creating it, open:
+  https://github.com/settings/apps/computer-mcp-reader/installations
+- Install it on your account, choose Only select repositories, and select only the repos this agent should be able to read
 
 App 2: computer-mcp-publisher
 - Create it from this pre-filled URL:
-  https://github.com/settings/apps/new?name=amxv-computer-mcp-publisher&description=Branch%20push%20and%20PR%20creation%20for%20computer-mcp&url=https%3A%2F%2Fgithub.com%2Famxv%2Fcomputer-mcp&public=false&request_oauth_on_install=false&webhook_active=false&contents=write&pull_requests=write
+  https://github.com/settings/apps/new?name=computer-mcp-publisher&description=Branch%20push%20and%20PR%20creation%20for%20computer-mcp&url=https%3A%2F%2Fgithub.com%2Famxv%2Fcomputer-mcp&public=false&request_oauth_on_install=false&webhook_active=false&contents=write&pull_requests=write
 - Purpose: create a branch and open a PR
 - Homepage URL: use your repo URL or GitHub profile URL
 - After the form opens, uncheck Webhook Active before creating the app
@@ -85,7 +87,9 @@ App 2: computer-mcp-publisher
   - Pull requests: Read & write
   - Everything else: No access
 - Where can this GitHub App be installed?: Only on this account
-- During install: choose Only select repositories and select only the repos this agent should be able to publish PRs to
+- After creating it, open:
+  https://github.com/settings/apps/computer-mcp-publisher/installations
+- Install it on your account, choose Only select repositories, and select only the repos this agent should be able to publish PRs to
 
 When both apps are created and installed, send me:
 - the Reader App ID
@@ -101,6 +105,7 @@ Notes for the agent:
 - These links are for personal-account apps. For an organization-owned app, use the same query string on `https://github.com/organizations/ORG/settings/apps/new`.
 - GitHub App names must be globally unique. If GitHub says the name is unavailable, change only the `name=` value and leave the rest unchanged.
 - The webhook checkbox must be turned off manually for both apps before the human submits the form.
+- If the human had to change the app name, also change the install URL slug under `https://github.com/settings/apps/<app-slug>/installations`.
 
 ## Step 2: Collect The Human's Reply
 
@@ -148,44 +153,45 @@ vps_scp() {
 
 Use the app ID and PEM file to query the exact installation for `TARGET_REPO`.
 
-Run this function locally:
+Create a temporary helper script locally:
 
 ```bash
-get_repo_installation_id() {
-  local app_id="$1"
-  local key_path="$2"
-  local repo="$3"
+cat > tmp/get-installation-id.sh <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+app_id="$1"
+key_path="$2"
+repo="$3"
 
-  b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
+b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
+now=$(date +%s)
+iat=$((now - 60))
+exp=$((now + 540))
+header='{"alg":"RS256","typ":"JWT"}'
+payload=$(printf '{"iat":%s,"exp":%s,"iss":"%s"}' "$iat" "$exp" "$app_id")
+unsigned="$(printf '%s' "$header" | b64url).$(printf '%s' "$payload" | b64url)"
+sig=$(printf '%s' "$unsigned" | openssl dgst -binary -sha256 -sign "$key_path" | b64url)
+jwt="$unsigned.$sig"
 
-  local now iat exp header payload unsigned sig jwt
-  now="$(date +%s)"
-  iat="$((now - 60))"
-  exp="$((now + 540))"
-  header='{"alg":"RS256","typ":"JWT"}'
-  payload="{\"iat\":${iat},\"exp\":${exp},\"iss\":\"${app_id}\"}"
-  unsigned="$(printf '%s' "$header" | b64url).$(printf '%s' "$payload" | b64url)"
-  sig="$(printf '%s' "$unsigned" | openssl dgst -binary -sha256 -sign "$key_path" | b64url)"
-  jwt="${unsigned}.${sig}"
-
-  curl -fsSL \
-    -H "Accept: application/vnd.github+json" \
-    -H "Authorization: Bearer ${jwt}" \
-    -H "X-GitHub-Api-Version: 2022-11-28" \
-    "https://api.github.com/repos/${repo}/installation" | jq -r '.id'
-}
+curl -fsSL \
+  -H "Accept: application/vnd.github+json" \
+  -H "Authorization: Bearer ${jwt}" \
+  -H "X-GitHub-Api-Version: 2022-11-28" \
+  "https://api.github.com/repos/${repo}/installation" | jq -r '.id'
+EOF
+chmod +x tmp/get-installation-id.sh
 ```
 
 Find the reader installation ID:
 
 ```bash
-export READER_INSTALLATION_ID="$(get_repo_installation_id "$READER_APP_ID" "$READER_PEM" "$TARGET_REPO")"
+export READER_INSTALLATION_ID="$(bash tmp/get-installation-id.sh "$READER_APP_ID" "$READER_PEM" "$TARGET_REPO")"
 ```
 
 Find the publisher installation ID:
 
 ```bash
-export PUBLISHER_INSTALLATION_ID="$(get_repo_installation_id "$PUBLISHER_APP_ID" "$PUBLISHER_PEM" "$TARGET_REPO")"
+export PUBLISHER_INSTALLATION_ID="$(bash tmp/get-installation-id.sh "$PUBLISHER_APP_ID" "$PUBLISHER_PEM" "$TARGET_REPO")"
 ```
 
 Then verify that both are non-empty:
@@ -196,6 +202,12 @@ test -n "$PUBLISHER_INSTALLATION_ID"
 ```
 
 If either variable is empty, stop and inspect the app installation in GitHub before continuing.
+
+Remove the temporary helper script after you have both IDs:
+
+```bash
+rm -f tmp/get-installation-id.sh
+```
 
 ## Step 5: Validate The App Permissions Before Touching The VPS
 
