@@ -31,6 +31,9 @@ If you have a public installer URL:
 curl -fsSL https://raw.githubusercontent.com/amxv/computer-mcp/main/scripts/install.sh | sudo bash
 ```
 
+The installer downloads prebuilt Linux release artifacts when they are available.
+It falls back to a source build only if no matching release asset exists.
+
 If this repository is private or the raw installer URL is not accessible, use the local-source install in [docs/deployment-notes.md](docs/deployment-notes.md).
 
 ## 2. Edit Only What You Need
