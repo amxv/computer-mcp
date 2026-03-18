@@ -7,7 +7,9 @@ This image is designed for `computer-mcp` development and VPS-style operation:
 - `computer-mcp`, `computer-mcpd`, and `computer-mcp-prd` are preinstalled
 - Node.js, Python, Go, and Rust are preinstalled
 - Git, Git LFS, GitHub CLI, SSH, and common Unix CLI tools are preinstalled
+- the container injects Runpod SSH keys from `PUBLIC_KEY` / `SSH_PUBLIC_KEY`
 - the container starts `sshd` automatically so a Runpod Pod can expose TCP `22`
+- the container can auto-configure and auto-start `computer-mcp` from environment variables
 
 ## Image Release Pipeline
 
@@ -57,6 +59,21 @@ Template basics:
 - **Visibility:** private for your account/team, or public if you want to share the template
 - **Container start command:** leave blank to use the image entrypoint
 
+Recommended environment variables for full automatic startup:
+
+- `COMPUTER_MCP_AUTO_START=1`
+- `COMPUTER_MCP_HTTP_BIND_PORT=8080`
+- `COMPUTER_MCP_PUBLIC_HOST=<pod-id>-8080.proxy.runpod.net`
+- `COMPUTER_MCP_API_KEY=<strong-random-key>`
+- `COMPUTER_MCP_READER_APP_ID=<reader_app_id>`
+- `COMPUTER_MCP_READER_INSTALLATION_ID=<reader_installation_id>`
+- `COMPUTER_MCP_READER_PRIVATE_KEY={{ RUNPOD_SECRET_reader_private_key }}`
+- `COMPUTER_MCP_PUBLISHER_APP_ID=<publisher_app_id>`
+- `COMPUTER_MCP_PUBLISHER_INSTALLATION_ID=<publisher_installation_id>`
+- `COMPUTER_MCP_PUBLISHER_TARGET_REPO=amxv/computer-mcp`
+- `COMPUTER_MCP_PUBLISHER_DEFAULT_BASE=main`
+- `COMPUTER_MCP_PUBLISHER_PRIVATE_KEY={{ RUNPOD_SECRET_publisher_private_key }}`
+
 Storage:
 
 - **Container disk:** `40 GB`
@@ -93,7 +110,20 @@ Example REST payload shape, adapted to this image:
   "containerDiskInGb": 40,
   "dockerEntrypoint": [],
   "dockerStartCmd": [],
-  "env": {},
+  "env": {
+    "COMPUTER_MCP_AUTO_START": "1",
+    "COMPUTER_MCP_HTTP_BIND_PORT": "8080",
+    "COMPUTER_MCP_PUBLIC_HOST": "<pod-id>-8080.proxy.runpod.net",
+    "COMPUTER_MCP_API_KEY": "<strong-random-key>",
+    "COMPUTER_MCP_READER_APP_ID": "<reader_app_id>",
+    "COMPUTER_MCP_READER_INSTALLATION_ID": "<reader_installation_id>",
+    "COMPUTER_MCP_READER_PRIVATE_KEY": "{{ RUNPOD_SECRET_reader_private_key }}",
+    "COMPUTER_MCP_PUBLISHER_APP_ID": "<publisher_app_id>",
+    "COMPUTER_MCP_PUBLISHER_INSTALLATION_ID": "<publisher_installation_id>",
+    "COMPUTER_MCP_PUBLISHER_TARGET_REPO": "amxv/computer-mcp",
+    "COMPUTER_MCP_PUBLISHER_DEFAULT_BASE": "main",
+    "COMPUTER_MCP_PUBLISHER_PRIVATE_KEY": "{{ RUNPOD_SECRET_publisher_private_key }}"
+  },
   "imageName": "ghcr.io/amxv/computer-mcp:latest",
   "isPublic": false,
   "isServerless": false,
@@ -110,19 +140,21 @@ Example REST payload shape, adapted to this image:
 
 ## After Pod Launch
 
-Once the Pod is up:
+Once the Pod is up, the intended path is:
 
-1. connect over direct SSH
-2. run `computer-mcp install` if the config and service directories are not initialized yet
-3. write `/etc/computer-mcp/config.toml`
-4. place the reader and publisher PEM files
-5. run `computer-mcp start`
+1. Runpod injects your SSH public key
+2. the image starts `sshd`
+3. the image writes the two GitHub App private keys from Runpod secrets
+4. the image writes `/etc/computer-mcp/config.toml` from env vars
+5. the image runs `computer-mcp start`
+
+If you omit the `COMPUTER_MCP_*` environment variables, the image still comes up for SSH access, but `computer-mcp` will not auto-start.
 
 If you just want to refresh binaries on an existing Pod that uses this image:
 
 ```bash
 computer-mcp --version
-computer-mcp upgrade --version v0.1.8
+computer-mcp upgrade --version v0.1.9
 ```
 
 ## Source Notes
