@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_VERSION="0.1.3"
+SCRIPT_VERSION="0.1.4"
 
 COMPUTER_MCP_VERSION="${COMPUTER_MCP_VERSION:-latest}"
 COMPUTER_MCP_REPO="${COMPUTER_MCP_REPO:-amxv/computer-mcp}"
@@ -210,9 +210,9 @@ resolve_release_asset_url() {
   asset_url="$(printf '%s' "${metadata}" \
     | tr '\n' ' ' \
     | sed 's/},{/},\n{/g' \
-    | grep -Eo "\"browser_download_url\":\"[^\"]*${TARGET_TRIPLE}[^\"]*\\.tar\\.gz\"" \
+    | grep -Eo "\"browser_download_url\"[[:space:]]*:[[:space:]]*\"[^\"]*${TARGET_TRIPLE}[^\"]*\\.tar\\.gz\"" \
     | head -n1 \
-    | sed -E 's/"browser_download_url":"([^"]+)"/\1/' \
+    | sed -E 's/"browser_download_url"[[:space:]]*:[[:space:]]*"([^"]+)"/\1/' \
   )"
 
   [[ -n "${asset_url}" ]] || return 1
