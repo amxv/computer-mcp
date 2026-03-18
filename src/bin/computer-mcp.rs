@@ -128,52 +128,21 @@ async fn main() -> Result<()> {
         }
         Commands::Start => {
             ensure_linux()?;
-            let config = Config::load(Some(Path::new(&config_path)))?;
-            ensure_tls_ready_for_start(&config, &config_path)?;
-            match detect_service_manager() {
-                ServiceManager::Systemd => {
-                    run_systemctl(&build_systemctl_args(SystemctlAction::Start))?;
-                    println!("started {SERVICE_NAME}");
-                }
-                ServiceManager::Process => start_process_mode(&config, &config_path)?,
-            }
+            start_stack(&config_path)?;
         }
         Commands::Stop => {
             ensure_linux()?;
             let config = Config::load(Some(Path::new(&config_path)))?;
-            match detect_service_manager() {
-                ServiceManager::Systemd => {
-                    run_systemctl(&build_systemctl_args(SystemctlAction::Stop))?;
-                    println!("stopped {SERVICE_NAME}");
-                }
-                ServiceManager::Process => stop_process_mode(&config)?,
-            }
+            stop_stack(&config)?;
         }
         Commands::Restart => {
             ensure_linux()?;
-            let config = Config::load(Some(Path::new(&config_path)))?;
-            ensure_tls_ready_for_start(&config, &config_path)?;
-            match detect_service_manager() {
-                ServiceManager::Systemd => {
-                    run_systemctl(&build_systemctl_args(SystemctlAction::Restart))?;
-                    println!("restarted {SERVICE_NAME}");
-                }
-                ServiceManager::Process => {
-                    stop_process_mode(&config)?;
-                    start_process_mode(&config, &config_path)?;
-                }
-            }
+            restart_stack(&config_path)?;
         }
         Commands::Status => {
             ensure_linux()?;
             let config = Config::load(Some(Path::new(&config_path)))?;
-            match detect_service_manager() {
-                ServiceManager::Systemd => {
-                    let raw = run_systemctl(&build_systemctl_args(SystemctlAction::ShowStatus))?;
-                    print_status_summary(&raw, &config);
-                }
-                ServiceManager::Process => print_process_status_summary(&config),
-            }
+            print_stack_status_summary(&config)?;
         }
         Commands::Logs => {
             ensure_linux()?;
@@ -285,6 +254,74 @@ fn resolve_pr_body(body: Option<String>, body_file: Option<&str>) -> Result<Stri
     }
 }
 
+fn start_stack(config_path: &Path) -> Result<()> {
+    let mut config = Config::load(Some(config_path))?;
+    ensure_stack_config_ready(&config)?;
+
+    if !tls_artifacts_exist(&config) {
+        println!("TLS artifacts missing; creating them automatically");
+        config = provision_tls_artifacts(config_path, false)?;
+    }
+
+    start_publisher_process_mode(&config, config_path)?;
+    start_main_service(&config, config_path)?;
+    print_stack_ready_summary(&config);
+    Ok(())
+}
+
+fn stop_stack(config: &Config) -> Result<()> {
+    stop_main_service(config)?;
+    stop_publisher_process_mode(config)?;
+    Ok(())
+}
+
+fn restart_stack(config_path: &Path) -> Result<()> {
+    let mut config = Config::load(Some(config_path))?;
+    ensure_stack_config_ready(&config)?;
+
+    if !tls_artifacts_exist(&config) {
+        println!("TLS artifacts missing; creating them automatically");
+        config = provision_tls_artifacts(config_path, false)?;
+    }
+
+    stop_main_service(&config)?;
+    stop_publisher_process_mode(&config)?;
+    start_publisher_process_mode(&config, config_path)?;
+    start_main_service(&config, config_path)?;
+    print_stack_ready_summary(&config);
+    Ok(())
+}
+
+fn start_main_service(config: &Config, config_path: &Path) -> Result<()> {
+    match detect_service_manager() {
+        ServiceManager::Systemd => {
+            run_systemctl(&build_systemctl_args(SystemctlAction::Start))?;
+            println!("started {SERVICE_NAME}");
+            Ok(())
+        }
+        ServiceManager::Process => start_process_mode(config, config_path),
+    }
+}
+
+fn stop_main_service(config: &Config) -> Result<()> {
+    match detect_service_manager() {
+        ServiceManager::Systemd => {
+            run_systemctl(&build_systemctl_args(SystemctlAction::Stop))?;
+            println!("stopped {SERVICE_NAME}");
+            Ok(())
+        }
+        ServiceManager::Process => stop_process_mode(config),
+    }
+}
+
+fn print_stack_ready_summary(config: &Config) {
+    let host_hint = status_host_hint(&config.bind_host, detect_public_ip());
+    let url_hint =
+        redact_api_key_query_params(&format!("https://{host_hint}/mcp?key={}", config.api_key));
+    println!("stack-ready: {SERVICE_NAME} + {PUBLISHER_SERVICE_LABEL}");
+    println!("url-hint: {url_hint}");
+}
+
 fn install(config_path: &Path) -> Result<()> {
     ensure_linux()?;
     create_required_dirs(config_path)?;
@@ -329,6 +366,11 @@ fn install(config_path: &Path) -> Result<()> {
 }
 
 fn tls_setup(config_path: &Path) -> Result<()> {
+    provision_tls_artifacts(config_path, true)?;
+    Ok(())
+}
+
+fn provision_tls_artifacts(config_path: &Path, restart_after: bool) -> Result<Config> {
     ensure_linux()?;
     let mut config = Config::load(Some(config_path))?;
     ensure_tls_dirs_for_config(&config)?;
@@ -357,8 +399,10 @@ fn tls_setup(config_path: &Path) -> Result<()> {
     config.save(config_path)?;
     ensure_shared_group_permissions(&config, config_path)?;
     println!("updated TLS settings in {}", config_path.display());
-    restart_service_after_tls_setup(&config, config_path);
-    Ok(())
+    if restart_after {
+        restart_service_after_tls_setup(&config, config_path);
+    }
+    Ok(config)
 }
 
 fn ensure_linux() -> Result<()> {
@@ -508,6 +552,73 @@ fn ensure_config_exists(config_path: &Path) -> Result<()> {
     config.save(config_path)?;
     ensure_shared_group_permissions(&config, config_path)?;
     println!("created default config at {}", config_path.display());
+    Ok(())
+}
+
+fn ensure_stack_config_ready(config: &Config) -> Result<()> {
+    ensure_reader_ready_for_start(config)?;
+    ensure_publisher_ready_for_start(config)?;
+    Ok(())
+}
+
+fn ensure_reader_ready_for_start(config: &Config) -> Result<()> {
+    let Some(app_id) = config.reader_app_id else {
+        bail!("reader_app_id must be configured before start");
+    };
+    if app_id == 0 {
+        bail!("reader_app_id must be non-zero");
+    }
+
+    let Some(installation_id) = config.reader_installation_id else {
+        bail!("reader_installation_id must be configured before start");
+    };
+    if installation_id == 0 {
+        bail!("reader_installation_id must be non-zero");
+    }
+
+    if config.reader_private_key_path.trim().is_empty() {
+        bail!("reader_private_key_path must be configured");
+    }
+    if !Path::new(&config.reader_private_key_path).exists() {
+        bail!(
+            "reader private key file not found: {}",
+            config.reader_private_key_path
+        );
+    }
+
+    Ok(())
+}
+
+fn ensure_publisher_ready_for_start(config: &Config) -> Result<()> {
+    let Some(app_id) = config.publisher_app_id else {
+        bail!("publisher_app_id must be configured before start");
+    };
+    if app_id == 0 {
+        bail!("publisher_app_id must be non-zero");
+    }
+
+    if config.publisher_private_key_path.trim().is_empty() {
+        bail!("publisher_private_key_path must be configured");
+    }
+    if !Path::new(&config.publisher_private_key_path).exists() {
+        bail!(
+            "publisher private key file not found: {}",
+            config.publisher_private_key_path
+        );
+    }
+    if config.publisher_targets.is_empty() {
+        bail!("publisher_targets must contain at least one allowed repo target");
+    }
+
+    for target in &config.publisher_targets {
+        if target.id.trim().is_empty() || target.repo.trim().is_empty() {
+            bail!("publisher target entries require both id and repo");
+        }
+        if target.installation_id == 0 {
+            bail!("publisher target {} must define installation_id", target.id);
+        }
+    }
+
     Ok(())
 }
 
@@ -992,6 +1103,37 @@ fn process_mode_state(config: &Config) -> Result<ProcessModeState> {
     }
 }
 
+fn print_stack_status_summary(config: &Config) -> Result<()> {
+    let main_lines = build_main_status_lines(config)?;
+    for line in main_lines {
+        println!("{line}");
+    }
+
+    println!();
+    for line in build_publisher_status_lines(config, publisher_process_mode_state(config))? {
+        println!("{line}");
+    }
+
+    println!();
+    for line in build_reader_status_lines(config) {
+        println!("{line}");
+    }
+
+    Ok(())
+}
+
+fn build_main_status_lines(config: &Config) -> Result<Vec<String>> {
+    match detect_service_manager() {
+        ServiceManager::Systemd => {
+            let raw = run_systemctl(&build_systemctl_args(SystemctlAction::ShowStatus))?;
+            Ok(build_status_summary_lines(&raw, config, detect_public_ip()))
+        }
+        ServiceManager::Process => {
+            build_process_status_lines(config, detect_public_ip(), process_mode_state(config))
+        }
+    }
+}
+
 fn print_process_status_summary(config: &Config) {
     match build_process_status_lines(config, detect_public_ip(), process_mode_state(config)) {
         Ok(lines) => {
@@ -1020,6 +1162,39 @@ fn print_publisher_status_summary(config: &Config) {
         }
         Err(err) => eprintln!("warning: failed to build publisher status: {err}"),
     }
+}
+
+fn build_reader_status_lines(config: &Config) -> Vec<String> {
+    let app_id = config
+        .reader_app_id
+        .map(|id| id.to_string())
+        .unwrap_or_else(|| "<unset>".to_string());
+    let installation_id = config
+        .reader_installation_id
+        .map(|id| id.to_string())
+        .unwrap_or_else(|| "<unset>".to_string());
+    let ready = ensure_reader_ready_for_start(config).is_ok();
+
+    let mut lines = vec![
+        "service: computer-mcp-reader".to_string(),
+        "service-mode: config-only".to_string(),
+        format!("active: {}", if ready { "ready" } else { "not-ready" }),
+        format!("reader-app-id: {app_id}"),
+        format!("reader-installation-id: {installation_id}"),
+        format!("reader-key: {}", config.reader_private_key_path),
+    ];
+
+    if config.reader_app_id.is_none() {
+        lines.push("hint: set `reader_app_id` in config".to_string());
+    }
+    if config.reader_installation_id.is_none() {
+        lines.push("hint: set `reader_installation_id` in config".to_string());
+    }
+    if !Path::new(&config.reader_private_key_path).exists() {
+        lines.push("hint: place the reader private key at the configured path".to_string());
+    }
+
+    lines
 }
 
 fn build_process_status_lines(
@@ -1065,7 +1240,8 @@ fn build_process_status_lines(
         lines.push("hint: run `computer-mcp start`".to_string());
     }
     if !tls_artifacts_exist(config) {
-        lines.push("hint: run `computer-mcp tls setup`".to_string());
+        lines
+            .push("note: `computer-mcp start` will create TLS artifacts automatically".to_string());
     }
     if matches!(state, ProcessModeState::Stale(_)) {
         lines.push(
@@ -1114,7 +1290,7 @@ fn build_publisher_status_lines(
     ];
 
     if !matches!(state, ProcessModeState::Running(_)) {
-        lines.push("hint: run `computer-mcp publisher start`".to_string());
+        lines.push("hint: run `computer-mcp start`".to_string());
     }
     if config.publisher_app_id.is_none() {
         lines.push("hint: set `publisher_app_id` in config".to_string());
@@ -1326,36 +1502,14 @@ fn build_status_summary_lines(
         lines.push("hint: run `computer-mcp install`".to_string());
     }
     if !tls_artifacts_exist(config) {
-        lines.push("hint: run `computer-mcp tls setup`".to_string());
+        lines
+            .push("note: `computer-mcp start` will create TLS artifacts automatically".to_string());
     }
     lines
 }
 
 fn tls_artifacts_exist(config: &Config) -> bool {
     Path::new(&config.tls_cert_path).exists() && Path::new(&config.tls_key_path).exists()
-}
-
-fn ensure_tls_ready_for_start(config: &Config, config_path: &Path) -> Result<()> {
-    if tls_artifacts_exist(config) {
-        return Ok(());
-    }
-
-    let cert_missing = !Path::new(&config.tls_cert_path).exists();
-    let key_missing = !Path::new(&config.tls_key_path).exists();
-
-    let mut missing = Vec::new();
-    if cert_missing {
-        missing.push(format!("cert: {}", config.tls_cert_path));
-    }
-    if key_missing {
-        missing.push(format!("key: {}", config.tls_key_path));
-    }
-
-    bail!(
-        "TLS artifacts are required before start and are missing ({})\nrun `computer-mcp --config \"{}\" tls setup` and retry",
-        missing.join(", "),
-        config_path.display()
-    )
 }
 
 fn detect_public_ip() -> Option<IpAddr> {
@@ -1567,8 +1721,8 @@ run `computer-mcp --config \"{}\" restart` manually.\n{}",
             }
             Ok(_) => {
                 println!(
-                    "TLS artifacts are ready. Start the daemon with `computer-mcp --config \"{}\" start`.",
-                    config_path.display()
+                    "TLS artifacts are ready. Start the stack with `computer-mcp --config \"{}\" start`.",
+                    config_path.display(),
                 );
             }
             Err(err) => eprintln!(
@@ -1584,8 +1738,8 @@ mod tests {
     use super::{
         DEFAULT_LOG_LINES, ProcessModeState, SERVICE_NAME, ServiceManager, SystemctlAction,
         build_certbot_args, build_journalctl_args, build_process_status_lines,
-        build_publisher_status_lines, build_status_summary_lines, build_systemctl_args,
-        certbot_cert_name, ensure_tls_ready_for_start, generate_self_signed_certificate,
+        build_publisher_status_lines, build_reader_status_lines, build_status_summary_lines,
+        build_systemctl_args, certbot_cert_name, generate_self_signed_certificate,
         parse_systemctl_show, process_log_path, process_pid_path, read_tail_lines,
         render_systemd_unit, select_tls_san_ip, service_manager_from_pid1, state_root_for_config,
         status_host_hint, tls_artifacts_exist, write_if_changed,
@@ -1856,7 +2010,7 @@ mod tests {
     }
 
     #[test]
-    fn build_status_summary_lines_suggests_tls_setup_when_files_missing() {
+    fn build_status_summary_lines_notes_start_when_tls_files_missing() {
         let raw = "ActiveState=inactive\nSubState=dead\nUnitFileState=enabled\nExecMainStatus=1\n";
         let mut config = Config::default();
         let dir = tempdir().expect("tempdir");
@@ -1866,7 +2020,7 @@ mod tests {
         let lines = build_status_summary_lines(raw, &config, None);
         let joined = lines.join("\n");
 
-        assert!(joined.contains("hint: run `computer-mcp tls setup`"));
+        assert!(joined.contains("note: `computer-mcp start` will create TLS artifacts automatically"));
     }
 
     #[test]
@@ -1886,20 +2040,6 @@ mod tests {
     }
 
     #[test]
-    fn ensure_tls_ready_for_start_returns_actionable_error() {
-        let dir = tempdir().expect("tempdir");
-        let mut config = Config::default();
-        config.tls_cert_path = dir.path().join("missing-cert.pem").display().to_string();
-        config.tls_key_path = dir.path().join("missing-key.pem").display().to_string();
-
-        let err = ensure_tls_ready_for_start(&config, Path::new("/etc/computer-mcp/config.toml"))
-            .expect_err("expected missing tls error");
-        let msg = err.to_string();
-        assert!(msg.contains("TLS artifacts are required before start"));
-        assert!(msg.contains("computer-mcp --config \"/etc/computer-mcp/config.toml\" tls setup"));
-    }
-
-    #[test]
     fn generate_self_signed_certificate_writes_pem_files() {
         let dir = tempdir().expect("tempdir");
         let cert_path = dir.path().join("cert.pem");
@@ -1916,5 +2056,15 @@ mod tests {
         let key = fs::read_to_string(&key_path).expect("read key");
         assert!(cert.contains("BEGIN CERTIFICATE"));
         assert!(key.contains("BEGIN PRIVATE KEY"));
+    }
+
+    #[test]
+    fn build_reader_status_lines_include_reader_hints() {
+        let config = Config::default();
+        let joined = build_reader_status_lines(&config).join("\n");
+        assert!(joined.contains("service: computer-mcp-reader"));
+        assert!(joined.contains("active: not-ready"));
+        assert!(joined.contains("hint: set `reader_app_id` in config"));
+        assert!(joined.contains("hint: set `reader_installation_id` in config"));
     }
 }

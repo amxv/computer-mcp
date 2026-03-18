@@ -1,49 +1,66 @@
-# GitHub App Auth For The Publisher Architecture
+# GitHub App Auth
 
-`computer-mcp` now uses a split model for PR creation:
+`computer-mcp` uses two GitHub Apps:
+
+- a **reader app** for read-only private repo access
+- a **publisher app** for branch push + PR creation
+
+The publisher side uses a split local model:
 
 - the coding agent edits code, runs tests, and makes a local commit
 - the local publisher daemon holds the GitHub App private key
 - `computer-mcp publish-pr` sends a local `git bundle` to the publisher daemon
 - the publisher daemon mints a short-lived installation token internally, pushes a generated branch, opens the PR, and returns the PR URL
 
-The goal is simple: the agent can ask for a PR without ever holding the GitHub write credential itself.
+The goal is simple:
+
+- the agent gets read-only GitHub access through the reader app
+- the agent can ask for a PR without ever holding the publisher write credential itself
+
+For the full step-by-step operator flow, use [agent-vps-setup-runbook.md](/Users/ashray/code/amxv/computer-mcp/docs/agent-vps-setup-runbook.md).
 
 Default config file: `/etc/computer-mcp/config.toml`
 
 Most installs only need to add:
 
+- `reader_app_id`
+- `reader_installation_id`
 - `publisher_app_id`
 - one or more `publisher_targets`
 
-## What The GitHub App Is Used For
+## Required App Permissions
 
-The publisher daemon uses the GitHub App to:
+Reader app:
 
-- push a feature branch
-- create a pull request
+- `Contents: Read-only`
+- everything else: `No access`
 
-Required repository permissions:
+Publisher app:
 
 - `Contents: Read & write`
 - `Pull requests: Read & write`
-- `Metadata: Read-only`
+- everything else: `No access`
 
 ## Manual GitHub Setup
 
-GitHub App registration is still a manual step.
+GitHub App registration is still manual.
 
-Create a private GitHub App, install it only on the repository you want to publish to, then record:
+Create two private GitHub Apps, install both on `Only select repositories`, then record:
 
-- the App ID
-- the installation ID
-- the path to the downloaded `.pem` private key
+- reader app ID
+- reader installation ID
+- reader PEM path
+- publisher app ID
+- publisher installation ID
+- publisher PEM path
 
 ## Configure `computer-mcp`
 
 Example config:
 
 ```toml
+reader_app_id = 123456
+reader_installation_id = 234567890
 publisher_app_id = 3123864
 
 [[publisher_targets]]
@@ -53,20 +70,26 @@ default_base = "main"
 installation_id = 117314785
 ```
 
-Place the private key where the publisher daemon expects it:
+Place the keys at the default paths:
 
 ```bash
+sudo install -d -m 0750 -o root -g computer-mcp /etc/computer-mcp/reader
+sudo install -m 0640 -o root -g computer-mcp \
+  /path/to/reader-app.pem \
+  /etc/computer-mcp/reader/private-key.pem
+
 sudo install -m 0600 -o computer-mcp-publisher -g computer-mcp \
-  /path/to/github-app.pem \
+  /path/to/publisher-app.pem \
   /etc/computer-mcp/publisher/private-key.pem
 ```
 
-Then start the publisher daemon:
+Then start the stack:
 
 ```bash
-computer-mcp publisher start
-computer-mcp publisher status
+computer-mcp start
 ```
+
+`computer-mcp start` validates both apps, creates TLS artifacts if needed, starts the publisher daemon, and starts the MCP daemon.
 
 ## How `publish-pr` Works
 

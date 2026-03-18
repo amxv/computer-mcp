@@ -15,6 +15,7 @@ COMPUTER_MCP_TLS_DIR="${COMPUTER_MCP_TLS_DIR:-${COMPUTER_MCP_STATE_DIR}/tls}"
 COMPUTER_MCP_AGENT_USER="${COMPUTER_MCP_AGENT_USER:-computer-mcp-agent}"
 COMPUTER_MCP_PUBLISHER_USER="${COMPUTER_MCP_PUBLISHER_USER:-computer-mcp-publisher}"
 COMPUTER_MCP_SERVICE_GROUP="${COMPUTER_MCP_SERVICE_GROUP:-computer-mcp}"
+COMPUTER_MCP_READER_KEY_DIR="${COMPUTER_MCP_READER_KEY_DIR:-/etc/computer-mcp/reader}"
 COMPUTER_MCP_PUBLISHER_KEY_DIR="${COMPUTER_MCP_PUBLISHER_KEY_DIR:-/etc/computer-mcp/publisher}"
 COMPUTER_MCP_ENABLE_CERTBOT="${COMPUTER_MCP_ENABLE_CERTBOT:-0}"
 
@@ -191,10 +192,12 @@ install_binaries_from_dir() {
   local src_dir="$1"
   [[ -x "${src_dir}/computer-mcp" ]] || die "missing executable ${src_dir}/computer-mcp"
   [[ -x "${src_dir}/computer-mcpd" ]] || die "missing executable ${src_dir}/computer-mcpd"
+  [[ -x "${src_dir}/computer-mcp-prd" ]] || die "missing executable ${src_dir}/computer-mcp-prd"
 
   install -d -m 0755 "${COMPUTER_MCP_INSTALL_DIR}"
   install -m 0755 "${src_dir}/computer-mcp" "${COMPUTER_MCP_INSTALL_DIR}/computer-mcp"
   install -m 0755 "${src_dir}/computer-mcpd" "${COMPUTER_MCP_INSTALL_DIR}/computer-mcpd"
+  install -m 0755 "${src_dir}/computer-mcp-prd" "${COMPUTER_MCP_INSTALL_DIR}/computer-mcp-prd"
 }
 
 install_binaries_from_release() {
@@ -236,7 +239,7 @@ install_binaries_from_source() {
 
   (
     cd "${src_dir}"
-    cargo build --release --bin computer-mcp --bin computer-mcpd
+    cargo build --release --bin computer-mcp --bin computer-mcpd --bin computer-mcp-prd
   )
 
   install_binaries_from_dir "${src_dir}/target/release"
@@ -249,6 +252,7 @@ ensure_dirs_and_config() {
   install -d -m 0750 -o root -g "${COMPUTER_MCP_SERVICE_GROUP}" "${config_dir}"
   install -d -m 0750 -o root -g "${COMPUTER_MCP_SERVICE_GROUP}" "${COMPUTER_MCP_STATE_DIR}"
   install -d -m 0750 -o root -g "${COMPUTER_MCP_SERVICE_GROUP}" "${COMPUTER_MCP_TLS_DIR}"
+  install -d -m 0750 -o root -g "${COMPUTER_MCP_SERVICE_GROUP}" "${COMPUTER_MCP_READER_KEY_DIR}"
   install -d -m 0750 -o root -g "${COMPUTER_MCP_SERVICE_GROUP}" "${COMPUTER_MCP_PUBLISHER_KEY_DIR}"
 
   if [[ ! -f "${COMPUTER_MCP_CONFIG_PATH}" ]]; then
@@ -266,14 +270,16 @@ api_key = "${api_key}"
 # Most installs can keep the built-in defaults.
 # Add only the settings you actually need to override.
 
-# Required only if you want \`computer-mcp publish-pr\`:
-# publisher_app_id = 123456
+# Required GitHub App settings:
+# reader_app_id = 123456
+# reader_installation_id = 234567890
+# publisher_app_id = 345678
 #
 # [[publisher_targets]]
 # id = "owner/repo"
 # repo = "owner/repo"
 # default_base = "main"
-# installation_id = 123456789
+# installation_id = 456789012
 EOF
     log "created config at ${COMPUTER_MCP_CONFIG_PATH}"
   fi
@@ -311,16 +317,14 @@ The commands below assume the default config path. If you changed it, add:
   --config "${COMPUTER_MCP_CONFIG_PATH}"
 
 Next steps:
-  1. review "${COMPUTER_MCP_CONFIG_PATH}" and add publisher_app_id / publisher_targets if you want publish-pr
-  2. place the publisher GitHub App key at "${COMPUTER_MCP_PUBLISHER_KEY_DIR}/private-key.pem" with owner ${COMPUTER_MCP_PUBLISHER_USER}
-  3. computer-mcp tls setup
-  4. computer-mcp publisher start
-  5. computer-mcp start
-  6. computer-mcp show-url --host "${ip}"
+  1. review "${COMPUTER_MCP_CONFIG_PATH}" and add reader_app_id / reader_installation_id / publisher_app_id / publisher_targets
+  2. place the reader GitHub App key at "${COMPUTER_MCP_READER_KEY_DIR}/private-key.pem"
+  3. place the publisher GitHub App key at "${COMPUTER_MCP_PUBLISHER_KEY_DIR}/private-key.pem" with owner ${COMPUTER_MCP_PUBLISHER_USER}
+  4. computer-mcp start
+  5. computer-mcp show-url --host "${ip}"
 
 Verify:
   - computer-mcp status
-  - computer-mcp publisher status
   - curl -k "https://${ip}/health"
   - MCP URL shape: https://${ip}/mcp?key=<redacted>
 

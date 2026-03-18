@@ -105,7 +105,7 @@ pub async fn run_server(config: Config) -> Result<()> {
     let key_path = Path::new(&config.tls_key_path);
     if !cert_path.exists() || !key_path.exists() {
         bail!(
-            "TLS cert/key not found (cert: {}, key: {}). Run `computer-mcp tls setup` first.",
+            "TLS cert/key not found (cert: {}, key: {}). Run `computer-mcp start` or `computer-mcp tls setup` first.",
             config.tls_cert_path,
             config.tls_key_path
         );

@@ -5,6 +5,7 @@ Remote coding MCP server for Linux VPS deployment.
 This README is the fast path for a fresh VPS.
 
 For extra detail, see:
+- [agent-vps-setup-runbook.md](/Users/ashray/code/amxv/computer-mcp/docs/agent-vps-setup-runbook.md)
 - [deployment-notes.md](/Users/ashray/code/amxv/computer-mcp/docs/deployment-notes.md)
 - [github-app-agent-auth.md](/Users/ashray/code/amxv/computer-mcp/docs/github-app-agent-auth.md)
 
@@ -13,7 +14,8 @@ For extra detail, see:
 - A Linux VPS
 - `root` or `sudo`
 - A public IP or host for the MCP endpoint
-- A GitHub App private key if you want the agent to open PRs
+- A reader GitHub App private key
+- A publisher GitHub App private key
 
 Default config file: `/etc/computer-mcp/config.toml`
 
@@ -35,9 +37,11 @@ Edit `/etc/computer-mcp/config.toml`.
 
 Most installs can keep the defaults. The installer already creates a strong random API key, default users, default paths, and the default HTTPS bind.
 
-You usually only need to add GitHub publishing settings:
+You usually only need to add the two GitHub App settings:
 
 ```toml
+reader_app_id = 123456
+reader_installation_id = 234567890
 publisher_app_id = 3123864
 
 [[publisher_targets]]
@@ -47,21 +51,36 @@ default_base = "main"
 installation_id = 117314785
 ```
 
-## 3. Place The GitHub App Key
+## 3. Place Both GitHub App Keys
 
-Only required if you want `publish-pr`. The default key path is `/etc/computer-mcp/publisher/private-key.pem`.
+Default key paths:
+
+- reader: `/etc/computer-mcp/reader/private-key.pem`
+- publisher: `/etc/computer-mcp/publisher/private-key.pem`
 
 ```bash
+sudo install -d -m 0750 -o root -g computer-mcp /etc/computer-mcp/reader
+sudo install -m 0640 -o root -g computer-mcp \
+  /path/to/reader-app.pem \
+  /etc/computer-mcp/reader/private-key.pem
+
 sudo install -m 0600 -o computer-mcp-publisher -g computer-mcp \
-  /path/to/github-app.pem \
+  /path/to/publisher-app.pem \
   /etc/computer-mcp/publisher/private-key.pem
 ```
 
-## 4. Set Up TLS
+## 4. Start
 
 ```bash
-computer-mcp tls setup
+computer-mcp start
 ```
+
+`computer-mcp start` does the rest:
+
+- checks both GitHub Apps are configured
+- creates TLS artifacts if they do not exist yet
+- starts the publisher daemon
+- starts the MCP daemon
 
 The installer already generated an API key. Rotate it only if you want a new one:
 
@@ -69,19 +88,9 @@ The installer already generated an API key. Rotate it only if you want a new one
 computer-mcp set-key "<strong-random-key>"
 ```
 
-## 5. Start
-
-If you want PR publishing, start the publisher first:
+## 5. Verify
 
 ```bash
-computer-mcp publisher start
-computer-mcp start
-```
-
-## 6. Verify
-
-```bash
-computer-mcp publisher status
 computer-mcp status
 computer-mcp show-url --host "<public_ip_or_host>"
 curl -k "https://<public_ip_or_host>/health"
@@ -93,7 +102,7 @@ Expected MCP URL shape:
 https://<public_ip_or_host>/mcp?key=<api_key>
 ```
 
-## 7. Open A PR From The Agent
+## 6. Open A PR From The Agent
 
 After the agent has finished work in a local git checkout and committed the change:
 
@@ -112,6 +121,8 @@ Requirements:
 ## Common Commands
 
 ```bash
+computer-mcp start
+computer-mcp stop
 computer-mcp status
 computer-mcp logs
 computer-mcp publisher status
