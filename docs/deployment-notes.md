@@ -7,6 +7,7 @@ This file holds the details that were intentionally kept out of the main README.
 These are the main defaults:
 
 - config file: `/etc/computer-mcp/config.toml`
+- reader key: `/etc/computer-mcp/reader/private-key.pem`
 - publisher key: `/etc/computer-mcp/publisher/private-key.pem`
 - bind address: `0.0.0.0:443`
 - agent user: `computer-mcp-agent`
@@ -15,6 +16,8 @@ These are the main defaults:
 
 Most deployments only need to change:
 
+- `reader_app_id`
+- `reader_installation_id`
 - `publisher_app_id`
 - `publisher_targets`
 
@@ -42,8 +45,7 @@ systemctl is-system-running || true
 If PID 1 is not `systemd`, `computer-mcp` uses process mode instead.
 
 On Runpod-style container hosts:
-- `computer-mcp start` runs `computer-mcpd` as a detached process
-- `computer-mcp publisher start` runs `computer-mcp-prd` as a detached process
+- `computer-mcp start` runs `computer-mcp-prd` and `computer-mcpd` as detached processes
 - pid and log files are stored under the state directory
 - restart persistence depends on the container lifecycle, not `systemd`
 
@@ -80,6 +82,7 @@ Important limits:
 - `COMPUTER_MCP_AGENT_USER`
 - `COMPUTER_MCP_PUBLISHER_USER`
 - `COMPUTER_MCP_SERVICE_GROUP`
+- `COMPUTER_MCP_READER_KEY_DIR`
 - `COMPUTER_MCP_PUBLISHER_KEY_DIR`
 - `COMPUTER_MCP_ENABLE_CERTBOT`
 

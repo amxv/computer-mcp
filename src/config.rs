@@ -25,6 +25,9 @@ pub struct Config {
     pub default_exec_yield_time_ms: u64,
     pub default_write_yield_time_ms: u64,
     pub max_output_chars: usize,
+    pub reader_app_id: Option<u64>,
+    pub reader_installation_id: Option<u64>,
+    pub reader_private_key_path: String,
     pub publisher_socket_path: String,
     pub publisher_private_key_path: String,
     pub publisher_app_id: Option<u64>,
@@ -73,6 +76,9 @@ impl Default for Config {
             default_exec_yield_time_ms: 10_000,
             default_write_yield_time_ms: 10_000,
             max_output_chars: 200_000,
+            reader_app_id: None,
+            reader_installation_id: None,
+            reader_private_key_path: "/etc/computer-mcp/reader/private-key.pem".to_string(),
             publisher_socket_path: "/var/lib/computer-mcp/publisher/run/computer-mcp-prd.sock"
                 .to_string(),
             publisher_private_key_path: "/etc/computer-mcp/publisher/private-key.pem".to_string(),
@@ -153,6 +159,12 @@ mod tests {
     fn config_defaults_include_publisher_settings() {
         let cfg = Config::default();
 
+        assert_eq!(cfg.reader_app_id, None);
+        assert_eq!(cfg.reader_installation_id, None);
+        assert!(
+            cfg.reader_private_key_path
+                .ends_with("/reader/private-key.pem")
+        );
         assert!(cfg.publisher_socket_path.ends_with("computer-mcp-prd.sock"));
         assert!(cfg.publisher_private_key_path.ends_with("private-key.pem"));
         assert_eq!(cfg.agent_user, "computer-mcp-agent");
@@ -183,6 +195,12 @@ max_output_chars = 200000
         )
         .expect("config should parse");
 
+        assert_eq!(parsed.reader_app_id, None);
+        assert_eq!(parsed.reader_installation_id, None);
+        assert_eq!(
+            parsed.reader_private_key_path,
+            "/etc/computer-mcp/reader/private-key.pem"
+        );
         assert_eq!(parsed.publisher_app_id, None);
         assert_eq!(parsed.agent_user, "computer-mcp-agent");
         assert_eq!(parsed.publisher_user, "computer-mcp-publisher");
