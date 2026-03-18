@@ -30,6 +30,7 @@ fn install_script_has_expected_structure() {
         "run_cli_install()",
         "print_next_steps()",
         "apt-get install -y --no-install-recommends",
+        "build-essential pkg-config libssl-dev",
         "computer-mcp-prd",
         "The commands below assume the default config path",
         "Most installs can keep the built-in defaults.",

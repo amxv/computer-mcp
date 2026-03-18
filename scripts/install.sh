@@ -130,6 +130,7 @@ install_prerequisites() {
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -y
     apt-get install -y --no-install-recommends \
+      build-essential pkg-config libssl-dev \
       curl ca-certificates systemd tar gzip git
 
     if [[ "${COMPUTER_MCP_ENABLE_CERTBOT}" == "1" ]]; then
@@ -139,7 +140,8 @@ install_prerequisites() {
   fi
 
   if command_exists dnf; then
-    dnf install -y curl ca-certificates systemd tar gzip git
+    dnf install -y gcc gcc-c++ make pkgconf-pkg-config openssl-devel \
+      curl ca-certificates systemd tar gzip git
     if [[ "${COMPUTER_MCP_ENABLE_CERTBOT}" == "1" ]]; then
       dnf install -y certbot || warn "certbot install failed"
     fi
@@ -147,7 +149,8 @@ install_prerequisites() {
   fi
 
   if command_exists yum; then
-    yum install -y curl ca-certificates systemd tar gzip git
+    yum install -y gcc gcc-c++ make pkgconfig openssl-devel \
+      curl ca-certificates systemd tar gzip git
     if [[ "${COMPUTER_MCP_ENABLE_CERTBOT}" == "1" ]]; then
       yum install -y certbot || warn "certbot install failed"
     fi
@@ -251,6 +254,7 @@ ensure_dirs_and_config() {
 
   install -d -m 0750 -o root -g "${COMPUTER_MCP_SERVICE_GROUP}" "${config_dir}"
   install -d -m 0750 -o root -g "${COMPUTER_MCP_SERVICE_GROUP}" "${COMPUTER_MCP_STATE_DIR}"
+  install -d -m 0750 -o root -g "${COMPUTER_MCP_SERVICE_GROUP}" "${COMPUTER_MCP_STATE_DIR}/publisher"
   install -d -m 0750 -o root -g "${COMPUTER_MCP_SERVICE_GROUP}" "${COMPUTER_MCP_TLS_DIR}"
   install -d -m 0750 -o root -g "${COMPUTER_MCP_SERVICE_GROUP}" "${COMPUTER_MCP_READER_KEY_DIR}"
   install -d -m 0750 -o root -g "${COMPUTER_MCP_SERVICE_GROUP}" "${COMPUTER_MCP_PUBLISHER_KEY_DIR}"

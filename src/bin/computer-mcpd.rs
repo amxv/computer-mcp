@@ -3,6 +3,7 @@ use std::path::Path;
 use anyhow::Result;
 use clap::Parser;
 use computer_mcp::config::{Config, DEFAULT_CONFIG_PATH};
+use computer_mcp::install_rustls_crypto_provider;
 use computer_mcp::server::run_server;
 use tracing::warn;
 
@@ -16,6 +17,8 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    install_rustls_crypto_provider();
+
     tracing_subscriber::fmt()
         .with_env_filter(
             std::env::var("RUST_LOG")

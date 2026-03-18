@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand};
 use computer_mcp::config::{Config, DEFAULT_CONFIG_PATH};
+use computer_mcp::install_rustls_crypto_provider;
 use computer_mcp::publisher::{build_publish_request, detect_repo_root, submit_publish_request};
 use computer_mcp::redaction::redact_api_key_query_params;
 #[cfg(unix)]
@@ -119,6 +120,8 @@ enum PublisherCommand {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    install_rustls_crypto_provider();
+
     let cli = Cli::parse();
     let config_path = PathBuf::from(&cli.config);
 
@@ -766,6 +769,7 @@ fn prepare_publisher_process_ownership(config: &Config) -> Result<()> {
     }
 
     let user = lookup_user(&config.publisher_user)?;
+    chown_path_to_user(&publisher_process_root(config), &user)?;
     chown_path_to_user(&publisher_process_runtime_dir(config), &user)?;
     chown_path_to_user(&publisher_process_log_dir(config), &user)?;
     if let Some(parent) = Path::new(&config.publisher_socket_path).parent() {
@@ -2020,7 +2024,9 @@ mod tests {
         let lines = build_status_summary_lines(raw, &config, None);
         let joined = lines.join("\n");
 
-        assert!(joined.contains("note: `computer-mcp start` will create TLS artifacts automatically"));
+        assert!(
+            joined.contains("note: `computer-mcp start` will create TLS artifacts automatically")
+        );
     }
 
     #[test]
