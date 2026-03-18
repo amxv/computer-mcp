@@ -307,30 +307,55 @@ Required mitigations for v1:
 ### Phase 1: Core server skeleton
 - Build Rust MCP server with endpoint routing and auth check (`key` query param).
 - Add system config loader and key management.
+- Establish baseline error contract and JSON-RPC/MCP response mapping.
 
 ### Phase 2: Execution tools
 - Implement session manager and process runtime.
 - Add `exec_command` and `write_stdin` with codex-like response schema.
 - Add timeout and output truncation logic.
+- Implement kill semantics: `kill_process=true` uses graceful terminate first, then forced kill after grace window.
+- Confirm response-shape contract:
+  - running => `session_id` only (no `exit_code`)
+  - finished => `exit_code` only (no `session_id`)
 
 ### Phase 3: Apply patch
 - Integrate `codex-apply-patch` implementation.
 - Expose `apply_patch` tool endpoint.
-- Validate grammar/behavior parity against sample cases.
+- Validate grammar/behavior parity against representative fixtures from the API reference and Codex-style usage.
 
-### Phase 4: CLI + service
-- Implement `computer-mcp` commands.
-- Install systemd unit and service management.
-- Add `show-url` and key commands.
+### Phase 4: CLI + service management
+- Implement `computer-mcp` CLI command surface (`install/start/stop/restart/status/logs/set-key/rotate-key/show-url/tls setup`).
+- Install and manage systemd unit (`computer-mcpd.service`) for boot persistence and auto-restart.
+- Ensure `computer-mcp start` is idempotent and provides actionable status output when already running.
 
-### Phase 5: TLS bootstrap
+### Phase 5: Public install bootstrap (missing work added)
+- Add one-command installer script for SSH-first VPS UX.
+- Script responsibilities:
+  - detect Linux distro/arch (Ubuntu/Debian first-class for v1)
+  - install prerequisites (`curl`, `ca-certificates`, `systemd`, optional `certbot`)
+  - install `computer-mcp` + `computer-mcpd` binaries
+  - create required dirs/config with secure permissions
+  - install/enable systemd service
+  - print next steps (`computer-mcp set-key`, `computer-mcp start`, `computer-mcp show-url`)
+- Installer must be non-interactive by default and idempotent on re-run.
+
+### Phase 6: TLS bootstrap + network readiness
 - Implement auto TLS path (LE IP first, fallback self-signed).
 - Persist cert state and restart service as needed.
+- Validate HTTPS endpoint shape end-to-end:
+  - `https://<public_ip>/mcp?key=<apikey>`
+- Include network checks in CLI status (listening port, cert mode, reachable URL hint).
 
-### Phase 6: Hardening + QA
-- Log redaction and key leak checks.
-- Integration tests for session lifecycle.
+### Phase 7: Hardening + full QA for VPS deployment readiness
+- Log redaction and key leak checks (query string key never appears in logs).
+- Integration tests for session lifecycle and state persistence.
 - End-to-end install/start/connect test on fresh Linux VM.
+- Failure-mode tests:
+  - expired/unknown session behavior
+  - timeout handling
+  - `kill_process` behavior
+  - TLS fallback when LE fails
+- Final release gate: all tests passing and documented deploy steps verified on a clean VPS.
 
 ## 13) Testing Strategy
 
@@ -356,6 +381,22 @@ Required mitigations for v1:
 - `computer-mcp start` creates reachable HTTPS endpoint
 - fallback to self-signed when LE flow fails
 
+### 13.4 Release-readiness matrix (required before phase completion)
+- Clean VPS bootstrap test:
+  - from empty host, run public install command
+  - set API key and start service
+  - successful MCP tool calls against public IP over HTTPS
+- Regression test set:
+  - `exec_command` quick completion
+  - `exec_command` long-running -> returns `session_id`
+  - `write_stdin` poll/write/kill flows
+  - stateful session (`cd`, `export`) across calls
+  - `apply_patch` parity fixture suite
+- Operational test set:
+  - reboot host -> service auto-starts
+  - key rotation invalidates old key immediately
+  - logs remain key-redacted
+
 ## 14) Decisions Made vs Pending
 
 ### Finalized
@@ -379,7 +420,9 @@ Required mitigations for v1:
 - Tool-provided timeout override with server-managed caps.
 
 ### Pending clarification (minor)
-1. Exact minimal vs full CLI command set in initial release.
+1. Public binary distribution method for installer:
+   - GitHub Releases prebuilt artifacts
+   - or build-from-source fallback when artifact unavailable.
 
 ## 15) Notes on Reuse Boundaries
 
