@@ -37,6 +37,8 @@ fn github_app_docs_and_scripts_include_expected_permissions_and_flow() {
         .expect("read docs");
     let mint_script = std::fs::read_to_string(script_path("mint-gh-app-installation-token.sh"))
         .expect("read mint script");
+    let protect_script = std::fs::read_to_string(script_path("protect-main-branch.sh"))
+        .expect("read protect script");
     let pr_script =
         std::fs::read_to_string(script_path("agent-create-pr.sh")).expect("read pr script");
 
@@ -44,8 +46,11 @@ fn github_app_docs_and_scripts_include_expected_permissions_and_flow() {
     assert!(docs.contains("Pull requests: Read & write"));
     assert!(docs.contains("private GitHub App"));
     assert!(docs.contains("direct pushes to `main` are blocked by GitHub"));
+    assert!(docs.contains("GitHub Pro"));
     assert!(mint_script.contains("GITHUB_APP_INSTALLATION_ID"));
+    assert!(mint_script.contains(r#"permissions_json='{"contents":"write","pull_requests":"write"}'"#));
     assert!(mint_script.contains("access_tokens"));
+    assert!(protect_script.contains("Upgrade to GitHub Pro or make this repository public"));
     assert!(pr_script.contains("gh pr create"));
     assert!(pr_script.contains("git push"));
 }

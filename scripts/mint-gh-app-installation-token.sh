@@ -29,6 +29,11 @@ require_cmd() {
   }
 }
 
+die() {
+  echo "$*" >&2
+  exit 1
+}
+
 b64url() {
   openssl base64 -A | tr '+/' '-_' | tr -d '='
 }
@@ -58,7 +63,13 @@ if [[ ! -f "${GITHUB_APP_PRIVATE_KEY_PATH}" ]]; then
 fi
 
 github_api_url="${GITHUB_API_URL:-https://api.github.com}"
-permissions_json="${GITHUB_APP_PERMISSIONS_JSON:-{"contents":"write","pull_requests":"write"}}"
+permissions_json="${GITHUB_APP_PERMISSIONS_JSON:-}"
+if [[ -z "${permissions_json}" ]]; then
+  permissions_json='{"contents":"write","pull_requests":"write"}'
+fi
+
+printf '%s' "${permissions_json}" | jq -e . >/dev/null \
+  || die "GITHUB_APP_PERMISSIONS_JSON must be valid JSON"
 
 now="$(date +%s)"
 issued_at="$((now - 60))"

@@ -54,6 +54,21 @@ This enforces the important part of the model:
 - the agent opens PRs
 - direct pushes to `main` are blocked by GitHub
 
+For a private repository, GitHub only enables protected branches with GitHub Pro, GitHub Team,
+GitHub Enterprise Cloud, or GitHub Enterprise Server. On a private personal-account repository
+without GitHub Pro, this command will fail with a GitHub plan error and `main` will not be
+protected server-side.
+
+If you want server-side blocking on a private repo, use one of these:
+
+- upgrade the owner account to GitHub Pro
+- move the repository to an organization on GitHub Team or Enterprise
+- make the repository public
+
+Without that plan support, the GitHub App still gives the agent scoped branch push and PR access,
+but preventing direct pushes to `main` becomes a local-policy problem instead of a GitHub-enforced
+rule.
+
 ### Create branch, push, and open PR
 
 From a checkout of the target repository:
