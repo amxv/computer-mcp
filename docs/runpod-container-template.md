@@ -74,6 +74,14 @@ Recommended environment variables for full automatic startup:
 - `COMPUTER_MCP_PUBLISHER_DEFAULT_BASE=main`
 - `COMPUTER_MCP_PUBLISHER_PRIVATE_KEY={{ RUNPOD_SECRET_publisher_private_key }}`
 
+Alternative simpler path:
+
+- `COMPUTER_MCP_CONFIG_TOML={{ RUNPOD_SECRET_computer_mcp_config_toml }}`
+- `COMPUTER_MCP_READER_PRIVATE_KEY={{ RUNPOD_SECRET_reader_private_key }}`
+- `COMPUTER_MCP_PUBLISHER_PRIVATE_KEY={{ RUNPOD_SECRET_publisher_private_key }}`
+
+If `COMPUTER_MCP_CONFIG_TOML` is present, the container writes that file directly to `/etc/computer-mcp/config.toml` and uses it instead of constructing the config from individual env vars.
+
 Storage:
 
 - **Container disk:** `40 GB`
@@ -150,11 +158,13 @@ Once the Pod is up, the intended path is:
 
 If you omit the `COMPUTER_MCP_*` environment variables, the image still comes up for SSH access, but `computer-mcp` will not auto-start.
 
+If the config file exists but is incomplete, the container now skips automatic `computer-mcp start` instead of failing the whole boot sequence.
+
 If you just want to refresh binaries on an existing Pod that uses this image:
 
 ```bash
 computer-mcp --version
-computer-mcp upgrade --version v0.1.9
+computer-mcp upgrade --version v0.1.10
 ```
 
 ## Source Notes

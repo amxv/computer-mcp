@@ -92,6 +92,10 @@ has_auto_config_inputs() {
     && [[ -n "${COMPUTER_MCP_PUBLISHER_TARGET_REPO:-}" ]]
 }
 
+has_full_config_input() {
+  [[ -n "${COMPUTER_MCP_CONFIG_TOML:-}" ]]
+}
+
 install_if_needed() {
   if [[ -x /usr/local/bin/computer-mcp ]]; then
     computer-mcp install
@@ -105,8 +109,17 @@ install_if_needed() {
 bootstrap_computer_mcp_config() {
   install_if_needed
 
-  if [[ -f "${CONFIG_PATH}" ]] && [[ "${COMPUTER_MCP_FORCE_RECONFIGURE:-0}" != "1" ]] && ! has_auto_config_inputs; then
+  if [[ -f "${CONFIG_PATH}" ]] && [[ "${COMPUTER_MCP_FORCE_RECONFIGURE:-0}" != "1" ]] && ! has_auto_config_inputs && ! has_full_config_input; then
     log "existing computer-mcp config found at ${CONFIG_PATH}; leaving it unchanged"
+    return
+  fi
+
+  if has_full_config_input; then
+    install -d -m 0750 "$(dirname "${CONFIG_PATH}")"
+    printf '%s\n' "${COMPUTER_MCP_CONFIG_TOML}" > "${CONFIG_PATH}"
+    chmod 0640 "${CONFIG_PATH}"
+    chgrp computer-mcp "${CONFIG_PATH}" || true
+    log "wrote computer-mcp config from COMPUTER_MCP_CONFIG_TOML to ${CONFIG_PATH}"
     return
   fi
 
@@ -164,6 +177,18 @@ EOF
   log "wrote computer-mcp config to ${CONFIG_PATH}"
 }
 
+config_is_startable() {
+  [[ -f "${CONFIG_PATH}" ]] || return 1
+
+  grep -Eq '^reader_app_id = [1-9][0-9]*$' "${CONFIG_PATH}" || return 1
+  grep -Eq '^reader_installation_id = [1-9][0-9]*$' "${CONFIG_PATH}" || return 1
+  grep -Eq '^publisher_app_id = [1-9][0-9]*$' "${CONFIG_PATH}" || return 1
+  grep -Eq '^installation_id = [1-9][0-9]*$' "${CONFIG_PATH}" || return 1
+
+  [[ -f "${READER_KEY_PATH}" ]] || return 1
+  [[ -f "${PUBLISHER_KEY_PATH}" ]] || return 1
+}
+
 start_computer_mcp_if_ready() {
   local auto_start="${COMPUTER_MCP_AUTO_START:-1}"
   if [[ "${auto_start}" != "1" ]]; then
@@ -173,6 +198,11 @@ start_computer_mcp_if_ready() {
 
   if [[ ! -f "${CONFIG_PATH}" ]]; then
     log "computer-mcp config missing at ${CONFIG_PATH}; skipping automatic start"
+    return
+  fi
+
+  if ! config_is_startable; then
+    log "computer-mcp config or key files are incomplete; skipping automatic start"
     return
   fi
 
