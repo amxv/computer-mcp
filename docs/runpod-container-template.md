@@ -73,6 +73,24 @@ At container startup:
 
 This keeps the Runpod-specific logic focused on `computer-mcp` itself instead of trying to own SSH/bootstrap behavior that the Runpod base image already knows how to handle.
 
+## Agent Environment
+
+The Runpod image is meant to be usable as an actual coding pod, not only as a service container.
+
+The bootstrap provisions:
+
+- an interactive `computer-mcp-agent` account with a real home directory
+- `/workspace` owned by `computer-mcp-agent`
+- login-shell PATH setup for Go, Rust, Node, Python, and user-local binaries
+- user-writable install locations for `pip --user`, `uv tool`, `npm install -g`, `go install`, and `cargo install`
+- common Unix exploration and development tools such as `awk`, `sed`, `nl`, `rg`, `fd`, `jq`, `git`, `gh`, `tmux`, `tree`, `strace`, and `shellcheck`
+
+The security split from [github-app-agent-auth.md](github-app-agent-auth.md) still applies:
+
+- `computer-mcpd` runs as `computer-mcp-agent`
+- `computer-mcp-prd` runs as `computer-mcp-publisher`
+- the publisher private key remains readable only by `computer-mcp-publisher`
+
 ## Recommended Runpod Template Settings
 
 These values align with the current Runpod template docs.
