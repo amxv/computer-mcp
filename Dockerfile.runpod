@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM runpod/base:0.6.3-cpu AS builder
+FROM runpod/base:1.0.3-ubuntu2204 AS builder
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
@@ -33,7 +33,7 @@ RUN cargo build --locked --release \
       --bin computer-mcpd \
       --bin computer-mcp-prd
 
-FROM runpod/base:0.6.3-cpu
+FROM runpod/base:1.0.3-ubuntu2204
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
@@ -41,7 +41,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 ARG NODE_MAJOR=22
 ARG GO_VERSION=1.24.1
 ARG RUST_TOOLCHAIN=stable
-ARG NPM_GLOBAL_PACKAGES="typescript tsx"
+ARG NPM_GLOBAL_PACKAGES="pnpm yarn typescript tsx"
 ARG GO_GLOBAL_TOOLS="golang.org/x/tools/gopls@latest github.com/go-delve/delve/cmd/dlv@latest"
 ARG TARGETARCH
 
@@ -150,15 +150,16 @@ RUN case "${TARGETARCH}" in \
 
 RUN curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal --default-toolchain "${RUST_TOOLCHAIN}" && \
     rustup default "${RUST_TOOLCHAIN}" && \
-    rustup component add clippy rustfmt rust-analyzer && \
-    python3 -m pip install --no-cache-dir --upgrade pip && \
-    python3 -m pip install --no-cache-dir pipx uv && \
-    corepack enable && \
-    corepack prepare pnpm@latest --activate && \
-    corepack prepare yarn@stable --activate && \
-    npm install -g ${NPM_GLOBAL_PACKAGES} && \
-    GOBIN=/usr/local/bin /usr/local/go/bin/go install ${GO_GLOBAL_TOOLS} && \
-    toolchain_bin="$(rustc --print sysroot)/bin" && \
+    rustup component add clippy rustfmt rust-analyzer
+
+RUN python3 -m pip install --no-cache-dir --upgrade pip && \
+    python3 -m pip install --no-cache-dir pipx uv
+
+RUN npm install -g ${NPM_GLOBAL_PACKAGES}
+
+RUN GOBIN=/usr/local/bin /usr/local/go/bin/go install ${GO_GLOBAL_TOOLS}
+
+RUN toolchain_bin="$(rustc --print sysroot)/bin" && \
     ln -sf /usr/local/cargo/bin/rustup /usr/local/bin/rustup && \
     for bin in cargo cargo-clippy cargo-fmt clippy-driver rust-analyzer rustc rustdoc rustfmt; do \
       if [[ -x "${toolchain_bin}/${bin}" ]]; then \
