@@ -1,6 +1,6 @@
 [package]
 name = "computer-mcp"
-version = "0.1.14"
+version = "0.1.15"
 edition = "2024"
 
 [[bin]]
@@ -18,7 +18,7 @@ path = "src/bin/computer-mcp-prd.rs"
 [dependencies]
 anyhow = "1.0"
 axum = { version = "0.8", features = ["macros"] }
-axum-server = { version = "0.8", features = ["tls-rustls"] }
+axum-server = { version = "0.8", features = ["tls-rustls-no-provider"] }
 base64 = "0.22"
 clap = { version = "4.5", features = ["derive"] }
 codex-apply-patch = { git = "https://github.com/openai/codex.git", rev = "a265d6043edc8b41e42ae508291f4cfb9ed46805" }
@@ -26,14 +26,14 @@ jsonwebtoken = "9.3"
 nix = { version = "0.30", features = ["fs", "signal", "process", "term", "user"] }
 rand = "0.10"
 rcgen = "0.14"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots-no-provider"] }
 rmcp = { version = "1", features = [
     "server",
     "macros",
     "transport-streamable-http-server",
     "schemars",
 ] }
-rustls = { version = "0.23", features = ["ring"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 schemars = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
