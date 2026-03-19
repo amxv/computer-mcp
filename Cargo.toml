@@ -8,6 +8,10 @@ name = "computer-mcp"
 path = "src/bin/computer-mcp.rs"
 
 [[bin]]
+name = "computer"
+path = "src/bin/computer.rs"
+
+[[bin]]
 name = "computer-mcpd"
 path = "src/bin/computer-mcpd.rs"
 
