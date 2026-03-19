@@ -43,7 +43,7 @@ That is the main purpose of this repository: give models a narrow remote executi
 
 - A Linux VPS
 - `root` or `sudo`
-- A public IP or host for the MCP endpoint
+- A public IP or hostname for the MCP endpoint
 - A reader GitHub App private key
 - A publisher GitHub App private key
 
