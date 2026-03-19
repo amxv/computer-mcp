@@ -962,9 +962,11 @@ mod tests {
     #[tokio::test]
     async fn exec_timeout_terminates_process_and_returns_notice() {
         let mut mgr = SessionManager::new(64, 20_000);
-        let mut cfg = Config::default();
-        cfg.default_exec_timeout_ms = 1_000;
-        cfg.max_exec_timeout_ms = 1_000;
+        let cfg = Config {
+            default_exec_timeout_ms: 1_000,
+            max_exec_timeout_ms: 1_000,
+            ..Config::default()
+        };
 
         let timed_out = mgr
             .exec_command(
@@ -998,9 +1000,11 @@ mod tests {
     #[tokio::test]
     async fn idle_timeout_resets_on_write_stdin() {
         let mut mgr = SessionManager::new(64, 20_000);
-        let mut cfg = Config::default();
-        cfg.default_exec_timeout_ms = 1_000;
-        cfg.max_exec_timeout_ms = 1_000;
+        let cfg = Config {
+            default_exec_timeout_ms: 1_000,
+            max_exec_timeout_ms: 1_000,
+            ..Config::default()
+        };
         let sid = start_stateful_shell(&mut mgr, &cfg).await;
 
         tokio::time::sleep(Duration::from_millis(700)).await;
