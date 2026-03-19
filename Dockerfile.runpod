@@ -161,7 +161,9 @@ RUN export BUN_INSTALL=/usr/local && \
 
 RUN npm install -g ${NPM_GLOBAL_PACKAGES}
 
-RUN GOBIN=/usr/local/bin /usr/local/go/bin/go install ${GO_GLOBAL_TOOLS}
+RUN for tool in ${GO_GLOBAL_TOOLS}; do \
+      GOBIN=/usr/local/bin /usr/local/go/bin/go install "${tool}"; \
+    done
 
 RUN toolchain_bin="$(rustc --print sysroot)/bin" && \
     ln -sf /usr/local/cargo/bin/rustup /usr/local/bin/rustup && \
