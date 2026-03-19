@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -17,7 +18,9 @@ use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
 use crate::config::Config;
-use crate::protocol::{ExecCommandInput, ToolOutput, WriteStdinInput};
+use crate::protocol::{
+    CommandStatus, ExecCommandInput, TerminationReason, ToolOutput, WriteStdinInput,
+};
 
 const POLL_INTERVAL_MS: u64 = 30;
 const TIMEOUT_NOTICE: &str = "\n[computer-mcpd] process timed out and was terminated\n";
@@ -88,12 +91,15 @@ fn next_char_boundary(s: &str, idx: usize) -> usize {
 #[derive(Debug)]
 struct Session {
     pid: i32,
+    last_known_cwd: String,
     child: Child,
     pty_writer: Option<tokio::fs::File>,
     output: Arc<OutputBuffer>,
     last_used: Instant,
-    deadline: Instant,
+    last_input_at: Instant,
+    idle_timeout: Duration,
     timed_out: bool,
+    kill_requested: bool,
     terminate_started_at: Option<Instant>,
     force_killed: bool,
     require_exit_before_return: bool,
@@ -128,6 +134,13 @@ impl SessionManager {
 
         let timeout_ms = cfg.clamp_exec_timeout_ms(input.timeout_ms);
         let yield_time_ms = cfg.clamp_exec_yield_ms(input.yield_time_ms);
+        let now = Instant::now();
+
+        let command_cwd = match input.workdir.as_deref() {
+            Some(workdir) => PathBuf::from(workdir),
+            None => std::env::current_dir().context("failed to resolve current directory")?,
+        };
+        let command_cwd_display = command_cwd.display().to_string();
 
         #[cfg(unix)]
         let pty = openpty(None, None).context("failed to allocate PTY")?;
@@ -164,9 +177,12 @@ impl SessionManager {
             });
         }
 
-        if let Some(workdir) = input.workdir.as_deref() {
-            command.current_dir(workdir);
-        }
+        command.current_dir(&command_cwd);
+        command.env("PAGER", "cat");
+        command.env("GIT_PAGER", "cat");
+        command.env("LESS", "FRX");
+        command.env("MANPAGER", "cat");
+        command.env("SYSTEMD_PAGER", "cat");
 
         let child = command
             .spawn()
@@ -197,12 +213,15 @@ impl SessionManager {
             session_id,
             Session {
                 pid,
+                last_known_cwd: command_cwd_display.clone(),
                 pty_writer: Some(master_writer),
                 child,
                 output,
-                last_used: Instant::now(),
-                deadline: Instant::now() + Duration::from_millis(timeout_ms),
+                last_used: now,
+                last_input_at: now,
+                idle_timeout: Duration::from_millis(timeout_ms),
                 timed_out: false,
+                kill_requested: false,
                 terminate_started_at: None,
                 force_killed: false,
                 require_exit_before_return: false,
@@ -218,6 +237,15 @@ impl SessionManager {
         cfg: &Config,
     ) -> Result<ToolOutput> {
         let yield_time_ms = cfg.clamp_write_yield_ms(input.yield_time_ms);
+        {
+            let session = self
+                .sessions
+                .get_mut(&input.session_id)
+                .ok_or_else(|| unknown_process_id(input.session_id))?;
+            let now = Instant::now();
+            session.last_used = now;
+            session.last_input_at = now;
+        }
 
         if input.kill_process.unwrap_or(false) {
             let output = {
@@ -225,7 +253,7 @@ impl SessionManager {
                     .sessions
                     .get_mut(&input.session_id)
                     .ok_or_else(|| unknown_process_id(input.session_id))?;
-                session.last_used = Instant::now();
+                session.kill_requested = true;
                 session.require_exit_before_return = true;
                 request_termination(session);
                 session.output.clone()
@@ -239,7 +267,6 @@ impl SessionManager {
                     .sessions
                     .get_mut(&input.session_id)
                     .ok_or_else(|| unknown_process_id(input.session_id))?;
-                session.last_used = Instant::now();
                 session.pty_writer.take()
             };
 
@@ -310,8 +337,8 @@ impl SessionManager {
 
         loop {
             let mut timeout_output: Option<Arc<OutputBuffer>> = None;
-            let mut finished: Option<(Arc<OutputBuffer>, i32)> = None;
-            let mut running_output: Option<Arc<OutputBuffer>> = None;
+            let mut finished: Option<(Arc<OutputBuffer>, i32, String, TerminationReason)> = None;
+            let mut running_output: Option<(Arc<OutputBuffer>, String)> = None;
 
             {
                 let session = self
@@ -321,8 +348,11 @@ impl SessionManager {
                 session.last_used = Instant::now();
 
                 maybe_force_kill(session);
+                if let Some(live_cwd) = resolve_live_cwd(session.pid) {
+                    session.last_known_cwd = live_cwd;
+                }
 
-                if Instant::now() >= session.deadline && !session.timed_out {
+                if session.last_input_at.elapsed() >= session.idle_timeout && !session.timed_out {
                     session.timed_out = true;
                     session.require_exit_before_return = true;
                     request_termination(session);
@@ -332,12 +362,25 @@ impl SessionManager {
                 match session.child.try_wait()? {
                     Some(status) => {
                         let code = status.code().unwrap_or(-1);
-                        finished = Some((session.output.clone(), code));
+                        let termination_reason = if session.timed_out {
+                            TerminationReason::Timeout
+                        } else if session.kill_requested || session.force_killed {
+                            TerminationReason::Killed
+                        } else {
+                            TerminationReason::Exit
+                        };
+                        finished = Some((
+                            session.output.clone(),
+                            code,
+                            session.last_known_cwd.clone(),
+                            termination_reason,
+                        ));
                     }
                     None if started.elapsed() >= yield_for
                         && !session.require_exit_before_return =>
                     {
-                        running_output = Some(session.output.clone());
+                        running_output =
+                            Some((session.output.clone(), session.last_known_cwd.clone()));
                     }
                     None => {}
                 }
@@ -347,22 +390,28 @@ impl SessionManager {
                 output.append(TIMEOUT_NOTICE).await;
             }
 
-            if let Some((output, exit_code)) = finished {
+            if let Some((output, exit_code, cwd, termination_reason)) = finished {
                 let text = output.snapshot().await;
                 self.sessions.remove(&session_id);
                 return Ok(ToolOutput {
                     output: text,
+                    status: CommandStatus::Exited,
+                    cwd,
                     session_id: None,
                     exit_code: Some(exit_code),
+                    termination_reason: Some(termination_reason),
                 });
             }
 
-            if let Some(output) = running_output {
+            if let Some((output, cwd)) = running_output {
                 let text = output.snapshot().await;
                 return Ok(ToolOutput {
                     output: text,
+                    status: CommandStatus::Running,
+                    cwd,
                     session_id: Some(session_id),
                     exit_code: None,
+                    termination_reason: None,
                 });
             }
 
@@ -443,10 +492,84 @@ fn unknown_process_id(session_id: u64) -> anyhow::Error {
     anyhow!("Unknown process id: {}", session_id)
 }
 
+fn resolve_live_cwd(pid: i32) -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        let target_pgrp = read_proc_pgrp(pid)?;
+        let mut best: Option<(i32, String)> = None;
+
+        let proc_entries = std::fs::read_dir("/proc").ok()?;
+        for entry in proc_entries {
+            let Ok(entry) = entry else {
+                continue;
+            };
+            let name = entry.file_name();
+            let raw = name.to_string_lossy();
+            if !raw.chars().all(|ch| ch.is_ascii_digit()) {
+                continue;
+            }
+
+            let proc_pid = match raw.parse::<i32>() {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+
+            if read_proc_pgrp(proc_pid) != Some(target_pgrp) {
+                continue;
+            }
+
+            let Some(cwd) = read_proc_cwd(proc_pid) else {
+                continue;
+            };
+            if best
+                .as_ref()
+                .map(|(best_pid, _)| proc_pid > *best_pid)
+                .unwrap_or(true)
+            {
+                best = Some((proc_pid, cwd));
+            }
+        }
+
+        if let Some((_, cwd)) = best {
+            return Some(cwd);
+        }
+
+        return read_proc_cwd(pid);
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn read_proc_cwd(pid: i32) -> Option<String> {
+    let path = format!("/proc/{pid}/cwd");
+    let cwd = std::fs::read_link(path).ok()?;
+    Some(cwd.display().to_string())
+}
+
+#[cfg(target_os = "linux")]
+fn read_proc_pgrp(pid: i32) -> Option<i32> {
+    let stat_path = format!("/proc/{pid}/stat");
+    let raw = std::fs::read_to_string(stat_path).ok()?;
+    let (_, after_comm) = raw.rsplit_once(") ")?;
+    let mut fields = after_comm.split_whitespace();
+    let _state = fields.next()?;
+    let _ppid = fields.next()?;
+    let pgrp = fields.next()?.parse::<i32>().ok()?;
+    Some(pgrp)
+}
+
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use crate::config::Config;
-    use crate::protocol::{ExecCommandInput, WriteStdinInput};
+    use crate::protocol::{CommandStatus, ExecCommandInput, TerminationReason, WriteStdinInput};
+    use tempfile::tempdir;
 
     use super::SessionManager;
 
@@ -530,6 +653,9 @@ mod tests {
             .expect("quick command should complete");
         assert!(finished.session_id.is_none());
         assert_eq!(finished.exit_code, Some(0));
+        assert_eq!(finished.status, CommandStatus::Exited);
+        assert_eq!(finished.termination_reason, Some(TerminationReason::Exit));
+        assert!(!finished.cwd.is_empty());
 
         let running = mgr
             .exec_command(
@@ -545,6 +671,9 @@ mod tests {
             .expect("long command should still be running");
         assert!(running.session_id.is_some());
         assert!(running.exit_code.is_none());
+        assert_eq!(running.status, CommandStatus::Running);
+        assert_eq!(running.termination_reason, None);
+        assert!(!running.cwd.is_empty());
 
         let _ = mgr
             .write_stdin(
@@ -558,6 +687,99 @@ mod tests {
             )
             .await
             .expect("cleanup should succeed");
+    }
+
+    #[tokio::test]
+    async fn output_reports_command_cwd() {
+        let mut mgr = SessionManager::new(64, 20_000);
+        let cfg = Config::default();
+        let dir = tempdir().expect("tempdir");
+        let workdir = dir.path().display().to_string();
+
+        let finished = mgr
+            .exec_command(
+                ExecCommandInput {
+                    cmd: "pwd".to_string(),
+                    yield_time_ms: Some(2_000),
+                    workdir: Some(workdir.clone()),
+                    timeout_ms: None,
+                },
+                &cfg,
+            )
+            .await
+            .expect("pwd should complete");
+
+        assert_eq!(finished.status, CommandStatus::Exited);
+        assert_eq!(finished.cwd, workdir);
+        assert!(
+            finished
+                .output
+                .contains(dir.path().to_string_lossy().as_ref())
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn poll_reports_live_cwd_after_cd() {
+        let mut mgr = SessionManager::new(64, 20_000);
+        let cfg = Config::default();
+        let sid = start_stateful_shell(&mut mgr, &cfg).await;
+        let dir = tempdir().expect("tempdir");
+        let workdir = dir.path().display().to_string();
+
+        let _ = mgr
+            .write_stdin(
+                WriteStdinInput {
+                    session_id: sid,
+                    chars: Some(format!("cd {workdir}\n")),
+                    yield_time_ms: Some(100),
+                    kill_process: Some(false),
+                },
+                &cfg,
+            )
+            .await
+            .expect("cd should succeed");
+
+        let mut observed_match = false;
+        for _ in 0..8 {
+            let poll = mgr
+                .write_stdin(
+                    WriteStdinInput {
+                        session_id: sid,
+                        chars: None,
+                        yield_time_ms: Some(100),
+                        kill_process: Some(false),
+                    },
+                    &cfg,
+                )
+                .await
+                .expect("poll should succeed");
+
+            assert_eq!(poll.status, CommandStatus::Running);
+            if poll.cwd == workdir {
+                observed_match = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        let _ = mgr
+            .write_stdin(
+                WriteStdinInput {
+                    session_id: sid,
+                    chars: None,
+                    yield_time_ms: Some(2_000),
+                    kill_process: Some(true),
+                },
+                &cfg,
+            )
+            .await
+            .expect("cleanup should succeed");
+
+        assert!(
+            observed_match,
+            "expected live cwd {workdir} to be reported after cd"
+        );
     }
 
     #[tokio::test]
@@ -731,6 +953,8 @@ mod tests {
 
         assert!(killed.session_id.is_none());
         assert!(killed.exit_code.is_some());
+        assert_eq!(killed.status, CommandStatus::Exited);
+        assert_eq!(killed.termination_reason, Some(TerminationReason::Killed));
         assert!(killed.output.contains("terminated by kill_process"));
         assert!(!killed.output.contains("should-be-ignored"));
     }
@@ -757,6 +981,11 @@ mod tests {
 
         assert!(timed_out.session_id.is_none());
         assert!(timed_out.exit_code.is_some());
+        assert_eq!(timed_out.status, CommandStatus::Exited);
+        assert_eq!(
+            timed_out.termination_reason,
+            Some(TerminationReason::Timeout)
+        );
         assert!(
             timed_out
                 .output
@@ -764,5 +993,81 @@ mod tests {
             "expected timeout notice in output: {}",
             timed_out.output
         );
+    }
+
+    #[tokio::test]
+    async fn idle_timeout_resets_on_write_stdin() {
+        let mut mgr = SessionManager::new(64, 20_000);
+        let mut cfg = Config::default();
+        cfg.default_exec_timeout_ms = 1_000;
+        cfg.max_exec_timeout_ms = 1_000;
+        let sid = start_stateful_shell(&mut mgr, &cfg).await;
+
+        tokio::time::sleep(Duration::from_millis(700)).await;
+        let _ = mgr
+            .write_stdin(
+                WriteStdinInput {
+                    session_id: sid,
+                    chars: None,
+                    yield_time_ms: Some(50),
+                    kill_process: Some(false),
+                },
+                &cfg,
+            )
+            .await
+            .expect("poll should succeed");
+
+        tokio::time::sleep(Duration::from_millis(700)).await;
+        let after_reset = mgr
+            .write_stdin(
+                WriteStdinInput {
+                    session_id: sid,
+                    chars: Some("echo still-alive\n".to_string()),
+                    yield_time_ms: Some(500),
+                    kill_process: Some(false),
+                },
+                &cfg,
+            )
+            .await
+            .expect("session should still be alive after idle reset");
+
+        assert_eq!(after_reset.status, CommandStatus::Running);
+        assert_eq!(after_reset.termination_reason, None);
+        assert!(after_reset.output.contains("still-alive"));
+
+        let _ = mgr
+            .write_stdin(
+                WriteStdinInput {
+                    session_id: sid,
+                    chars: None,
+                    yield_time_ms: Some(2_000),
+                    kill_process: Some(true),
+                },
+                &cfg,
+            )
+            .await
+            .expect("cleanup should succeed");
+    }
+
+    #[tokio::test]
+    async fn exec_sets_non_interactive_pager_env_defaults() {
+        let mut mgr = SessionManager::new(64, 20_000);
+        let cfg = Config::default();
+
+        let finished = mgr
+            .exec_command(
+                ExecCommandInput {
+                    cmd: "printf '%s|%s|%s|%s|%s' \"$PAGER\" \"$GIT_PAGER\" \"$LESS\" \"$MANPAGER\" \"$SYSTEMD_PAGER\"".to_string(),
+                    yield_time_ms: Some(2_000),
+                    workdir: None,
+                    timeout_ms: None,
+                },
+                &cfg,
+            )
+            .await
+            .expect("env command should complete");
+
+        assert_eq!(finished.status, CommandStatus::Exited);
+        assert!(finished.output.contains("cat|cat|FRX|cat|cat"));
     }
 }

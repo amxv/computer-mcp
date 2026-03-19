@@ -105,7 +105,7 @@ impl ComputerMcpService {
         &self,
         Parameters(input): Parameters<ApplyPatchInput>,
     ) -> Result<String, String> {
-        apply_patch::apply_patch(&input.patch).map_err(|e| e.to_string())
+        apply_patch::apply_patch(&input.patch, &input.workdir).map_err(|e| e.to_string())
     }
 }
 

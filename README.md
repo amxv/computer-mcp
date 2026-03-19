@@ -26,9 +26,9 @@ Container images:
 
 At a high level:
 
-- `exec_command` starts a shell command on the VPS and returns output plus a `session_id` if the command is still running
-- `write_stdin` writes to or polls that running session, which makes interactive shells and long-running commands possible
-- `apply_patch` applies structured Codex-style patches to files without handing the model raw filesystem write primitives
+- `exec_command` starts a shell command on the VPS and returns output plus session metadata (`status`, `cwd`, and `termination_reason` when finished) and a `session_id` if the command is still running
+- `write_stdin` writes to or polls that running session, returns the same session metadata shape, and keeps the session alive by resetting the idle timeout
+- `apply_patch` applies structured Codex-style patches to files without handing the model raw filesystem write primitives; patch input includes a required `workdir` used to resolve relative patch paths
 
 Those three tools are enough to simulate the core Codex workflow:
 
