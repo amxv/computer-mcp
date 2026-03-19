@@ -226,6 +226,8 @@ curl -sS -D - "https://${RUNPOD_PROXY_HOST}/mcp?key=<api_key>" \
 
 This keeps the same pod and usually the same public Runpod proxy URL. Direct SSH port mappings may change if you later reset the pod, so rediscover those after any pod reset.
 
+For this binary-only rollout path, you do not need to wait for `container-release`. The `computer-mcp upgrade --version vX.Y.Z` command now fetches `install.sh` from the same release tag, so the upgrade path is pinned to the version you released instead of whatever happens to be on `main`.
+
 Only rebuild and redeploy the Runpod container image when the container environment changed. Examples:
 
 - `Dockerfile.runpod`

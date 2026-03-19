@@ -127,9 +127,12 @@ Preferred fast path for server-only changes:
 Why this works:
 
 - `computer-mcp upgrade` downloads the tagged release binaries
+- `computer-mcp upgrade --version vX.Y.Z` also fetches `install.sh` from the same release tag instead of `main`, so the binary rollout path is tag-pinned and reproducible
 - it preserves the existing Runpod pod config
 - it restarts the two process-mode daemons in place
 - it keeps the same pod ID and therefore the same Runpod proxy hostname
+
+For this fast path, you only need the binary `release` workflow to finish successfully. Do not wait for `container-release` unless the change actually touched the image/runtime layer.
 
 Use the image rebuild path only when the container environment itself changed. That includes:
 
@@ -141,6 +144,15 @@ Use the image rebuild path only when the container environment itself changed. T
 - template env/ports/storage assumptions
 
 In-place pod updates keep the same MCP URL if the same pod ID survives. Direct SSH public IP:port mappings may change after a reset, so always rediscover them after a pod reset.
+
+## Validation Baseline
+
+As of `v0.1.20`, this repo is back to a healthy local Rust gate baseline:
+
+- `cargo test`
+- `cargo clippy --all-targets -- -D warnings`
+
+Treat unexpected failures in those commands as real regressions unless you can prove they come from an unrelated in-flight branch.
 
 ## Security Notes
 
