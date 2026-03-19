@@ -194,6 +194,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn publish_pr_route_is_not_exposed_on_http_api() {
+        let app = test_router_with_service(ComputerService::new(test_config()));
+        let auth = format!("Bearer {TEST_API_KEY}");
+
+        let response = post_json(
+            &app,
+            "/v1/publish-pr",
+            json!({
+                "repo": "amxv/computer-mcp",
+                "title": "should-not-exist",
+                "body": "nope",
+            }),
+            Some(&auth),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
     async fn exec_command_http_reports_exited_and_running_states() {
         let app = test_router_with_service(ComputerService::new(test_config()));
         let auth = format!("Bearer {TEST_API_KEY}");

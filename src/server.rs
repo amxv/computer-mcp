@@ -296,6 +296,14 @@ mod tests {
         assert!(names.iter().any(|name| name == "exec_command"));
         assert!(names.iter().any(|name| name == "write_stdin"));
         assert!(names.iter().any(|name| name == "apply_patch"));
+        assert!(
+            names.iter().all(|name| name != "publish-pr"),
+            "publish-pr must not be exposed on remote MCP surface"
+        );
+        assert!(
+            names.iter().all(|name| name != "publish_pr"),
+            "publish_pr must not be exposed on remote MCP surface"
+        );
     }
 
     #[test]
