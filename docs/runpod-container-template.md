@@ -60,7 +60,7 @@ Relevant GitHub docs:
 
 ## How This Image Boots
 
-The image is based on `runpod/base:0.6.3-cpu`, which provides the Runpod Pod startup model.
+The image is based on `runpod/base:1.0.3-ubuntu2204`, which provides the Runpod Pod startup model.
 
 At container startup:
 
