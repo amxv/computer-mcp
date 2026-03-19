@@ -20,6 +20,25 @@ Container images:
 - `ghcr.io/amxv/computer-mcp` is the generic image built from [Dockerfile](Dockerfile)
 - `ghcr.io/amxv/computer-mcp-runpod` is the dedicated Runpod template image built from [Dockerfile.runpod](Dockerfile.runpod)
 
+## How It Works
+
+`computer-mcp` exposes a small remote coding surface over MCP so a model can control a Linux VPS the same way Codex-style agents control a local coding sandbox.
+
+At a high level:
+
+- `exec_command` starts a shell command on the VPS and returns output plus a `session_id` if the command is still running
+- `write_stdin` writes to or polls that running session, which makes interactive shells and long-running commands possible
+- `apply_patch` applies structured Codex-style patches to files without handing the model raw filesystem write primitives
+
+Those three tools are enough to simulate the core Codex workflow:
+
+1. inspect and run code with `exec_command`
+2. keep stateful terminal sessions alive with `write_stdin`
+3. make precise code edits with `apply_patch`
+4. rerun commands to validate the result
+
+That is the main purpose of this repository: give models a narrow remote execution interface that feels like a Codex environment, while keeping GitHub write access separated behind the local publisher daemon described in [docs/github-app-agent-auth.md](docs/github-app-agent-auth.md).
+
 ## What You Need
 
 - A Linux VPS

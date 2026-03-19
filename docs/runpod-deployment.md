@@ -197,6 +197,44 @@ Expected result:
 - `content-type: text/event-stream`
 - a valid `initialize` response body
 
+## 11. Fast Redeploy For Server-Only Releases
+
+Once a Runpod pod is already working, do not rebuild the full Runpod image for every `computer-mcp` code change.
+
+If the change is only in the Rust binaries, the preferred rollout is:
+
+1. cut a new tagged release such as `v0.1.20`
+2. wait for the GitHub `release` workflow to publish the Linux release artifact
+3. SSH to the existing pod as `root`
+4. run:
+
+```bash
+vps_ssh 'computer-mcp upgrade --version v0.1.20'
+```
+
+5. verify:
+
+```bash
+vps_ssh 'computer-mcp --version'
+vps_ssh 'computer-mcp status'
+curl "https://${RUNPOD_PROXY_HOST}/health"
+curl -sS -D - "https://${RUNPOD_PROXY_HOST}/mcp?key=<api_key>" \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"curl","version":"0.1"}}}'
+```
+
+This keeps the same pod and usually the same public Runpod proxy URL. Direct SSH port mappings may change if you later reset the pod, so rediscover those after any pod reset.
+
+Only rebuild and redeploy the Runpod container image when the container environment changed. Examples:
+
+- `Dockerfile.runpod`
+- `docker/runpod-bootstrap.sh`
+- `docker/runpod-run.sh`
+- system package / toolchain changes
+- SSH bootstrap or account setup changes
+- template-level env, port, or storage changes
+
 ## Important Runpod Notes
 
 1. Prefer the Runpod proxy hostname over the direct TCP URL for ChatGPT.
