@@ -135,6 +135,43 @@ If `COMPUTER_MCP_PUBLIC_HOST` is omitted and Runpod provides `RUNPOD_POD_ID`, th
 <pod-id>-8080.proxy.runpod.net
 ```
 
+## Repo Helper Script
+
+The repo includes an official-API helper at [scripts/runpod_api.py](../scripts/runpod_api.py).
+
+It talks directly to `https://rest.runpod.io/v1` instead of depending on `runpod-cli`.
+
+Common usage:
+
+```bash
+python3 scripts/runpod_api.py template create
+python3 scripts/runpod_api.py template update <template-id>
+python3 scripts/runpod_api.py template get <template-id>
+
+python3 scripts/runpod_api.py pod create
+python3 scripts/runpod_api.py pod get <pod-id>
+python3 scripts/runpod_api.py pod restart <pod-id>
+python3 scripts/runpod_api.py pod wait-ready <pod-id>
+python3 scripts/runpod_api.py pod verify <pod-id>
+```
+
+Configuration comes from environment variables.
+
+Most important values:
+
+- `RUNPOD_API_KEY`
+- `COMPUTER_MCP_API_KEY` or `COMPUTER_MCP_CONFIG_TOML`
+- `COMPUTER_MCP_READER_PRIVATE_KEY` or `COMPUTER_MCP_READER_PRIVATE_KEY_FILE`
+- `COMPUTER_MCP_PUBLISHER_PRIVATE_KEY` or `COMPUTER_MCP_PUBLISHER_PRIVATE_KEY_FILE`
+- `SSH_PUBLIC_KEY` or `SSH_PUBLIC_KEY_FILE`
+
+Convenience defaults:
+
+- `RUNPOD_API_KEY` falls back to the macOS keychain item named `RUNPOD_API_KEY`
+- reader and publisher PEMs fall back to the newest matching key files in `~/Downloads`
+- `SSH_PUBLIC_KEY` falls back to `~/.ssh/id_ed25519.pub`
+- the default image is `ghcr.io/amxv/computer-mcp-runpod:v<repo-version>`
+
 ## Creating The Template In Runpod
 
 Runpod templates are a combination of:
