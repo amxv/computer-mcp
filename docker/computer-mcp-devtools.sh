@@ -16,11 +16,13 @@ set_path_prepend "/usr/local/go/bin"
 
 if [[ -n "${HOME:-}" ]] && [[ "${HOME}" != "/nonexistent" ]]; then
   export CARGO_HOME="${CARGO_HOME:-${HOME}/.cargo}"
+  export BUN_INSTALL="${BUN_INSTALL:-${HOME}/.bun}"
   export PIPX_HOME="${PIPX_HOME:-${HOME}/.local/pipx}"
   export PIPX_BIN_DIR="${PIPX_BIN_DIR:-${HOME}/.local/bin}"
   export GOPATH="${GOPATH:-${HOME}/go}"
   export NPM_CONFIG_PREFIX="${NPM_CONFIG_PREFIX:-${HOME}/.npm-global}"
 
+  set_path_prepend "${BUN_INSTALL}/bin"
   set_path_prepend "${CARGO_HOME}/bin"
   set_path_prepend "${HOME}/.local/bin"
   set_path_prepend "${GOPATH}/bin"
