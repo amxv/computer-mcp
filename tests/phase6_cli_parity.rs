@@ -23,9 +23,7 @@ fn test_config(api_key: &str) -> Arc<Config> {
     })
 }
 
-async fn start_http_api(
-    config: Arc<Config>,
-) -> (SocketAddr, oneshot::Sender<()>, JoinHandle<()>) {
+async fn start_http_api(config: Arc<Config>) -> (SocketAddr, oneshot::Sender<()>, JoinHandle<()>) {
     computer_mcp::install_rustls_crypto_provider();
 
     let app = build_http_api_router(config.clone(), ComputerService::new(config));
@@ -46,9 +44,7 @@ async fn start_http_api(
     (addr, shutdown_tx, server)
 }
 
-async fn start_https_api(
-    config: Arc<Config>,
-) -> (SocketAddr, oneshot::Sender<()>, JoinHandle<()>) {
+async fn start_https_api(config: Arc<Config>) -> (SocketAddr, oneshot::Sender<()>, JoinHandle<()>) {
     computer_mcp::install_rustls_crypto_provider();
 
     let app = build_http_api_router(config.clone(), ComputerService::new(config));
@@ -118,7 +114,10 @@ async fn post_http_json<T: DeserializeOwned>(
         .expect("request should succeed");
 
     let status = response.status();
-    let bytes = response.bytes().await.expect("response bytes should be readable");
+    let bytes = response
+        .bytes()
+        .await
+        .expect("response bytes should be readable");
     assert!(
         status.is_success(),
         "http request failed with status {status}: {}",
@@ -358,8 +357,7 @@ async fn phase6_apply_patch_parity_service_http_and_cli_relative_paths() {
     let http_dir = tempdir().expect("http tempdir");
     let cli_dir = tempdir().expect("cli tempdir");
     let relative_file = "nested/phase6.txt";
-    let patch =
-        "*** Begin Patch\n*** Add File: nested/phase6.txt\n+phase6-patch\n*** End Patch\n";
+    let patch = "*** Begin Patch\n*** Add File: nested/phase6.txt\n+phase6-patch\n*** End Patch\n";
 
     let direct_output = direct_service
         .apply_patch(computer_mcp::protocol::ApplyPatchInput {
