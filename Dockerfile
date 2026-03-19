@@ -29,6 +29,7 @@ COPY src ./src
 COPY tests ./tests
 
 RUN cargo build --locked --release \
+      --bin computer \
       --bin computer-mcp \
       --bin computer-mcpd \
       --bin computer-mcp-prd
@@ -131,11 +132,13 @@ RUN curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal --default-too
     ln -sf /usr/bin/fdfind /usr/local/bin/fd && \
     mkdir -p /workspace /etc/computer-mcp /var/lib/computer-mcp
 
+COPY --from=builder /workspace/target/release/computer /usr/local/bin/computer
 COPY --from=builder /workspace/target/release/computer-mcp /usr/local/bin/computer-mcp
 COPY --from=builder /workspace/target/release/computer-mcpd /usr/local/bin/computer-mcpd
 COPY --from=builder /workspace/target/release/computer-mcp-prd /usr/local/bin/computer-mcp-prd
 
-RUN chmod 0755 /usr/local/bin/computer-mcp \
+RUN chmod 0755 /usr/local/bin/computer \
+               /usr/local/bin/computer-mcp \
                /usr/local/bin/computer-mcpd \
                /usr/local/bin/computer-mcp-prd
 
