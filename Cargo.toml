@@ -46,3 +46,4 @@ tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 
 [dev-dependencies]
 pretty_assertions = "1.4"
+tower = "0.5"
