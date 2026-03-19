@@ -396,12 +396,30 @@ fn build_upgrade_shell_args(version: &str, config: &Config) -> Vec<String> {
         shell_escape_single_quotes(version)
     );
 
+    if version != "latest" {
+        script.push_str(&format!(
+            "export COMPUTER_MCP_SOURCE_REF={}\n",
+            shell_escape_single_quotes(version)
+        ));
+    }
+
     if let Some(port) = config.http_bind_port {
         script.push_str(&format!("export COMPUTER_MCP_HTTP_BIND_PORT={port}\n"));
     }
 
-    script.push_str("curl -fsSL https://raw.githubusercontent.com/amxv/computer-mcp/main/scripts/install.sh | bash");
+    let installer_ref = upgrade_installer_ref(version);
+    let installer_url = format!(
+        "https://raw.githubusercontent.com/amxv/computer-mcp/{installer_ref}/scripts/install.sh"
+    );
+    script.push_str(&format!(
+        "curl -fsSL {} | bash",
+        shell_escape_single_quotes(&installer_url)
+    ));
     vec!["-lc".to_string(), script]
+}
+
+fn upgrade_installer_ref(version: &str) -> &str {
+    if version == "latest" { "main" } else { version }
 }
 
 fn shell_escape_single_quotes(value: &str) -> String {
@@ -1928,10 +1946,25 @@ mod tests {
         let args = build_upgrade_shell_args("v0.1.5", &config);
         assert_eq!(args[0], "-lc");
         assert!(args[1].contains("export COMPUTER_MCP_VERSION='v0.1.5'"));
+        assert!(args[1].contains("export COMPUTER_MCP_SOURCE_REF='v0.1.5'"));
         assert!(args[1].contains("export COMPUTER_MCP_HTTP_BIND_PORT=8080"));
         assert!(
             args[1].contains(
-                "curl -fsSL https://raw.githubusercontent.com/amxv/computer-mcp/main/scripts/install.sh | bash"
+                "curl -fsSL 'https://raw.githubusercontent.com/amxv/computer-mcp/v0.1.5/scripts/install.sh' | bash"
+            )
+        );
+    }
+
+    #[test]
+    fn build_upgrade_shell_args_latest_uses_main_installer_ref() {
+        let config = Config::default();
+
+        let args = build_upgrade_shell_args("latest", &config);
+        assert!(args[1].contains("export COMPUTER_MCP_VERSION='latest'"));
+        assert!(!args[1].contains("COMPUTER_MCP_SOURCE_REF"));
+        assert!(
+            args[1].contains(
+                "curl -fsSL 'https://raw.githubusercontent.com/amxv/computer-mcp/main/scripts/install.sh' | bash"
             )
         );
     }
