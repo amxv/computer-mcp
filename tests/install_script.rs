@@ -30,6 +30,9 @@ fn install_script_has_expected_structure() {
         "resolved_public_host()",
         "install_runtime_prerequisites()",
         "install_build_prerequisites()",
+        "resolve_release_asset_url()",
+        "server_archive_name=\"computer-mcp-${TARGET_TRIPLE}.tar.gz\"",
+        "[^\\\"]*/${server_archive_name}\\\"",
         "install_binaries_from_release()",
         "install_binaries_from_source()",
         "run_cli_install()",
@@ -53,6 +56,16 @@ fn install_script_has_expected_structure() {
             "install script missing snippet: {snippet}"
         );
     }
+}
+
+#[test]
+fn install_script_does_not_use_generic_target_triple_tarball_match() {
+    let script = std::fs::read_to_string(install_script_path()).expect("read install script");
+
+    assert!(
+        !script.contains("${TARGET_TRIPLE}[^\"]*\\.tar\\.gz"),
+        "install script should not select release assets via generic target triple tarball match"
+    );
 }
 
 #[test]
