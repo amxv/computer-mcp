@@ -1,11 +1,15 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::serve;
+use axum_server::Handle;
+use axum_server::tls_rustls::RustlsConfig;
 use computer_mcp::config::Config;
 use computer_mcp::http_api::{ApplyPatchOutput, build_http_api_router};
 use computer_mcp::protocol::{CommandStatus, ExecCommandInput, ToolOutput, WriteStdinInput};
 use computer_mcp::service::ComputerService;
+use rcgen::generate_simple_self_signed;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tempfile::tempdir;
@@ -37,6 +41,44 @@ async fn start_http_api(
             })
             .await
             .expect("server should run");
+    });
+
+    (addr, shutdown_tx, server)
+}
+
+async fn start_https_api(
+    config: Arc<Config>,
+) -> (SocketAddr, oneshot::Sender<()>, JoinHandle<()>) {
+    computer_mcp::install_rustls_crypto_provider();
+
+    let app = build_http_api_router(config.clone(), ComputerService::new(config));
+    let cert = generate_simple_self_signed(vec!["127.0.0.1".to_string()])
+        .expect("self-signed cert should generate");
+    let rustls = RustlsConfig::from_pem(
+        cert.cert.pem().into_bytes(),
+        cert.signing_key.serialize_pem().into_bytes(),
+    )
+    .await
+    .expect("rustls config should build");
+
+    let probe = std::net::TcpListener::bind("127.0.0.1:0").expect("bind probe listener");
+    let addr = probe.local_addr().expect("probe addr");
+    drop(probe);
+
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let handle = Handle::new();
+    let shutdown_handle = handle.clone();
+    tokio::spawn(async move {
+        let _ = shutdown_rx.await;
+        shutdown_handle.graceful_shutdown(Some(Duration::from_secs(0)));
+    });
+
+    let server = tokio::spawn(async move {
+        axum_server::bind_rustls(addr, rustls)
+            .handle(handle)
+            .serve(app.into_make_service())
+            .await
+            .expect("https server should run");
     });
 
     (addr, shutdown_tx, server)
@@ -88,6 +130,32 @@ async fn post_http_json<T: DeserializeOwned>(
 async fn stop_http_api(shutdown_tx: oneshot::Sender<()>, server: JoinHandle<()>) {
     let _ = shutdown_tx.send(());
     server.await.expect("server join should succeed");
+}
+
+#[tokio::test]
+async fn phase6_exec_command_cli_handles_self_signed_https_daemon() {
+    let api_key = "phase6-https-key";
+    let config = test_config(api_key);
+    let (addr, shutdown_tx, server) = start_https_api(config).await;
+    let base_url = format!("https://{addr}");
+
+    let cli_output: ToolOutput = run_computer_cli_json(vec![
+        "--url".to_string(),
+        base_url,
+        "--key".to_string(),
+        api_key.to_string(),
+        "exec-command".to_string(),
+        "printf 'phase6-https\\n'".to_string(),
+        "--yield-time-ms".to_string(),
+        "2000".to_string(),
+    ])
+    .await;
+
+    assert_eq!(cli_output.status, CommandStatus::Exited);
+    assert_eq!(cli_output.exit_code, Some(0));
+    assert!(cli_output.output.contains("phase6-https"));
+
+    stop_http_api(shutdown_tx, server).await;
 }
 
 #[tokio::test]
