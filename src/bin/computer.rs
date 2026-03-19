@@ -242,7 +242,9 @@ mod tests {
         }
     }
 
-    async fn spawn_test_http_api(api_key: &str) -> (String, oneshot::Sender<()>, tokio::task::JoinHandle<()>) {
+    async fn spawn_test_http_api(
+        api_key: &str,
+    ) -> (String, oneshot::Sender<()>, tokio::task::JoinHandle<()>) {
         let config = Arc::new(Config {
             api_key: api_key.to_string(),
             ..Config::default()
