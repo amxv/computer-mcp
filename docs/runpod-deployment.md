@@ -2,7 +2,7 @@
 
 Use this guide when the target host is a Runpod pod instead of a normal VPS.
 
-If you want a prebuilt Runpod image with the toolchains already installed, see [runpod-container-template.md](runpod-container-template.md).
+If you want a prebuilt Runpod image with the toolchains already installed, see [runpod-container-template.md](runpod-container-template.md). The dedicated Runpod image is published as `ghcr.io/amxv/computer-mcp-runpod`.
 
 Runpod is different in two ways that matter here:
 

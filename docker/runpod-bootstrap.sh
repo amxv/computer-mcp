@@ -4,52 +4,13 @@ set -euo pipefail
 CONFIG_PATH="${COMPUTER_MCP_CONFIG_PATH:-/etc/computer-mcp/config.toml}"
 READER_KEY_PATH="${COMPUTER_MCP_READER_KEY_PATH:-/etc/computer-mcp/reader/private-key.pem}"
 PUBLISHER_KEY_PATH="${COMPUTER_MCP_PUBLISHER_KEY_PATH:-/etc/computer-mcp/publisher/private-key.pem}"
-BOOT_LOG_PREFIX="[computer-mcp container]"
+BOOT_LOG_PREFIX="[computer-mcp runpod]"
 SERVICE_GROUP="${COMPUTER_MCP_SERVICE_GROUP:-computer-mcp}"
 AGENT_USER="${COMPUTER_MCP_AGENT_USER:-computer-mcp-agent}"
 PUBLISHER_USER="${COMPUTER_MCP_PUBLISHER_USER:-computer-mcp-publisher}"
 
 log() {
   printf '%s %s\n' "${BOOT_LOG_PREFIX}" "$*"
-}
-
-write_authorized_keys() {
-  local ssh_key="${SSH_PUBLIC_KEY:-${PUBLIC_KEY:-}}"
-
-  if [[ -z "${ssh_key}" ]]; then
-    log "no PUBLIC_KEY or SSH_PUBLIC_KEY provided; skipping SSH key injection"
-    return
-  fi
-
-  mkdir -p /root/.ssh
-  chmod 700 /root/.ssh
-
-  if [[ -f /root/.ssh/authorized_keys ]] && grep -Fqx "${ssh_key}" /root/.ssh/authorized_keys; then
-    log "ssh key already present in /root/.ssh/authorized_keys"
-  else
-    printf '%s\n' "${ssh_key}" >> /root/.ssh/authorized_keys
-    log "installed SSH public key for root access"
-  fi
-
-  chmod 600 /root/.ssh/authorized_keys
-}
-
-ensure_ssh_host_keys() {
-  mkdir -p /run/sshd
-
-  if [[ ! -f /etc/ssh/ssh_host_ed25519_key ]]; then
-    ssh-keygen -A
-  fi
-}
-
-start_sshd() {
-  if pgrep -x sshd >/dev/null 2>&1; then
-    log "sshd already running"
-    return
-  fi
-
-  /usr/sbin/sshd
-  log "started sshd"
 }
 
 ensure_process_mode_accounts() {
@@ -77,24 +38,6 @@ ensure_process_mode_accounts() {
       "${PUBLISHER_USER}"
     log "created publisher user ${PUBLISHER_USER}"
   fi
-}
-
-export_env_vars_for_shells() {
-  local env_file="/etc/profile.d/runpod-env.sh"
-
-  printenv \
-    | grep -E '^[A-Z_][A-Z0-9_]*=' \
-    | grep -vE '^(PUBLIC_KEY|SSH_PUBLIC_KEY)=' \
-    | awk -F= '
-        {
-          key = $1
-          value = substr($0, index($0, "=") + 1)
-          gsub(/["\\]/, "\\\\&", value)
-          printf("export %s=\"%s\"\n", key, value)
-        }
-      ' > "${env_file}"
-
-  chmod 0644 "${env_file}"
 }
 
 write_secret_file_from_env() {
@@ -190,7 +133,7 @@ bootstrap_computer_mcp_config() {
     install -d -m 0750 "$(dirname "${CONFIG_PATH}")"
     printf '%s\n' "${COMPUTER_MCP_CONFIG_TOML}" > "${CONFIG_PATH}"
     chmod 0640 "${CONFIG_PATH}"
-    chgrp computer-mcp "${CONFIG_PATH}" || true
+    chgrp "${SERVICE_GROUP}" "${CONFIG_PATH}" || true
     log "wrote computer-mcp config from COMPUTER_MCP_CONFIG_TOML to ${CONFIG_PATH}"
     return
   fi
@@ -229,9 +172,9 @@ reader_private_key_path = "${READER_KEY_PATH}"
 publisher_socket_path = "/var/lib/computer-mcp/publisher/run/computer-mcp-prd.sock"
 publisher_private_key_path = "${PUBLISHER_KEY_PATH}"
 publisher_app_id = ${COMPUTER_MCP_PUBLISHER_APP_ID}
-agent_user = "computer-mcp-agent"
-publisher_user = "computer-mcp-publisher"
-service_group = "computer-mcp"
+agent_user = "${AGENT_USER}"
+publisher_user = "${PUBLISHER_USER}"
+service_group = "${SERVICE_GROUP}"
 publisher_branch_prefix = "agent"
 publisher_max_bundle_bytes = 8388608
 publisher_max_title_chars = 240
@@ -245,7 +188,7 @@ installation_id = ${COMPUTER_MCP_PUBLISHER_INSTALLATION_ID}
 EOF
 
   chmod 0640 "${CONFIG_PATH}"
-  chgrp computer-mcp "${CONFIG_PATH}" || true
+  chgrp "${SERVICE_GROUP}" "${CONFIG_PATH}" || true
   log "wrote computer-mcp config to ${CONFIG_PATH}"
 }
 
@@ -259,6 +202,18 @@ config_is_startable() {
 
   [[ -f "${READER_KEY_PATH}" ]] || return 1
   [[ -f "${PUBLISHER_KEY_PATH}" ]] || return 1
+}
+
+derive_public_host() {
+  if [[ -n "${COMPUTER_MCP_PUBLIC_HOST:-}" ]]; then
+    printf '%s\n' "${COMPUTER_MCP_PUBLIC_HOST}"
+    return
+  fi
+
+  if [[ -n "${RUNPOD_POD_ID:-}" ]]; then
+    local http_bind_port="${COMPUTER_MCP_HTTP_BIND_PORT:-8080}"
+    printf '%s-%s.proxy.runpod.net\n' "${RUNPOD_POD_ID}" "${http_bind_port}"
+  fi
 }
 
 start_computer_mcp_if_ready() {
@@ -278,37 +233,31 @@ start_computer_mcp_if_ready() {
     return
   fi
 
+  ensure_service_path_permissions
+
   if ! computer-mcp start; then
-    log "computer-mcp start failed; container will stay up for SSH/debugging"
+    ensure_service_path_permissions
+    log "computer-mcp start failed; pod will stay up for SSH/debugging"
     return
   fi
 
-  if [[ -n "${COMPUTER_MCP_PUBLIC_HOST:-}" ]]; then
-    computer-mcp show-url --host "${COMPUTER_MCP_PUBLIC_HOST}" || true
+  local public_host
+  public_host="$(derive_public_host || true)"
+  if [[ -n "${public_host}" ]]; then
+    computer-mcp show-url --host "${public_host}" || true
   fi
 
+  ensure_service_path_permissions
   computer-mcp status || true
 }
 
 main() {
-  write_authorized_keys
-  ensure_ssh_host_keys
-  export_env_vars_for_shells
-  start_sshd
   ensure_process_mode_accounts
-
   write_secret_file_from_env "COMPUTER_MCP_READER_PRIVATE_KEY" "${READER_KEY_PATH}" "root:${SERVICE_GROUP}"
   write_secret_file_from_env "COMPUTER_MCP_PUBLISHER_PRIVATE_KEY" "${PUBLISHER_KEY_PATH}" "${PUBLISHER_USER}:${SERVICE_GROUP}"
-
   bootstrap_computer_mcp_config
   ensure_service_path_permissions
   start_computer_mcp_if_ready
-
-  if [[ "$#" -gt 0 ]]; then
-    exec "$@"
-  fi
-
-  exec tail -f /dev/null
 }
 
 main "$@"

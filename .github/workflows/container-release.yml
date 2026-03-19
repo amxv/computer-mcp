@@ -8,11 +8,23 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   build-and-push-container:
+    name: build-and-push-${{ matrix.id }}
     runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: generic
+            image_name: amxv/computer-mcp
+            dockerfile: ./Dockerfile
+            description: Generic computer-mcp dev/runtime image for standard Linux VPS and container environments.
+          - id: runpod
+            image_name: amxv/computer-mcp-runpod
+            dockerfile: ./Dockerfile.runpod
+            description: Runpod-native computer-mcp template image based on runpod/base with preinstalled dev toolchains and automatic computer-mcp bootstrap.
     permissions:
       contents: read
       packages: write
@@ -37,10 +49,11 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ matrix.image_name }}
           labels: |
-            org.opencontainers.image.description=Runpod-ready computer-mcp image with Node.js, Python, Go, Rust, git, GitHub CLI, SSH, and common Unix tools preinstalled.
+            org.opencontainers.image.description=${{ matrix.description }}
           tags: |
+            type=raw,value=latest
             type=ref,event=tag
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -51,7 +64,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ./Dockerfile
+          file: ${{ matrix.dockerfile }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -61,6 +74,6 @@ jobs:
       - name: Generate artifact attestation
         uses: actions/attest-build-provenance@v3
         with:
-          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-name: ${{ env.REGISTRY }}/${{ matrix.image_name }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
