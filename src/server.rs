@@ -251,15 +251,23 @@ fn key_from_query(query: Option<&str>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::ComputerMcpService;
+    use super::{ComputerMcpService, key_from_query};
     use crate::config::Config;
+    use crate::protocol::{ApplyPatchInput, CommandStatus, ExecCommandInput, WriteStdinInput};
     use crate::service::ComputerService;
+    use rmcp::handler::server::wrapper::Parameters;
     use rmcp::model::ToolAnnotations;
+    use std::fs;
     use std::sync::Arc;
+    use tempfile::tempdir;
+
+    fn test_config() -> Arc<Config> {
+        Arc::new(Config::default())
+    }
 
     #[test]
     fn registers_apply_patch_tool() {
-        let service = ComputerMcpService::new(ComputerService::new(Arc::new(Config::default())));
+        let service = ComputerMcpService::new(ComputerService::new(test_config()));
         let names: Vec<String> = service
             .tool_router
             .list_all()
@@ -274,7 +282,7 @@ mod tests {
 
     #[test]
     fn tools_have_expected_annotations() {
-        let service = ComputerMcpService::new(ComputerService::new(Arc::new(Config::default())));
+        let service = ComputerMcpService::new(ComputerService::new(test_config()));
 
         let by_name = |name: &str| {
             service
@@ -300,5 +308,165 @@ mod tests {
         assert_eq!(patch.read_only_hint, Some(true));
         assert_eq!(patch.destructive_hint, Some(false));
         assert_eq!(patch.open_world_hint, Some(false));
+    }
+
+    #[tokio::test]
+    async fn exec_command_mcp_parity_with_service() {
+        let config = test_config();
+        let direct = ComputerService::new(config.clone());
+        let mcp = ComputerMcpService::new(ComputerService::new(config));
+        let input = ExecCommandInput {
+            cmd: "printf 'phase2-exec\\n'".to_string(),
+            yield_time_ms: Some(2_000),
+            workdir: None,
+            timeout_ms: None,
+        };
+
+        let direct_output = direct
+            .exec_command(input.clone())
+            .await
+            .expect("direct service exec should succeed");
+        let mcp_output = mcp
+            .exec_command(Parameters(input))
+            .await
+            .expect("mcp exec should succeed")
+            .0;
+
+        assert_eq!(mcp_output.status, direct_output.status);
+        assert_eq!(mcp_output.exit_code, direct_output.exit_code);
+        assert_eq!(
+            mcp_output.termination_reason,
+            direct_output.termination_reason
+        );
+        assert!(mcp_output.output.contains("phase2-exec"));
+        assert!(direct_output.output.contains("phase2-exec"));
+    }
+
+    #[tokio::test]
+    async fn write_stdin_mcp_parity_with_service() {
+        let config = test_config();
+        let direct = ComputerService::new(config.clone());
+        let mcp = ComputerMcpService::new(ComputerService::new(config));
+        let shell_input = ExecCommandInput {
+            cmd: "bash --noprofile --norc".to_string(),
+            yield_time_ms: Some(50),
+            workdir: None,
+            timeout_ms: Some(60_000),
+        };
+
+        let direct_started = direct
+            .exec_command(shell_input.clone())
+            .await
+            .expect("direct shell should start");
+        let mcp_started = mcp
+            .exec_command(Parameters(shell_input))
+            .await
+            .expect("mcp shell should start")
+            .0;
+
+        let direct_session_id = direct_started
+            .session_id
+            .expect("direct shell should have a session id");
+        let mcp_session_id = mcp_started
+            .session_id
+            .expect("mcp shell should have a session id");
+
+        let direct_write = direct
+            .write_stdin(WriteStdinInput {
+                session_id: direct_session_id,
+                chars: Some("echo phase2-write\n".to_string()),
+                yield_time_ms: Some(500),
+                kill_process: Some(false),
+            })
+            .await
+            .expect("direct write should succeed");
+        let mcp_write = mcp
+            .write_stdin(Parameters(WriteStdinInput {
+                session_id: mcp_session_id,
+                chars: Some("echo phase2-write\n".to_string()),
+                yield_time_ms: Some(500),
+                kill_process: Some(false),
+            }))
+            .await
+            .expect("mcp write should succeed")
+            .0;
+
+        assert_eq!(mcp_write.status, direct_write.status);
+        assert_eq!(
+            mcp_write.termination_reason,
+            direct_write.termination_reason
+        );
+        assert_eq!(mcp_write.status, CommandStatus::Running);
+        assert!(mcp_write.output.contains("phase2-write"));
+        assert!(direct_write.output.contains("phase2-write"));
+
+        let _ = direct
+            .write_stdin(WriteStdinInput {
+                session_id: direct_session_id,
+                chars: Some("exit\n".to_string()),
+                yield_time_ms: Some(2_000),
+                kill_process: Some(false),
+            })
+            .await
+            .expect("direct shell should exit");
+        let _ = mcp
+            .write_stdin(Parameters(WriteStdinInput {
+                session_id: mcp_session_id,
+                chars: Some("exit\n".to_string()),
+                yield_time_ms: Some(2_000),
+                kill_process: Some(false),
+            }))
+            .await
+            .expect("mcp shell should exit");
+    }
+
+    #[tokio::test]
+    async fn apply_patch_mcp_parity_with_service() {
+        let config = test_config();
+        let direct = ComputerService::new(config.clone());
+        let mcp = ComputerMcpService::new(ComputerService::new(config));
+        let direct_dir = tempdir().expect("direct tempdir");
+        let mcp_dir = tempdir().expect("mcp tempdir");
+        let patch = "*** Begin Patch\n*** Add File: parity.txt\n+phase2-patch\n*** End Patch\n";
+
+        let direct_output = direct
+            .apply_patch(ApplyPatchInput {
+                patch: patch.to_string(),
+                workdir: direct_dir.path().to_string_lossy().to_string(),
+            })
+            .expect("direct apply_patch should succeed");
+        let mcp_output = mcp
+            .apply_patch(Parameters(ApplyPatchInput {
+                patch: patch.to_string(),
+                workdir: mcp_dir.path().to_string_lossy().to_string(),
+            }))
+            .await
+            .expect("mcp apply_patch should succeed");
+
+        assert!(direct_output.contains("Success. Updated the following files:"));
+        assert!(mcp_output.contains("Success. Updated the following files:"));
+        assert_eq!(
+            fs::read_to_string(direct_dir.path().join("parity.txt")).expect("read direct patch"),
+            "phase2-patch\n"
+        );
+        assert_eq!(
+            fs::read_to_string(mcp_dir.path().join("parity.txt")).expect("read mcp patch"),
+            "phase2-patch\n"
+        );
+    }
+
+    #[test]
+    fn key_from_query_extracts_key_value() {
+        assert_eq!(
+            key_from_query(Some("foo=1&key=expected-value&bar=2")),
+            Some("expected-value".to_string())
+        );
+    }
+
+    #[test]
+    fn key_from_query_rejects_missing_or_malformed_key() {
+        assert_eq!(key_from_query(None), None);
+        assert_eq!(key_from_query(Some("foo=1&bar=2")), None);
+        assert_eq!(key_from_query(Some("foo=1&key&bar=2")), None);
     }
 }
