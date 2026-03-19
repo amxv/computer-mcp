@@ -1,412 +1,253 @@
 # Computer Core + HTTP API + CLI Migration Spec
 
-Status: draft migration plan for implementation.
+Status: draft architecture spec.
 
 ## 1. Objective
 
-Refactor the repository so the actual remote-computer capabilities live in a transport-neutral core, while keeping the existing MCP deployment path intact and adding a new plain HTTP API plus a downloadable terminal client named `computer`.
+Refactor the repository so the three core remote-computer operations are transport-neutral while keeping the existing MCP surface intact and adding a first-party HTTP API plus a downloadable CLI binary named `computer`.
 
-The desired end state is:
+The intended end state is:
 
-1. `computer-mcpd` continues to run on the VPS and continues to expose `/mcp?key=...` for MCP clients.
-2. The same running daemon also exposes a stable HTTP API for non-MCP clients.
-3. A new binary named `computer` can be downloaded into another Linux container and can invoke the remote machine capabilities without the caller having to think about raw HTTP details.
-4. The core execution semantics remain identical regardless of whether the caller is an MCP client, the HTTP API, direct Rust tests, or the future CLI.
+1. `computer-mcpd` still exposes `/mcp?key=...` for existing MCP clients.
+2. The same daemon also exposes an HTTP API for the same three remote operations.
+3. A new `computer` CLI talks to that HTTP API instead of embedding MCP client behavior.
+4. Command/session semantics stay identical whether the caller is MCP, HTTP, direct Rust tests, or the CLI.
 
-## 2. Why This Refactor Is Worth Doing
+## 2. Product Boundary
 
-The current repository already contains the real computer-control primitives. The important observation is that those primitives are more valuable than MCP itself:
+The remote product surface for this migration is exactly these three operations:
 
-- `exec_command` provides remote process execution with PTY behavior and output capture.
-- `write_stdin` provides stateful session continuation and remote process interaction.
-- `apply_patch` provides structured file editing without exposing an unrestricted raw write API.
+- `exec_command`
+- `write_stdin`
+- `apply_patch`
 
-Those three capabilities are the actual product. MCP is only one packaging mechanism for them.
+`publish-pr` is intentionally outside that remote API boundary. It remains a local VPS capability implemented by the existing publisher daemon and is invoked through ordinary remote command execution when needed.
 
-The refactor should therefore make the codebase reflect the product truth:
+## 3. Current System Grounded In Code
 
-- the remote-computer core is the center of the architecture
-- MCP is one adapter
-- HTTP is another adapter
-- the `computer` terminal client is another adapter or client layer
+The current `main` branch already contains most of the core behavior that the migration needs:
 
-## 3. Current State Summary
+- `src/session.rs` is the authoritative implementation of PTY-backed process execution, session tracking, output truncation, idle timeout handling, process-group termination, live cwd reporting, and the running vs exited `ToolOutput` contract.
+- `src/apply_patch.rs` is already transport-neutral. It rewrites relative patch paths against `workdir`, validates that workdir when needed, and delegates the actual patch application to `codex_apply_patch`.
+- `src/protocol.rs` already defines transport-usable request models for `ExecCommandInput`, `WriteStdinInput`, and `ApplyPatchInput`, plus the shared `ToolOutput`, `CommandStatus`, and `TerminationReason` types.
+- `src/server.rs` currently constructs the shared daemon state and directly invokes `SessionManager` or `apply_patch` from MCP tool handlers. It also builds the Axum router, serves `/health`, nests `/mcp`, and applies query-string API-key auth to the MCP route.
+- `src/config.rs` already exposes one shared `api_key`, the normal TLS listener, and an optional `http_bind_port`, which means the daemon is already structured to serve the same Axum app on both HTTPS and optional plain HTTP.
+- `src/publisher.rs` is already isolated behind a local Unix socket and should stay isolated. Nothing in the current remote transport design requires exposing it over HTTP.
+- Packaging currently assumes three shipped binaries: `computer-mcp`, `computer-mcpd`, and `computer-mcp-prd`. That assumption exists in `Cargo.toml`, `.github/workflows/release.yml`, `scripts/install.sh`, `Dockerfile`, and `Dockerfile.runpod`.
 
-The current code already has a useful partial separation.
+## 4. Goals
 
-### 3.1 What Is Already Well Isolated
+- Extract a first-class service layer for `exec_command`, `write_stdin`, and `apply_patch`.
+- Keep MCP behavior, tool names, schemas, annotations, auth shape, and URL shape unchanged.
+- Expose the same operations through an HTTP API on the same daemon process.
+- Ship a thin `computer` CLI that wraps the HTTP API.
+- Preserve current session behavior, timeout behavior, cwd reporting, and patch behavior across all call paths.
+- Keep the current publisher isolation model and local Unix-socket flow intact.
 
-- `src/session.rs` contains the process and session engine.
-- `src/apply_patch.rs` wraps `codex-apply-patch` and resolves paths relative to `workdir`.
-- `src/publisher.rs` contains the local PR publishing flow.
-- `src/protocol.rs` already defines request and response structs that can be reused.
+## 5. Non-Goals
 
-### 3.2 What Is Still Too Coupled To MCP
+- Do not replace MCP with HTTP. Both transports must coexist.
+- Do not add a dedicated remote `publish-pr` API in the first pass.
+- Do not redesign the publisher daemon architecture.
+- Do not change the server-side operator workflow centered on `computer-mcp`.
+- Do not introduce HTTP-only computer semantics that diverge from the current MCP behavior.
 
-`src/server.rs` currently owns the shared state and calls `SessionManager` directly from MCP tool handlers. That means the service boundary still conceptually lives inside the MCP adapter.
+## 6. Required Architecture
 
-As a result:
-
-- MCP is currently the first-class transport
-- there is no transport-neutral service layer
-- adding a plain HTTP API would currently tempt duplication or awkward cross-calls
-
-### 3.3 Deployment Shape That Must Remain Supported
-
-The deployed VPS and Runpod shape must continue to work:
-
-- `computer-mcpd` remains the server daemon
-- `computer-mcp-prd` remains the local publisher daemon
-- `computer-mcp` remains the operator/admin CLI on the VPS
-- Runpod deployment continues to expose the public proxy URL and automatic bootstrap flow
-
-## 4. Goals And Non-Goals
-
-### 4.1 Goals
-
-- extract a first-class reusable execution service from the current MCP server wiring
-- keep MCP behavior and endpoint compatibility unchanged
-- add a plain HTTP API that maps closely to the same request and response model
-- add a new `computer` CLI binary that wraps the HTTP API
-- preserve existing session semantics, timeout behavior, and patch behavior across all surfaces
-- preserve the current `publish-pr` security model by continuing to execute it locally on the VPS
-
-### 4.2 Non-Goals
-
-- do not redesign the publisher daemon architecture in this migration
-- do not add a dedicated remote `publish-pr` protocol surface in the first pass
-- do not replace MCP with HTTP; both surfaces should exist together
-- do not change the current Runpod operational model beyond building and shipping the updated binaries
-
-## 5. Architectural End State
-
-The repository should be organized around one transport-neutral service layer.
-
-The core mental model should be:
+The repository should be organized around one transport-neutral service boundary:
 
 - the service owns computer semantics
-- MCP maps tool invocations into the service
-- HTTP maps JSON requests into the service
-- the `computer` client maps terminal UX into HTTP requests
+- MCP adapts tool calls into the service
+- HTTP adapts JSON requests into the service
+- the `computer` CLI adapts terminal UX into HTTP requests
 
-There should be exactly one authoritative implementation of:
+There must be exactly one authoritative implementation of:
 
 - session allocation and lookup
 - PTY-backed command execution
 - output buffering and truncation
 - idle timeout and termination behavior
+- live cwd reporting
 - patch application and `workdir` resolution
 
-If an MCP caller and an HTTP caller send the same logical request, they should receive the same logical result.
+`computer-mcpd` remains the daemon entrypoint. The migration is an internal architecture change plus one new client surface, not a server replacement.
 
-## 6. Proposed Module Layout
+## 7. Module Responsibilities
 
-The recommended target layout is:
+### 7.1 `src/protocol.rs`
 
-- `src/protocol.rs`
-- `src/session.rs`
-- `src/apply_patch.rs`
-- `src/publisher.rs`
-- `src/service.rs` new
-- `src/server.rs` reduced to MCP adapter responsibilities
-- `src/http_api.rs` new
-- `src/client.rs` optional shared HTTP client helper for the new CLI
+This remains the home for transport-neutral request and response types.
 
-### 6.1 `src/protocol.rs`
-
-This file should remain the home of transport-neutral request and response structs.
-
-Existing types can largely remain in place:
+The existing request structs should remain the canonical input models:
 
 - `ExecCommandInput`
 - `WriteStdinInput`
 - `ApplyPatchInput`
-- `CommandStatus`
-- `TerminationReason`
-- `ToolOutput`
 
-An optional cleanup would be to rename `ToolOutput` to something transport-neutral such as `CommandOutput`, but that rename is not required for the migration to succeed.
+The existing `ToolOutput`, `CommandStatus`, and `TerminationReason` remain the canonical command/session result model. If HTTP-specific wrapper structs are needed for JSON ergonomics, they should be minimal and should not change the underlying semantics.
 
-### 6.2 `src/service.rs`
+### 7.2 `src/service.rs`
 
-This new module should become the center of the runtime.
+Add a new service module as the center of the runtime.
 
-Suggested responsibilities:
+Its responsibilities should be:
 
-- owns the shared runtime state used by computer operations
-- owns or references the `SessionManager`
-- exposes async methods for `exec_command`, `write_stdin`, and `apply_patch`
-- is directly usable from tests without MCP or HTTP involved
+- own or reference the shared runtime state needed for the three core operations
+- expose async methods for `exec_command`, `write_stdin`, and `apply_patch`
+- hide the direct use of `SessionManager` and `apply_patch::apply_patch` from transport adapters
+- remain directly usable from unit and integration tests without booting MCP or HTTP
 
-The service should not know whether a request originated from MCP, HTTP, or a test.
+The service must not know whether a request originated from MCP, HTTP, or a CLI.
 
-### 6.3 `src/server.rs`
+### 7.3 `src/server.rs`
 
-`src/server.rs` should become an MCP adapter only.
+`src/server.rs` should become the daemon wiring and transport composition layer.
 
-It should:
+Its responsibilities should be:
 
-- instantiate the shared service object
-- translate MCP tool invocations into service method calls
-- preserve the existing tool names and MCP annotations
-- preserve the existing `/mcp?key=...` behavior
+- construct the shared service instance
+- construct the Axum router
+- preserve `/health`
+- preserve `/mcp?key=...`
+- add the new HTTP routes
+- apply transport-specific auth middleware
+- keep listener startup and shutdown behavior unchanged
 
-It should not contain the canonical business logic for command execution or patch application.
+It should no longer be the canonical home of computer-operation logic.
 
-### 6.4 `src/http_api.rs`
+### 7.4 `src/client.rs`
 
-This new module should expose a plain JSON API backed by the same service object.
+Add a small shared HTTP client helper if it materially reduces duplication between CLI commands and future transport tests.
 
-Its purpose is not to invent new semantics. Its purpose is to expose the same semantics through a simpler client surface than MCP.
-
-### 6.5 `src/client.rs`
-
-If useful, add a small shared HTTP client helper that can be reused by the `computer` CLI binary and future internal tests.
-
-The client helper should:
+The helper should:
 
 - own base URL and auth configuration
-- serialize request structs from `protocol.rs`
-- deserialize shared response structs from `protocol.rs`
-- centralize HTTP error handling and retry-free request execution
+- serialize request structs from `src/protocol.rs`
+- deserialize the shared response payloads
+- centralize HTTP error handling
 
-## 7. HTTP API Contract
+### 7.5 `src/bin/computer.rs`
 
-The HTTP API should live beside the MCP endpoint on the same daemon.
+Add a new binary named `computer`.
 
-Suggested routes:
+It should remain a thin client:
 
-- `GET /health`
-- `GET /v1/handshake`
+- no embedded MCP transport
+- no VPS-only service-management commands
+- no direct publisher access
+- only the three remote computer operations plus convenience connection commands
+
+## 8. Transport Contracts
+
+### 8.1 MCP Contract
+
+The MCP contract stays stable:
+
+- route remains `/mcp`
+- auth remains query-string `key=<api_key>`
+- tool names remain `exec_command`, `write_stdin`, and `apply_patch`
+- tool annotations remain unchanged
+- request and response semantics remain unchanged
+
+### 8.2 HTTP Contract
+
+The HTTP API lives on the same daemon and the same Axum app as the MCP route.
+
+The first-pass route set should be:
+
 - `POST /v1/exec-command`
 - `POST /v1/write-stdin`
 - `POST /v1/apply-patch`
 
-The service should continue to expose `/mcp` exactly as it does today.
+`GET /health` remains available as the daemon health endpoint.
 
-### 7.1 Auth Model
+HTTP requests should reuse the existing input structs from `src/protocol.rs`. HTTP responses must preserve the same semantic meaning currently exposed by the direct Rust call path and the MCP tool path, especially for:
 
-Do not change the existing MCP query-string auth model.
+- `status`
+- `cwd`
+- `session_id`
+- `exit_code`
+- `termination_reason`
+- output text, including timeout and kill notices
 
-- MCP remains `GET/POST /mcp?key=<api_key>` according to current behavior.
+### 8.3 Auth Contract
 
-For the new HTTP API, use header-based auth instead of query-string auth.
+The daemon should continue to use the single configured `api_key`.
 
-Recommended shape:
+The transport-specific auth model should be:
 
-- `Authorization: Bearer <api_key>`
+- MCP: `?key=<api_key>`
+- HTTP: `Authorization: Bearer <api_key>`
 
-Reasons:
+The HTTP API should not introduce a second secret or a second auth configuration path.
 
-- cleaner CLI ergonomics
-- fewer accidental secrets in shell history and logs
-- no impact on existing MCP compatibility
+## 9. CLI Contract
 
-### 7.2 Payload Model
+The new binary is named `computer`.
 
-The HTTP API should reuse the same Rust structs already used by the server logic.
+It should support these remote operations directly:
 
-- `POST /v1/exec-command` accepts `ExecCommandInput` and returns the same output shape used today.
-- `POST /v1/write-stdin` accepts `WriteStdinInput` and returns the same output shape used today.
-- `POST /v1/apply-patch` accepts `ApplyPatchInput` and returns the patch result string.
-
-This is important because the HTTP surface should be a transport change, not a semantic fork.
-
-## 8. `computer` CLI Contract
-
-The new binary should be named `computer`.
-
-It should be designed as a thin terminal wrapper over the HTTP API, not as an embedded MCP client.
-
-The CLI should preserve the same three core remote operations and make them easy for both humans and models to invoke. In particular, the CLI should not force callers to persist local state before they can do useful work.
-
-Recommended commands:
-
-- `computer connect <url>`
 - `computer exec-command ...`
 - `computer write-stdin ...`
 - `computer apply-patch ...`
+
+It should also support convenience commands:
+
+- `computer connect ...`
 - `computer disconnect`
 
-### 8.1 CLI Usage Model
+Connection resolution order must be:
 
-The CLI should support three equivalent ways to supply connection details, in this priority order:
-
-1. explicit flags
+1. explicit `--url` / `--key` flags
 2. environment variables
-3. a persisted profile created by `connect`
+3. saved connection profile from `connect`
 
-This matters because restricted model environments are often ephemeral. The CLI therefore must work well even when no prior local state exists.
+The environment-variable interface should be:
 
-The preferred stateless form should be:
+- `COMPUTER_URL`
+- `COMPUTER_KEY`
 
-```bash
-computer --url https://host.example --key <api_key> exec-command --cmd 'pwd'
-computer --url https://host.example --key <api_key> write-stdin --session-id 123 --chars 'ls\n'
-computer --url https://host.example --key <api_key> apply-patch --workdir /workspace --patch-file patch.txt
-```
+`connect` and `disconnect` are convenience only. The CLI must remain fully usable in stateless environments where no local profile exists.
 
-Environment variable fallback should also be supported:
+The saved profile can remain intentionally simple in the first pass:
 
-```bash
-export COMPUTER_URL=https://host.example
-export COMPUTER_KEY=<api_key>
+- a single current target
+- user-scoped storage
+- no multi-profile management requirement
 
-computer exec-command --cmd 'pwd'
-computer write-stdin --session-id 123 --chars 'ls\n'
-computer apply-patch --workdir /workspace --patch-file patch.txt
-```
+## 10. Compatibility Invariants
 
-`connect` should remain as a convenience command that saves connection metadata locally so the caller does not need to repeat URL and key on every invocation.
+The migration is only acceptable if these invariants remain true:
 
-`disconnect` should remove or disable that stored profile.
+- the same logical request produces the same logical result regardless of whether it enters through MCP, HTTP, or direct service tests
+- `src/session.rs` remains the source of truth for command/session behavior until any behavior is deliberately refactored into a new service module without semantic change
+- `src/apply_patch.rs` remains the source of truth for patch path rewriting and application semantics until any behavior is deliberately refactored into a new service module without semantic change
+- `publish-pr` remains local to the VPS and is not exposed as a new remote API
+- the existing server install and upgrade flows continue to work after the new client binary is introduced
 
-The connected form should look like:
+## 11. Packaging And Distribution Requirements
 
-```bash
-computer connect --url https://host.example --key <api_key>
-computer exec-command --cmd 'pwd'
-computer write-stdin --session-id 123 --chars 'ls\n'
-computer apply-patch --workdir /workspace --patch-file patch.txt
-computer disconnect
-```
+The project needs a downloadable `computer` client binary without regressing existing VPS install behavior.
 
-In other words, `connect` / `disconnect` are convenience features, not the only intended way to use the client.
+That means the implementation must account for these current codebase realities:
 
-The saved profile should be intentionally simple. A single current-target config is enough for the first pass.
+- release packaging currently enumerates binaries explicitly
+- `scripts/install.sh` currently locates a release archive by target triple and expects the server archive contents
+- both Dockerfiles explicitly build and copy the current server-side binaries
 
-### 8.2 `publish-pr`
+The new client packaging must therefore be introduced in a way that does not break:
 
-Do not add a dedicated remote HTTP `publish-pr` endpoint in this migration.
-
-The intended model is:
-
-- keep `publish-pr` local to the VPS
-- run it through remote `exec_command` when needed
-- preserve the current publisher-daemon and Unix-socket flow on the VPS
-
-That means the three remote computer primitives remain the true API surface, and `publish-pr` remains an ordinary command executed on the target host.
-
-## 9. Migration Sequence
-
-The implementation should happen in ordered phases so behavior stays stable while the refactor lands.
-
-### Phase 1: Introduce The Shared Service Layer
-
-- add `src/service.rs`
-- move the shared runtime state and the `SessionManager` ownership there
-- expose service methods that accept the existing protocol structs
-- keep behavior identical to current MCP behavior
-
-This phase should not yet change the public HTTP or MCP surface.
-
-### Phase 2: Make MCP Call The Shared Service
-
-- update `src/server.rs` so MCP handlers call the new service object
-- keep existing tool names and annotations unchanged
-- keep `/mcp?key=...` unchanged
-
-At the end of this phase, the MCP adapter should be thin.
-
-### Phase 3: Add The HTTP API
-
-- add `src/http_api.rs`
-- mount the HTTP routes on the existing Axum app beside `/mcp`
-- reuse the same service object and the same protocol structs
-- add header-based auth middleware for the new routes
-
-At the end of this phase, the daemon should serve both transports from the same process.
-
-### Phase 4: Add The `computer` Client Binary
-
-- add a new binary target for `computer`
-- add CLI parsing for connect, disconnect, exec-command, write-stdin, and apply-patch
-- use the HTTP API rather than embedding MCP client behavior
-- optionally add a shared `src/client.rs` helper for request execution
-
-At the end of this phase, a separate Linux container should be able to download `computer` and operate the VPS over HTTP.
-
-### Phase 5: Package And Ship
-
-- include the new binary in release artifacts
-- update any installer or release workflows that enumerate shipped binaries
-- update `Dockerfile.runpod` so the Runpod image includes the updated daemon and the new `computer` binary
-- update docs to mention both `/mcp` and `/v1/...`
-
-## 10. Test Plan
-
-### 10.1 Service-Layer Tests
-
-Add tests that hit the service layer directly with no transport involved.
-
-These tests should verify:
-
-- `exec_command` returns running vs exited states correctly
-- `write_stdin` continues sessions correctly
-- idle timeout semantics remain unchanged
-- output truncation remains unchanged
-- `apply_patch` behavior remains unchanged for relative and absolute paths
-
-### 10.2 MCP Compatibility Tests
-
-Existing MCP-facing tests should continue to pass with minimal changes.
-
-Add or preserve tests proving:
-
-- the three tool names remain present
-- handler schemas remain correct
-- existing MCP clients still see the same tool contract
-
-### 10.3 HTTP API Tests
-
-Add HTTP integration tests proving:
-
-- auth succeeds with the configured bearer token
-- auth fails without or with incorrect credentials
-- `POST /v1/exec-command` returns the expected running or exited shape
-- `POST /v1/write-stdin` continues an existing session correctly
-- `POST /v1/apply-patch` behaves identically to the service and MCP paths
-
-### 10.4 CLI Tests
-
-Add focused tests for the `computer` binary where practical.
-
-The highest-value checks are:
-
-- config persistence for `connect` and `disconnect`
-- stateless invocation with `--url` and `--key`
-- human-readable error messaging when the server is unreachable or unauthorized
-
-## 11. Deployment And Runpod Implications
-
-This refactor fits the current Runpod model well because the pod already exposes a stable public HTTP proxy hostname and already starts the daemon automatically.
-
-Operational implications should be kept intentionally small:
-
-- the daemon continues to bind the existing MCP endpoint
-- the same daemon also serves `/v1/...`
-- Runpod bootstrap remains automatic
-- image updates remain the same basic process they are today
-
-In other words, this should be a code architecture change, not an operator workflow rewrite.
+- tagged server installs via `scripts/install.sh`
+- `computer-mcp upgrade`
+- existing container image builds
 
 ## 12. Acceptance Criteria
 
 This migration is complete when all of the following are true:
 
-1. `computer-mcpd` still exposes the existing MCP endpoint and current MCP clients continue to work.
-2. The daemon also exposes a documented HTTP API for the three core computer primitives.
-3. The HTTP API and MCP surface both route through the same shared service layer.
-4. The `computer` CLI can connect to a running VPS instance and invoke `exec-command`, `write-stdin`, and `apply-patch` without the caller manually crafting HTTP requests.
-5. `publish-pr` remains executable on the VPS through the normal command path rather than requiring a new dedicated remote API.
-6. Runpod deployment still works through the existing image and bootstrap model with only minimal packaging updates.
-
-## 13. Implementation Notes For The Coding Pass
-
-- start by extracting behavior, not renaming everything at once
-- preserve the existing protocol structs wherever practical to reduce migration risk
-- keep the MCP adapter intentionally thin
-- avoid inventing HTTP-only semantics
-- land the refactor in phases so MCP compatibility can be checked after each stage
-
-The safest way to implement this is to make the internals more modular first, then add the new surfaces second.
+1. Existing MCP clients continue to work against `/mcp?key=...` without contract changes.
+2. `computer-mcpd` also exposes an HTTP API for `exec_command`, `write_stdin`, and `apply_patch`.
+3. MCP and HTTP both route into the same transport-neutral service layer.
+4. A downloadable `computer` CLI can invoke the three core remote operations over HTTP using flags, environment variables, or an optional saved connection.
+5. `publish-pr` remains a local VPS capability and is not exposed as a dedicated remote API.
+6. Existing server release, install, and image flows remain functional after the client binary is added.
