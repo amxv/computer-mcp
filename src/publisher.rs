@@ -707,16 +707,18 @@ mod tests {
 
     #[test]
     fn validate_publish_request_rejects_oversize_fields() {
-        let mut cfg = Config::default();
-        cfg.publisher_max_title_chars = 5;
-        cfg.publisher_max_body_chars = 5;
-        cfg.publisher_max_bundle_bytes = 4;
-        cfg.publisher_targets = vec![PublishTarget {
-            id: "repo".to_string(),
-            repo: "owner/repo".to_string(),
-            default_base: "main".to_string(),
-            installation_id: 1,
-        }];
+        let cfg = Config {
+            publisher_max_title_chars: 5,
+            publisher_max_body_chars: 5,
+            publisher_max_bundle_bytes: 4,
+            publisher_targets: vec![PublishTarget {
+                id: "repo".to_string(),
+                repo: "owner/repo".to_string(),
+                default_base: "main".to_string(),
+                installation_id: 1,
+            }],
+            ..Config::default()
+        };
 
         let err = validate_publish_request(
             &cfg,

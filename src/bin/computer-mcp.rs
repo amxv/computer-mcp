@@ -674,10 +674,10 @@ fn ensure_stack_config_ready(config: &Config) -> Result<()> {
 }
 
 fn ensure_http_listener_ready_for_start(config: &Config) -> Result<()> {
-    if let Some(port) = config.http_bind_port {
-        if port == config.bind_port {
-            bail!("http_bind_port must differ from bind_port");
-        }
+    if let Some(port) = config.http_bind_port
+        && port == config.bind_port
+    {
+        bail!("http_bind_port must differ from bind_port");
     }
 
     Ok(())
@@ -1259,17 +1259,6 @@ fn build_main_status_lines(config: &Config) -> Result<Vec<String>> {
     }
 }
 
-fn print_process_status_summary(config: &Config) {
-    match build_process_status_lines(config, detect_public_ip(), process_mode_state(config)) {
-        Ok(lines) => {
-            for line in lines {
-                println!("{line}");
-            }
-        }
-        Err(err) => eprintln!("warning: failed to build process mode status: {err}"),
-    }
-}
-
 fn publisher_process_mode_state(config: &Config) -> Result<ProcessModeState> {
     match read_publisher_pid(config)? {
         Some(pid) if pid_is_running(pid) => Ok(ProcessModeState::Running(pid)),
@@ -1569,12 +1558,6 @@ fn parse_systemctl_show(raw: &str) -> BTreeMap<String, String> {
     }
 
     values
-}
-
-fn print_status_summary(raw: &str, config: &Config) {
-    for line in build_status_summary_lines(raw, config, detect_public_ip()) {
-        println!("{line}");
-    }
 }
 
 fn build_status_summary_lines(
@@ -1940,8 +1923,10 @@ mod tests {
 
     #[test]
     fn build_upgrade_shell_args_include_requested_version_and_http_port() {
-        let mut config = Config::default();
-        config.http_bind_port = Some(8080);
+        let config = Config {
+            http_bind_port: Some(8080),
+            ..Config::default()
+        };
 
         let args = build_upgrade_shell_args("v0.1.5", &config);
         assert_eq!(args[0], "-lc");
@@ -2023,8 +2008,10 @@ mod tests {
 
     #[test]
     fn state_root_for_config_uses_tls_parent_directory() {
-        let mut config = Config::default();
-        config.tls_cert_path = "/custom/state/tls/cert.pem".to_string();
+        let config = Config {
+            tls_cert_path: "/custom/state/tls/cert.pem".to_string(),
+            ..Config::default()
+        };
 
         assert_eq!(
             state_root_for_config(&config),
@@ -2105,14 +2092,16 @@ mod tests {
     #[test]
     fn build_status_summary_lines_includes_network_and_tls_details() {
         let raw = "ActiveState=active\nSubState=running\nUnitFileState=enabled\nExecMainStatus=0\n";
-        let mut config = Config::default();
-        config.bind_host = "0.0.0.0".to_string();
-        config.bind_port = 8443;
-        config.http_bind_port = Some(8080);
-        config.api_key = "abc123".to_string();
-        config.tls_mode = "self_signed".to_string();
-        config.tls_cert_path = "/var/lib/computer-mcp/tls/cert.pem".to_string();
-        config.tls_key_path = "/var/lib/computer-mcp/tls/key.pem".to_string();
+        let config = Config {
+            bind_host: "0.0.0.0".to_string(),
+            bind_port: 8443,
+            http_bind_port: Some(8080),
+            api_key: "abc123".to_string(),
+            tls_mode: "self_signed".to_string(),
+            tls_cert_path: "/var/lib/computer-mcp/tls/cert.pem".to_string(),
+            tls_key_path: "/var/lib/computer-mcp/tls/key.pem".to_string(),
+            ..Config::default()
+        };
 
         let lines = build_status_summary_lines(
             raw,
@@ -2131,14 +2120,16 @@ mod tests {
 
     #[test]
     fn build_process_status_lines_includes_process_mode_details() {
-        let mut config = Config::default();
-        config.bind_host = "0.0.0.0".to_string();
-        config.bind_port = 9443;
-        config.http_bind_port = Some(8080);
-        config.api_key = "abc123".to_string();
-        config.tls_mode = "self_signed".to_string();
-        config.tls_cert_path = "/var/lib/computer-mcp/tls/cert.pem".to_string();
-        config.tls_key_path = "/var/lib/computer-mcp/tls/key.pem".to_string();
+        let config = Config {
+            bind_host: "0.0.0.0".to_string(),
+            bind_port: 9443,
+            http_bind_port: Some(8080),
+            api_key: "abc123".to_string(),
+            tls_mode: "self_signed".to_string(),
+            tls_cert_path: "/var/lib/computer-mcp/tls/cert.pem".to_string(),
+            tls_key_path: "/var/lib/computer-mcp/tls/key.pem".to_string(),
+            ..Config::default()
+        };
 
         let lines = build_process_status_lines(
             &config,
@@ -2184,9 +2175,11 @@ mod tests {
 
     #[test]
     fn ensure_http_listener_ready_rejects_same_port_as_https() {
-        let mut config = Config::default();
-        config.bind_port = 443;
-        config.http_bind_port = Some(443);
+        let config = Config {
+            bind_port: 443,
+            http_bind_port: Some(443),
+            ..Config::default()
+        };
 
         let err = ensure_http_listener_ready_for_start(&config).expect_err("should fail");
         assert!(
@@ -2198,10 +2191,12 @@ mod tests {
     #[test]
     fn build_status_summary_lines_notes_start_when_tls_files_missing() {
         let raw = "ActiveState=inactive\nSubState=dead\nUnitFileState=enabled\nExecMainStatus=1\n";
-        let mut config = Config::default();
         let dir = tempdir().expect("tempdir");
-        config.tls_cert_path = dir.path().join("missing-cert.pem").display().to_string();
-        config.tls_key_path = dir.path().join("missing-key.pem").display().to_string();
+        let config = Config {
+            tls_cert_path: dir.path().join("missing-cert.pem").display().to_string(),
+            tls_key_path: dir.path().join("missing-key.pem").display().to_string(),
+            ..Config::default()
+        };
 
         let lines = build_status_summary_lines(raw, &config, None);
         let joined = lines.join("\n");
@@ -2218,9 +2213,11 @@ mod tests {
         let key = dir.path().join("key.pem");
         fs::write(&cert, "cert").expect("write cert");
 
-        let mut config = Config::default();
-        config.tls_cert_path = cert.display().to_string();
-        config.tls_key_path = key.display().to_string();
+        let config = Config {
+            tls_cert_path: cert.display().to_string(),
+            tls_key_path: key.display().to_string(),
+            ..Config::default()
+        };
         assert!(!tls_artifacts_exist(&config));
 
         fs::write(&key, "key").expect("write key");
@@ -2233,9 +2230,11 @@ mod tests {
         let cert_path = dir.path().join("cert.pem");
         let key_path = dir.path().join("key.pem");
 
-        let mut config = Config::default();
-        config.tls_cert_path = cert_path.display().to_string();
-        config.tls_key_path = key_path.display().to_string();
+        let config = Config {
+            tls_cert_path: cert_path.display().to_string(),
+            tls_key_path: key_path.display().to_string(),
+            ..Config::default()
+        };
 
         generate_self_signed_certificate(&config, IpAddr::V6(Ipv6Addr::LOCALHOST))
             .expect("generate self signed cert");
