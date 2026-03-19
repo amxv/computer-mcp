@@ -218,6 +218,8 @@ The new binary should be named `computer`.
 
 It should be designed as a thin terminal wrapper over the HTTP API, not as an embedded MCP client.
 
+The CLI should preserve the same three core remote operations and make them easy for both humans and models to invoke. In particular, the CLI should not force callers to persist local state before they can do useful work.
+
 Recommended commands:
 
 - `computer connect <url>`
@@ -226,15 +228,54 @@ Recommended commands:
 - `computer apply-patch ...`
 - `computer disconnect`
 
-`connect` should save connection metadata locally, such as base URL, API key, and optional TLS settings.
+### 8.1 CLI Usage Model
+
+The CLI should support three equivalent ways to supply connection details, in this priority order:
+
+1. explicit flags
+2. environment variables
+3. a persisted profile created by `connect`
+
+This matters because restricted model environments are often ephemeral. The CLI therefore must work well even when no prior local state exists.
+
+The preferred stateless form should be:
+
+```bash
+computer --url https://host.example --key <api_key> exec-command --cmd 'pwd'
+computer --url https://host.example --key <api_key> write-stdin --session-id 123 --chars 'ls\n'
+computer --url https://host.example --key <api_key> apply-patch --workdir /workspace --patch-file patch.txt
+```
+
+Environment variable fallback should also be supported:
+
+```bash
+export COMPUTER_URL=https://host.example
+export COMPUTER_KEY=<api_key>
+
+computer exec-command --cmd 'pwd'
+computer write-stdin --session-id 123 --chars 'ls\n'
+computer apply-patch --workdir /workspace --patch-file patch.txt
+```
+
+`connect` should remain as a convenience command that saves connection metadata locally so the caller does not need to repeat URL and key on every invocation.
 
 `disconnect` should remove or disable that stored profile.
 
-The CLI should also support stateless execution for model environments that do not want to persist config:
+The connected form should look like:
 
-- `computer --url <url> --key <key> exec-command ...`
+```bash
+computer connect --url https://host.example --key <api_key>
+computer exec-command --cmd 'pwd'
+computer write-stdin --session-id 123 --chars 'ls\n'
+computer apply-patch --workdir /workspace --patch-file patch.txt
+computer disconnect
+```
 
-### 8.1 `publish-pr`
+In other words, `connect` / `disconnect` are convenience features, not the only intended way to use the client.
+
+The saved profile should be intentionally simple. A single current-target config is enough for the first pass.
+
+### 8.2 `publish-pr`
 
 Do not add a dedicated remote HTTP `publish-pr` endpoint in this migration.
 
