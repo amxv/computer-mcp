@@ -7,6 +7,8 @@ PUBLISHER_KEY_PATH="${COMPUTER_MCP_PUBLISHER_KEY_PATH:-/etc/computer-mcp/publish
 BOOT_LOG_PREFIX="[computer-mcp runpod]"
 SERVICE_GROUP="${COMPUTER_MCP_SERVICE_GROUP:-computer-mcp}"
 AGENT_USER="${COMPUTER_MCP_AGENT_USER:-computer-mcp-agent}"
+AGENT_HOME="${COMPUTER_MCP_AGENT_HOME:-/home/${AGENT_USER}}"
+AGENT_SHELL="${COMPUTER_MCP_AGENT_SHELL:-/bin/bash}"
 PUBLISHER_USER="${COMPUTER_MCP_PUBLISHER_USER:-computer-mcp-publisher}"
 
 log() {
@@ -19,24 +21,66 @@ ensure_process_mode_accounts() {
     log "created service group ${SERVICE_GROUP}"
   fi
 
+  ensure_agent_user
+  ensure_publisher_user
+  ensure_agent_dev_environment
+}
+
+ensure_agent_user() {
   if ! id -u "${AGENT_USER}" >/dev/null 2>&1; then
     useradd --system \
-      --no-create-home \
-      --home-dir /nonexistent \
-      --shell /usr/sbin/nologin \
+      --create-home \
+      --home-dir "${AGENT_HOME}" \
+      --shell "${AGENT_SHELL}" \
       --gid "${SERVICE_GROUP}" \
       "${AGENT_USER}"
     log "created agent user ${AGENT_USER}"
+    return
   fi
 
-  if ! id -u "${PUBLISHER_USER}" >/dev/null 2>&1; then
-    useradd --system \
-      --no-create-home \
-      --home-dir /nonexistent \
-      --shell /usr/sbin/nologin \
-      --gid "${SERVICE_GROUP}" \
-      "${PUBLISHER_USER}"
-    log "created publisher user ${PUBLISHER_USER}"
+  local current_home
+  current_home="$(getent passwd "${AGENT_USER}" | cut -d: -f6)"
+  local current_shell
+  current_shell="$(getent passwd "${AGENT_USER}" | cut -d: -f7)"
+
+  if [[ "${current_home}" != "${AGENT_HOME}" ]]; then
+    usermod --home "${AGENT_HOME}" "${AGENT_USER}"
+  fi
+
+  if [[ "${current_shell}" != "${AGENT_SHELL}" ]]; then
+    usermod --shell "${AGENT_SHELL}" "${AGENT_USER}"
+  fi
+}
+
+ensure_publisher_user() {
+  if id -u "${PUBLISHER_USER}" >/dev/null 2>&1; then
+    return
+  fi
+
+  useradd --system \
+    --no-create-home \
+    --home-dir /nonexistent \
+    --shell /usr/sbin/nologin \
+    --gid "${SERVICE_GROUP}" \
+    "${PUBLISHER_USER}"
+  log "created publisher user ${PUBLISHER_USER}"
+}
+
+ensure_agent_dev_environment() {
+  install -d -m 0750 -o "${AGENT_USER}" -g "${SERVICE_GROUP}" \
+    "${AGENT_HOME}" \
+    "${AGENT_HOME}/.cargo" \
+    "${AGENT_HOME}/.cargo/bin" \
+    "${AGENT_HOME}/.local" \
+    "${AGENT_HOME}/.local/bin" \
+    "${AGENT_HOME}/.npm-global" \
+    "${AGENT_HOME}/.npm-global/bin" \
+    "${AGENT_HOME}/go" \
+    "${AGENT_HOME}/go/bin"
+
+  if [[ -d /workspace ]]; then
+    chown "${AGENT_USER}:${SERVICE_GROUP}" /workspace || true
+    chmod 0775 /workspace || true
   fi
 }
 
@@ -85,7 +129,7 @@ ensure_service_path_permissions() {
 
   if [[ -f "${PUBLISHER_KEY_PATH}" ]]; then
     chown "${PUBLISHER_USER}:${SERVICE_GROUP}" "${PUBLISHER_KEY_PATH}" || true
-    chmod 0640 "${PUBLISHER_KEY_PATH}" || true
+    chmod 0600 "${PUBLISHER_KEY_PATH}" || true
   fi
 
   if [[ -f "${tls_dir}/cert.pem" ]]; then
