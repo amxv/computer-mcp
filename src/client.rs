@@ -206,9 +206,8 @@ impl ComputerClient {
             path.trim_start_matches('/')
         );
 
-        let send_request = |client: &reqwest::Client| {
-            client.post(&url).bearer_auth(&self.key).json(input).send()
-        };
+        let send_request =
+            |client: &reqwest::Client| client.post(&url).bearer_auth(&self.key).json(input).send();
 
         let response = match send_request(&self.http).await {
             Ok(response) => response,
