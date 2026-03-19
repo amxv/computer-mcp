@@ -6,6 +6,7 @@ use computer_mcp::client::{
     ComputerClient, ConnectionProfile, delete_profile, resolve_connect_connection,
     resolve_operation_connection, save_profile,
 };
+use computer_mcp::install_rustls_crypto_provider;
 use computer_mcp::protocol::{ApplyPatchInput, ExecCommandInput, WriteStdinInput};
 
 #[derive(Debug, Parser)]
@@ -60,6 +61,8 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    install_rustls_crypto_provider();
+
     let cli = Cli::parse();
     let profile_path = cli.profile_path.as_deref();
 
