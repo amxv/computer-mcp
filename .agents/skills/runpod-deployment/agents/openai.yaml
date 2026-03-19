@@ -1,0 +1,3 @@
+interface:
+  display_name: "Runpod Deployment"
+  short_description: "Roll out and verify computer-mcp on Runpod"

@@ -11,7 +11,7 @@ Use this document exactly as written. It is optimized for:
   - a **reader app** for read-only private repo access
   - a **publisher app** for branch push + PR creation
 
-If the target host is Runpod, also read [runpod-deployment.md](runpod-deployment.md).
+If the target host is Runpod, use [../.agents/skills/runpod-deployment/SKILL.md](../.agents/skills/runpod-deployment/SKILL.md) as the single source of truth for Runpod-specific rollout and template behavior.
 
 The human should not be asked to make product decisions during setup. The defaults are already chosen here.
 
