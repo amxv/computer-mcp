@@ -1,6 +1,6 @@
+use std::error::Error as StdError;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::{error::Error as StdError, u64};
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde::de::DeserializeOwned;
@@ -197,11 +197,7 @@ impl ComputerClient {
     }
 
     pub async fn verify_connection(&self) -> Result<()> {
-        let url = format!(
-            "{}/{}",
-            self.url.trim_end_matches('/'),
-            "v1/write-stdin"
-        );
+        let url = format!("{}/{}", self.url.trim_end_matches('/'), "v1/write-stdin");
         let probe = WriteStdinInput {
             session_id: u64::MAX,
             chars: None,
@@ -338,8 +334,8 @@ mod tests {
     use crate::service::ComputerService;
 
     use super::{
-        ComputerClient, ConnectionProfile, ConnectionSource, resolve_connection_precedence,
-        is_tls_certificate_error_message, save_profile,
+        ComputerClient, ConnectionProfile, ConnectionSource, is_tls_certificate_error_message,
+        resolve_connection_precedence, save_profile,
     };
 
     #[test]
@@ -353,9 +349,7 @@ mod tests {
         assert!(!is_tls_certificate_error_message(
             "dns error: failed to lookup address information"
         ));
-        assert!(!is_tls_certificate_error_message(
-            "connection refused"
-        ));
+        assert!(!is_tls_certificate_error_message("connection refused"));
     }
 
     #[tokio::test]
