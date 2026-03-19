@@ -11,6 +11,7 @@ For extra detail, see:
 - [docs/deployment-notes.md](docs/deployment-notes.md)
 - [docs/github-app-agent-auth.md](docs/github-app-agent-auth.md)
 - [.agents/skills/runpod-deployment/SKILL.md](.agents/skills/runpod-deployment/SKILL.md)
+- [gg/agent-outputs/computer-cli-quickstart-for-agents.md](gg/agent-outputs/computer-cli-quickstart-for-agents.md)
 
 If the target host is Runpod, use [.agents/skills/runpod-deployment/SKILL.md](.agents/skills/runpod-deployment/SKILL.md).
 The main README below is the standard Linux VPS path.
