@@ -291,6 +291,13 @@ def template_payload() -> Dict[str, Any]:
     }
 
 
+def template_update_payload() -> Dict[str, Any]:
+    payload = template_payload()
+    payload.pop("category", None)
+    payload.pop("isServerless", None)
+    return payload
+
+
 def pod_payload() -> Dict[str, Any]:
     return {
         "cloudType": os.environ.get("RUNPOD_CLOUD_TYPE", DEFAULT_CLOUD_TYPE),
@@ -317,6 +324,20 @@ def pod_payload() -> Dict[str, Any]:
             DEFAULT_VOLUME_MOUNT_PATH,
         ),
     }
+
+
+def pod_update_payload() -> Dict[str, Any]:
+    payload = pod_payload()
+    for key in (
+        "cloudType",
+        "computeType",
+        "cpuFlavorIds",
+        "cpuFlavorPriority",
+        "supportPublicIp",
+        "vcpuCount",
+    ):
+        payload.pop(key, None)
+    return payload
 
 
 def api_request(method: str, path: str, payload: Optional[Dict[str, Any]] = None) -> Any:
@@ -477,12 +498,12 @@ def handle_template_create(args: argparse.Namespace) -> None:
 
 
 def handle_template_update(args: argparse.Namespace) -> None:
-    payload = template_payload()
+    payload = template_update_payload()
     path = f"/templates/{args.template_id}/update"
     if args.dry_run:
-        show_request("PATCH", path, payload)
+        show_request("POST", path, payload)
         return
-    print_json(template_summary(api_request("PATCH", path, payload)))
+    print_json(template_summary(api_request("POST", path, payload)))
 
 
 def handle_template_get(args: argparse.Namespace) -> None:
@@ -499,6 +520,15 @@ def handle_pod_create(args: argparse.Namespace) -> None:
 
 def handle_pod_get(args: argparse.Namespace) -> None:
     print_json(pod_summary(api_request("GET", f"/pods/{args.pod_id}")))
+
+
+def handle_pod_update(args: argparse.Namespace) -> None:
+    payload = pod_update_payload()
+    path = f"/pods/{args.pod_id}/update"
+    if args.dry_run:
+        show_request("POST", path, payload)
+        return
+    print_json(pod_summary(api_request("POST", path, payload)))
 
 
 def handle_pod_action(args: argparse.Namespace) -> None:
@@ -552,6 +582,11 @@ def build_parser() -> argparse.ArgumentParser:
     pod_get = pod_subparsers.add_parser("get", help="Fetch a pod")
     pod_get.add_argument("pod_id", help="Runpod pod id")
     pod_get.set_defaults(func=handle_pod_get)
+
+    pod_update = pod_subparsers.add_parser("update", help="Update an existing pod")
+    pod_update.add_argument("pod_id", help="Runpod pod id")
+    pod_update.add_argument("--dry-run", action="store_true", help="Print request payload instead of sending it")
+    pod_update.set_defaults(func=handle_pod_update)
 
     for action in ("start", "stop", "restart", "reset"):
         action_parser = pod_subparsers.add_parser(action, help=f"{action.capitalize()} a pod")
