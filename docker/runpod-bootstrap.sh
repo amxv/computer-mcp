@@ -69,6 +69,8 @@ ensure_publisher_user() {
 ensure_agent_dev_environment() {
   install -d -m 0750 -o "${AGENT_USER}" -g "${SERVICE_GROUP}" \
     "${AGENT_HOME}" \
+    "${AGENT_HOME}/.bun" \
+    "${AGENT_HOME}/.bun/bin" \
     "${AGENT_HOME}/.cargo" \
     "${AGENT_HOME}/.cargo/bin" \
     "${AGENT_HOME}/.local" \

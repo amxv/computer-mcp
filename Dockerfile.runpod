@@ -155,6 +155,10 @@ RUN curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal --default-too
 RUN python3 -m pip install --no-cache-dir --upgrade pip && \
     python3 -m pip install --no-cache-dir pipx uv
 
+RUN export BUN_INSTALL=/usr/local && \
+    curl -fsSL https://bun.sh/install | bash && \
+    bun --version
+
 RUN npm install -g ${NPM_GLOBAL_PACKAGES}
 
 RUN GOBIN=/usr/local/bin /usr/local/go/bin/go install ${GO_GLOBAL_TOOLS}

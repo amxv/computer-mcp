@@ -81,7 +81,7 @@ The bootstrap provisions:
 
 - an interactive `computer-mcp-agent` account with a real home directory
 - `/workspace` owned by `computer-mcp-agent`
-- login-shell PATH setup for Go, Rust, Node, Python, and user-local binaries
+- login-shell PATH setup for Go, Rust, Node, Bun, Python, and user-local binaries
 - user-writable install locations for `pip --user`, `uv tool`, `npm install -g`, `go install`, and `cargo install`
 - common Unix exploration and development tools such as `awk`, `sed`, `nl`, `rg`, `fd`, `jq`, `git`, `gh`, `tmux`, `tree`, `strace`, and `shellcheck`
 
