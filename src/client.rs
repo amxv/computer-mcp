@@ -165,6 +165,7 @@ pub fn delete_profile(path_override: Option<&Path>) -> Result<bool> {
 #[derive(Clone)]
 pub struct ComputerClient {
     http: reqwest::Client,
+    insecure_http: reqwest::Client,
     url: String,
     key: String,
 }
@@ -173,6 +174,10 @@ impl ComputerClient {
     pub fn new(url: String, key: String) -> Self {
         Self {
             http: reqwest::Client::new(),
+            insecure_http: reqwest::Client::builder()
+                .danger_accept_invalid_certs(true)
+                .build()
+                .expect("insecure reqwest client should build"),
             url,
             key,
         }
@@ -201,14 +206,24 @@ impl ComputerClient {
             path.trim_start_matches('/')
         );
 
-        let response = self
-            .http
-            .post(&url)
-            .bearer_auth(&self.key)
-            .json(input)
-            .send()
-            .await
-            .with_context(|| format!("request to {url} failed"))?;
+        let send_request = |client: &reqwest::Client| {
+            client.post(&url).bearer_auth(&self.key).json(input).send()
+        };
+
+        let response = match send_request(&self.http).await {
+            Ok(response) => response,
+            Err(_) if should_retry_insecure(&self.url) => {
+                eprintln!(
+                    "warning: retrying {url} without TLS certificate verification for a self-signed computer-mcp server"
+                );
+                send_request(&self.insecure_http)
+                    .await
+                    .with_context(|| format!("request to {url} failed"))?
+            }
+            Err(err) => {
+                return Err(err).with_context(|| format!("request to {url} failed"));
+            }
+        };
 
         if response.status().is_success() {
             return response
@@ -226,6 +241,13 @@ impl ComputerClient {
     }
 }
 
+fn should_retry_insecure(base_url: &str) -> bool {
+    base_url
+        .trim_start()
+        .to_ascii_lowercase()
+        .starts_with("https://")
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -241,8 +263,15 @@ mod tests {
 
     use super::{
         ComputerClient, ConnectionProfile, ConnectionSource, resolve_connection_precedence,
-        save_profile,
+        save_profile, should_retry_insecure,
     };
+
+    #[test]
+    fn insecure_retry_only_applies_to_https_urls() {
+        assert!(should_retry_insecure("https://example.invalid"));
+        assert!(should_retry_insecure("  HTTPS://example.invalid"));
+        assert!(!should_retry_insecure("http://example.invalid"));
+    }
 
     #[test]
     fn resolution_prefers_flags_then_env_then_profile() {
