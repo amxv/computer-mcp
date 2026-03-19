@@ -266,7 +266,9 @@ fn key_from_query(query: Option<&str>) -> Option<String> {
 mod tests {
     use super::{ComputerMcpService, key_from_query};
     use crate::config::Config;
-    use crate::protocol::{ApplyPatchInput, CommandStatus, ExecCommandInput, WriteStdinInput};
+    use crate::protocol::{
+        ApplyPatchInput, CommandStatus, ExecCommandInput, ToolOutput, WriteStdinInput,
+    };
     use crate::service::ComputerService;
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
@@ -281,6 +283,54 @@ mod tests {
 
     fn test_config() -> Arc<Config> {
         Arc::new(Config::default())
+    }
+
+    async fn wait_for_service_exit(
+        service: &ComputerService,
+        mut output: ToolOutput,
+    ) -> ToolOutput {
+        for _ in 0..10 {
+            if output.status == CommandStatus::Exited {
+                return output;
+            }
+
+            output = service
+                .write_stdin(WriteStdinInput {
+                    session_id: output
+                        .session_id
+                        .expect("running output should have a session id"),
+                    chars: None,
+                    yield_time_ms: Some(250),
+                    kill_process: Some(false),
+                })
+                .await
+                .expect("service poll should succeed");
+        }
+
+        panic!("service output did not reach exited state in time");
+    }
+
+    async fn wait_for_mcp_exit(mcp: &ComputerMcpService, mut output: ToolOutput) -> ToolOutput {
+        for _ in 0..10 {
+            if output.status == CommandStatus::Exited {
+                return output;
+            }
+
+            output = mcp
+                .write_stdin(Parameters(WriteStdinInput {
+                    session_id: output
+                        .session_id
+                        .expect("running output should have a session id"),
+                    chars: None,
+                    yield_time_ms: Some(250),
+                    kill_process: Some(false),
+                }))
+                .await
+                .expect("mcp poll should succeed")
+                .0;
+        }
+
+        panic!("mcp output did not reach exited state in time");
     }
 
     #[test]
@@ -348,15 +398,22 @@ mod tests {
             timeout_ms: None,
         };
 
-        let direct_output = direct
-            .exec_command(input.clone())
-            .await
-            .expect("direct service exec should succeed");
-        let mcp_output = mcp
-            .exec_command(Parameters(input))
-            .await
-            .expect("mcp exec should succeed")
-            .0;
+        let direct_output = wait_for_service_exit(
+            &direct,
+            direct
+                .exec_command(input.clone())
+                .await
+                .expect("direct service exec should succeed"),
+        )
+        .await;
+        let mcp_output = wait_for_mcp_exit(
+            &mcp,
+            mcp.exec_command(Parameters(input))
+                .await
+                .expect("mcp exec should succeed")
+                .0,
+        )
+        .await;
 
         assert_eq!(mcp_output.status, direct_output.status);
         assert_eq!(mcp_output.exit_code, direct_output.exit_code);
