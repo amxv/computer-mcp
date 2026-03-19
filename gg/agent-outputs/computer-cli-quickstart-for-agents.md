@@ -181,6 +181,8 @@ That is the core remote coding loop.
 
 To open a PR, use `exec-command` to run the remote command:
 
+Run it from the workdir of the remote checkout you want to publish.
+
 ```bash
 /tmp/computer exec-command --workdir /workspace/repo \
   "computer-mcp publish-pr --repo owner/repo --title 'Agent: change' --body 'Automated change.'"
