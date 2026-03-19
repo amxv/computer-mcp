@@ -34,9 +34,7 @@ cargo build --release --bin computer-mcp --bin computer-mcpd --bin computer-mcp-
 sudo COMPUTER_MCP_BINARY_SOURCE_DIR="$PWD/target/release" bash scripts/install.sh
 ```
 
-## Runpod And Other Container Hosts
-
-If the target is Runpod, prefer the exact guide in [runpod-deployment.md](runpod-deployment.md).
+## Container Hosts
 
 Before using the standard start flow, check whether the host actually has a usable `systemd`:
 
@@ -48,12 +46,10 @@ systemctl is-system-running || true
 
 If PID 1 is not `systemd`, `computer-mcp` uses process mode instead.
 
-On Runpod-style container hosts:
+On container-style hosts:
 - `computer-mcp start` runs `computer-mcp-prd` and `computer-mcpd` as detached processes
 - pid and log files are stored under the state directory
 - restart persistence depends on the container lifecycle, not `systemd`
-
-You also need a public TCP port mapped for the MCP HTTPS listener. SSH access alone is not enough.
 
 ## Security Model
 

@@ -99,6 +99,33 @@ def env_text(name: str) -> Optional[str]:
     return value or None
 
 
+def env_int(name: str, current: Optional[Any], default: int) -> int:
+    value = env_text(name)
+    if value is not None:
+        return int(value)
+    if current is not None:
+        return int(current)
+    return default
+
+
+def env_bool(name: str, current: Optional[Any], default: bool) -> bool:
+    value = env_text(name)
+    if value is not None:
+        return value.lower() == "true"
+    if current is not None:
+        return bool(current)
+    return default
+
+
+def env_value(name: str, current: Optional[Any], default: str) -> str:
+    value = env_text(name)
+    if value is not None:
+        return value
+    if current is not None:
+        return str(current)
+    return default
+
+
 def read_text(path: Path) -> str:
     if not path.is_file():
         die(f"file not found: {path}")
@@ -155,6 +182,20 @@ def resolve_ssh_public_key() -> str:
     die("set SSH_PUBLIC_KEY, PUBLIC_KEY, SSH_PUBLIC_KEY_FILE, or PUBLIC_KEY_FILE")
 
 
+def explicit_ssh_public_key() -> Optional[str]:
+    for env_name in ("SSH_PUBLIC_KEY", "PUBLIC_KEY"):
+        value = env_text(env_name)
+        if value:
+            return value
+
+    for env_name in ("SSH_PUBLIC_KEY_FILE", "PUBLIC_KEY_FILE"):
+        value = env_text(env_name)
+        if value:
+            return read_text(Path(value).expanduser())
+
+    return None
+
+
 def resolve_private_key(env_name: str, file_env_name: str, default_glob: str) -> str:
     value = env_text(env_name)
     if value:
@@ -172,6 +213,18 @@ def resolve_private_key(env_name: str, file_env_name: str, default_glob: str) ->
         f"set {env_name}, set {file_env_name}, or place a matching key file in "
         f"~/Downloads ({default_glob})"
     )
+
+
+def explicit_private_key(env_name: str, file_env_name: str) -> Optional[str]:
+    value = env_text(env_name)
+    if value:
+        return value
+
+    file_value = env_text(file_env_name)
+    if file_value:
+        return read_text(Path(file_value).expanduser())
+
+    return None
 
 
 def resolve_config_toml() -> str:
@@ -231,103 +284,241 @@ def resolve_config_toml() -> str:
     )
 
 
-def resolve_ports() -> list[str]:
+def explicit_config_toml() -> Optional[str]:
+    inline_value = env_text("COMPUTER_MCP_CONFIG_TOML")
+    if inline_value:
+        return inline_value
+
+    file_value = env_text("COMPUTER_MCP_CONFIG_TOML_FILE")
+    if file_value:
+        return read_text(Path(file_value).expanduser())
+
+    return None
+
+
+def resolve_ports(current_ports: Optional[list[Any]] = None) -> list[str]:
     raw = os.environ.get("RUNPOD_PORTS")
-    if raw is None or raw.strip() == "":
-        return list(DEFAULT_PORTS)
-    return [part.strip() for part in raw.split(",") if part.strip()]
+    if raw is not None and raw.strip() != "":
+        return [part.strip() for part in raw.split(",") if part.strip()]
+    if current_ports is not None:
+        return [str(part) for part in current_ports]
+    return list(DEFAULT_PORTS)
 
 
-def common_env_payload() -> Dict[str, str]:
+def common_env_payload(base_env: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
     payload: Dict[str, str] = {
-        "COMPUTER_MCP_AUTO_START": os.environ.get("COMPUTER_MCP_AUTO_START", "1"),
-        "COMPUTER_MCP_FORCE_RECONFIGURE": os.environ.get(
-            "COMPUTER_MCP_FORCE_RECONFIGURE",
-            "1",
-        ),
-        "COMPUTER_MCP_CONFIG_TOML": resolve_config_toml(),
-        "COMPUTER_MCP_READER_PRIVATE_KEY": resolve_private_key(
+        str(key): str(value) for key, value in (base_env or {}).items() if value is not None
+    }
+
+    auto_start = env_text("COMPUTER_MCP_AUTO_START")
+    if auto_start is not None:
+        payload["COMPUTER_MCP_AUTO_START"] = auto_start
+    else:
+        payload.setdefault("COMPUTER_MCP_AUTO_START", "1")
+
+    force_reconfigure = env_text("COMPUTER_MCP_FORCE_RECONFIGURE")
+    if force_reconfigure is not None:
+        payload["COMPUTER_MCP_FORCE_RECONFIGURE"] = force_reconfigure
+    else:
+        payload.setdefault("COMPUTER_MCP_FORCE_RECONFIGURE", "1")
+
+    config_toml = explicit_config_toml()
+    if config_toml is not None:
+        payload["COMPUTER_MCP_CONFIG_TOML"] = config_toml
+    elif "COMPUTER_MCP_CONFIG_TOML" not in payload:
+        payload["COMPUTER_MCP_CONFIG_TOML"] = resolve_config_toml()
+
+    reader_key = explicit_private_key(
+        "COMPUTER_MCP_READER_PRIVATE_KEY",
+        "COMPUTER_MCP_READER_PRIVATE_KEY_FILE",
+    )
+    if reader_key is not None:
+        payload["COMPUTER_MCP_READER_PRIVATE_KEY"] = reader_key
+    elif "COMPUTER_MCP_READER_PRIVATE_KEY" not in payload:
+        payload["COMPUTER_MCP_READER_PRIVATE_KEY"] = resolve_private_key(
             "COMPUTER_MCP_READER_PRIVATE_KEY",
             "COMPUTER_MCP_READER_PRIVATE_KEY_FILE",
             "amxv-computer-mcp-reader*.private-key.pem",
-        ),
-        "COMPUTER_MCP_PUBLISHER_PRIVATE_KEY": resolve_private_key(
+        )
+
+    publisher_key = explicit_private_key(
+        "COMPUTER_MCP_PUBLISHER_PRIVATE_KEY",
+        "COMPUTER_MCP_PUBLISHER_PRIVATE_KEY_FILE",
+    )
+    if publisher_key is not None:
+        payload["COMPUTER_MCP_PUBLISHER_PRIVATE_KEY"] = publisher_key
+    elif "COMPUTER_MCP_PUBLISHER_PRIVATE_KEY" not in payload:
+        payload["COMPUTER_MCP_PUBLISHER_PRIVATE_KEY"] = resolve_private_key(
             "COMPUTER_MCP_PUBLISHER_PRIVATE_KEY",
             "COMPUTER_MCP_PUBLISHER_PRIVATE_KEY_FILE",
             "amxv-computer-mcp-publisher*.private-key.pem",
-        ),
-    }
-    public_key = resolve_ssh_public_key()
-    payload["PUBLIC_KEY"] = public_key
-    payload["SSH_PUBLIC_KEY"] = public_key
+        )
+
+    public_key = explicit_ssh_public_key()
+    if public_key is not None:
+        payload["PUBLIC_KEY"] = public_key
+        payload["SSH_PUBLIC_KEY"] = public_key
+    elif "PUBLIC_KEY" not in payload and "SSH_PUBLIC_KEY" not in payload:
+        default_public_key = resolve_ssh_public_key()
+        payload["PUBLIC_KEY"] = default_public_key
+        payload["SSH_PUBLIC_KEY"] = default_public_key
+    elif "PUBLIC_KEY" in payload and "SSH_PUBLIC_KEY" not in payload:
+        payload["SSH_PUBLIC_KEY"] = payload["PUBLIC_KEY"]
+    elif "SSH_PUBLIC_KEY" in payload and "PUBLIC_KEY" not in payload:
+        payload["PUBLIC_KEY"] = payload["SSH_PUBLIC_KEY"]
 
     public_host = env_text("COMPUTER_MCP_PUBLIC_HOST")
-    if public_host:
+    if public_host is not None:
         payload["COMPUTER_MCP_PUBLIC_HOST"] = public_host
 
     return payload
 
 
-def template_payload() -> Dict[str, Any]:
+def template_payload(
+    base_env: Optional[Dict[str, Any]] = None,
+    current_template: Optional[Dict[str, Any]] = None,
+    prefer_repo_image: bool = False,
+) -> Dict[str, Any]:
     return {
-        "category": os.environ.get("RUNPOD_TEMPLATE_CATEGORY", DEFAULT_CATEGORY),
-        "containerDiskInGb": int(
-            os.environ.get("RUNPOD_CONTAINER_DISK_GB", str(DEFAULT_CONTAINER_DISK_GB))
+        "category": env_value(
+            "RUNPOD_TEMPLATE_CATEGORY",
+            current_template.get("category") if current_template else None,
+            DEFAULT_CATEGORY,
         ),
-        "dockerEntrypoint": [],
-        "dockerStartCmd": [],
-        "env": common_env_payload(),
-        "imageName": default_runpod_image(),
-        "isPublic": os.environ.get("RUNPOD_TEMPLATE_IS_PUBLIC", "false").lower() == "true",
+        "containerDiskInGb": env_int(
+            "RUNPOD_CONTAINER_DISK_GB",
+            current_template.get("containerDiskInGb") if current_template else None,
+            DEFAULT_CONTAINER_DISK_GB,
+        ),
+        "dockerEntrypoint": list((current_template or {}).get("dockerEntrypoint") or []),
+        "dockerStartCmd": list((current_template or {}).get("dockerStartCmd") or []),
+        "env": common_env_payload(base_env),
+        "imageName": env_value(
+            "RUNPOD_IMAGE",
+            None if prefer_repo_image else current_template.get("imageName") if current_template else None,
+            default_runpod_image(),
+        ),
+        "isPublic": env_bool(
+            "RUNPOD_TEMPLATE_IS_PUBLIC",
+            current_template.get("isPublic") if current_template else None,
+            False,
+        ),
         "isServerless": False,
-        "name": default_template_name(),
-        "ports": resolve_ports(),
-        "readme": os.environ.get("RUNPOD_TEMPLATE_README", DEFAULT_TEMPLATE_README),
-        "volumeInGb": int(os.environ.get("RUNPOD_VOLUME_GB", str(DEFAULT_VOLUME_GB))),
-        "volumeMountPath": os.environ.get(
+        "name": env_value(
+            "RUNPOD_TEMPLATE_NAME",
+            current_template.get("name") if current_template else None,
+            default_template_name(),
+        ),
+        "ports": resolve_ports((current_template or {}).get("ports")),
+        "readme": env_value(
+            "RUNPOD_TEMPLATE_README",
+            current_template.get("readme") if current_template else None,
+            DEFAULT_TEMPLATE_README,
+        ),
+        "volumeInGb": env_int(
+            "RUNPOD_VOLUME_GB",
+            current_template.get("volumeInGb") if current_template else None,
+            DEFAULT_VOLUME_GB,
+        ),
+        "volumeMountPath": env_value(
             "RUNPOD_VOLUME_MOUNT_PATH",
+            current_template.get("volumeMountPath") if current_template else None,
             DEFAULT_VOLUME_MOUNT_PATH,
         ),
     }
 
 
-def template_update_payload() -> Dict[str, Any]:
-    payload = template_payload()
+def template_update_payload(
+    base_env: Optional[Dict[str, Any]] = None,
+    current_template: Optional[Dict[str, Any]] = None,
+    prefer_repo_image: bool = False,
+) -> Dict[str, Any]:
+    payload = template_payload(
+        base_env=base_env,
+        current_template=current_template,
+        prefer_repo_image=prefer_repo_image,
+    )
     payload.pop("category", None)
     payload.pop("isServerless", None)
     return payload
 
 
-def pod_payload() -> Dict[str, Any]:
+def pod_payload(
+    base_env: Optional[Dict[str, Any]] = None,
+    current_pod: Optional[Dict[str, Any]] = None,
+    prefer_repo_image: bool = False,
+) -> Dict[str, Any]:
     return {
-        "cloudType": os.environ.get("RUNPOD_CLOUD_TYPE", DEFAULT_CLOUD_TYPE),
-        "computeType": os.environ.get("RUNPOD_COMPUTE_TYPE", DEFAULT_COMPUTE_TYPE),
-        "containerDiskInGb": int(
-            os.environ.get("RUNPOD_CONTAINER_DISK_GB", str(DEFAULT_CONTAINER_DISK_GB))
+        "cloudType": env_value(
+            "RUNPOD_CLOUD_TYPE",
+            current_pod.get("cloudType") if current_pod else None,
+            DEFAULT_CLOUD_TYPE,
         ),
-        "cpuFlavorIds": [os.environ.get("RUNPOD_CPU_FLAVOR", DEFAULT_CPU_FLAVOR)],
-        "cpuFlavorPriority": os.environ.get(
+        "computeType": env_value(
+            "RUNPOD_COMPUTE_TYPE",
+            current_pod.get("computeType") if current_pod else None,
+            DEFAULT_COMPUTE_TYPE,
+        ),
+        "containerDiskInGb": env_int(
+            "RUNPOD_CONTAINER_DISK_GB",
+            current_pod.get("containerDiskInGb") if current_pod else None,
+            DEFAULT_CONTAINER_DISK_GB,
+        ),
+        "cpuFlavorIds": [
+            env_value(
+                "RUNPOD_CPU_FLAVOR",
+                current_pod.get("cpuFlavorId") if current_pod else None,
+                DEFAULT_CPU_FLAVOR,
+            )
+        ],
+        "cpuFlavorPriority": env_value(
             "RUNPOD_CPU_FLAVOR_PRIORITY",
+            current_pod.get("cpuFlavorPriority") if current_pod else None,
             DEFAULT_CPU_FLAVOR_PRIORITY,
         ),
-        "dockerEntrypoint": [],
-        "dockerStartCmd": [],
-        "env": common_env_payload(),
-        "imageName": default_runpod_image(),
-        "name": default_pod_name(),
-        "ports": resolve_ports(),
+        "dockerEntrypoint": list((current_pod or {}).get("dockerEntrypoint") or []),
+        "dockerStartCmd": list((current_pod or {}).get("dockerStartCmd") or []),
+        "env": common_env_payload(base_env),
+        "imageName": env_value(
+            "RUNPOD_IMAGE",
+            None if prefer_repo_image else current_pod.get("imageName") if current_pod else None,
+            default_runpod_image(),
+        ),
+        "name": env_value(
+            "RUNPOD_POD_NAME",
+            current_pod.get("name") if current_pod else None,
+            default_pod_name(),
+        ),
+        "ports": resolve_ports((current_pod or {}).get("ports")),
         "supportPublicIp": True,
-        "vcpuCount": int(os.environ.get("RUNPOD_VCPU_COUNT", str(DEFAULT_VCPU_COUNT))),
-        "volumeInGb": int(os.environ.get("RUNPOD_VOLUME_GB", str(DEFAULT_VOLUME_GB))),
-        "volumeMountPath": os.environ.get(
+        "vcpuCount": env_int(
+            "RUNPOD_VCPU_COUNT",
+            current_pod.get("vcpuCount") if current_pod else None,
+            DEFAULT_VCPU_COUNT,
+        ),
+        "volumeInGb": env_int(
+            "RUNPOD_VOLUME_GB",
+            current_pod.get("volumeInGb") if current_pod else None,
+            DEFAULT_VOLUME_GB,
+        ),
+        "volumeMountPath": env_value(
             "RUNPOD_VOLUME_MOUNT_PATH",
+            current_pod.get("volumeMountPath") if current_pod else None,
             DEFAULT_VOLUME_MOUNT_PATH,
         ),
     }
 
 
-def pod_update_payload() -> Dict[str, Any]:
-    payload = pod_payload()
+def pod_update_payload(
+    base_env: Optional[Dict[str, Any]] = None,
+    current_pod: Optional[Dict[str, Any]] = None,
+    prefer_repo_image: bool = False,
+) -> Dict[str, Any]:
+    payload = pod_payload(
+        base_env=base_env,
+        current_pod=current_pod,
+        prefer_repo_image=prefer_repo_image,
+    )
     for key in (
         "cloudType",
         "computeType",
@@ -360,6 +551,27 @@ def api_request(method: str, path: str, payload: Optional[Dict[str, Any]] = None
         die(f"{method} {url} failed with HTTP {exc.code}: {body}")
     except urllib.error.URLError as exc:
         die(f"{method} {url} failed: {exc}")
+
+
+def fetch_template(template_id: str) -> Dict[str, Any]:
+    return api_request("GET", f"/templates/{template_id}")
+
+
+def fetch_pod(pod_id: str) -> Dict[str, Any]:
+    return api_request("GET", f"/pods/{pod_id}")
+
+
+def resolve_source_env(
+    from_template_id: Optional[str] = None,
+    from_pod_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    if from_template_id and from_pod_id:
+        die("pass only one of --from-template-id or --from-pod-id")
+    if from_template_id:
+        return dict(fetch_template(from_template_id).get("env") or {})
+    if from_pod_id:
+        return dict(fetch_pod(from_pod_id).get("env") or {})
+    return None
 
 
 def redacted_env(env_payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -489,8 +701,25 @@ def run_proxy_health_check(pod_id: str) -> None:
         die(f"proxy health check failed: {exc}")
 
 
+def proxy_health_body(pod_id: str) -> str:
+    url = f"https://{pod_id}-8080.proxy.runpod.net/health"
+    try:
+        with urllib.request.urlopen(url) as response:
+            return response.read().decode("utf-8", errors="replace").strip()
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        die(f"proxy health check failed with HTTP {exc.code}: {body}")
+    except urllib.error.URLError as exc:
+        die(f"proxy health check failed: {exc}")
+
+
 def handle_template_create(args: argparse.Namespace) -> None:
-    payload = template_payload()
+    payload = template_payload(
+        base_env=resolve_source_env(
+            from_template_id=args.from_template_id,
+            from_pod_id=args.from_pod_id,
+        )
+    )
     if args.dry_run:
         show_request("POST", "/templates", payload)
         return
@@ -498,7 +727,17 @@ def handle_template_create(args: argparse.Namespace) -> None:
 
 
 def handle_template_update(args: argparse.Namespace) -> None:
-    payload = template_update_payload()
+    current_template = fetch_template(args.template_id)
+    source_env = resolve_source_env(
+        from_template_id=args.from_template_id,
+        from_pod_id=args.from_pod_id,
+    )
+    if source_env is None:
+        source_env = current_template.get("env") or {}
+    payload = template_update_payload(
+        base_env=source_env,
+        current_template=current_template,
+    )
     path = f"/templates/{args.template_id}/update"
     if args.dry_run:
         show_request("POST", path, payload)
@@ -507,11 +746,16 @@ def handle_template_update(args: argparse.Namespace) -> None:
 
 
 def handle_template_get(args: argparse.Namespace) -> None:
-    print_json(template_summary(api_request("GET", f"/templates/{args.template_id}")))
+    print_json(template_summary(fetch_template(args.template_id)))
 
 
 def handle_pod_create(args: argparse.Namespace) -> None:
-    payload = pod_payload()
+    payload = pod_payload(
+        base_env=resolve_source_env(
+            from_template_id=args.from_template_id,
+            from_pod_id=args.from_pod_id,
+        )
+    )
     if args.dry_run:
         show_request("POST", "/pods", payload)
         return
@@ -519,11 +763,21 @@ def handle_pod_create(args: argparse.Namespace) -> None:
 
 
 def handle_pod_get(args: argparse.Namespace) -> None:
-    print_json(pod_summary(api_request("GET", f"/pods/{args.pod_id}")))
+    print_json(pod_summary(fetch_pod(args.pod_id)))
 
 
 def handle_pod_update(args: argparse.Namespace) -> None:
-    payload = pod_update_payload()
+    current_pod = fetch_pod(args.pod_id)
+    source_env = resolve_source_env(
+        from_template_id=args.from_template_id,
+        from_pod_id=args.from_pod_id,
+    )
+    if source_env is None:
+        source_env = current_pod.get("env") or {}
+    payload = pod_update_payload(
+        base_env=source_env,
+        current_pod=current_pod,
+    )
     path = f"/pods/{args.pod_id}/update"
     if args.dry_run:
         show_request("POST", path, payload)
@@ -550,6 +804,90 @@ def handle_pod_verify(args: argparse.Namespace) -> None:
     run_proxy_health_check(args.pod_id)
 
 
+def handle_rollout_image(args: argparse.Namespace) -> None:
+    current_template = fetch_template(args.template_id)
+    current_pod = fetch_pod(args.pod_id)
+    source_env = (
+        dict(current_pod.get("env") or {})
+        if args.env_source == "pod"
+        else dict(current_template.get("env") or {})
+    )
+
+    template_path = f"/templates/{args.template_id}/update"
+    pod_path = f"/pods/{args.pod_id}/update"
+    template_update = template_update_payload(
+        base_env=source_env,
+        current_template=current_template,
+        prefer_repo_image=True,
+    )
+    pod_update = pod_update_payload(
+        base_env=source_env,
+        current_pod=current_pod,
+        prefer_repo_image=True,
+    )
+
+    if args.dry_run:
+        print_json(
+            {
+                "templateUpdate": {
+                    "method": "POST",
+                    "url": f"{API_BASE_URL}{template_path}",
+                    "payload": {
+                        **template_update,
+                        "env": redacted_env(template_update["env"]),
+                    },
+                },
+                "podUpdate": {
+                    "method": "POST",
+                    "url": f"{API_BASE_URL}{pod_path}",
+                    "payload": {
+                        **pod_update,
+                        "env": redacted_env(pod_update["env"]),
+                    },
+                },
+                "resetPod": args.reset,
+                "waitReady": args.wait_ready or args.verify,
+                "verify": args.verify,
+            }
+        )
+        return
+
+    result: Dict[str, Any] = {
+        "template": template_summary(api_request("POST", template_path, template_update)),
+        "pod": pod_summary(api_request("POST", pod_path, pod_update)),
+    }
+    if args.reset:
+        result["reset"] = pod_summary(api_request("POST", f"/pods/{args.pod_id}/reset"))
+
+    ready_pod: Optional[Dict[str, Any]] = None
+    if args.wait_ready or args.verify:
+        ready_pod = wait_ready(args.pod_id, args.timeout_seconds)
+        result["ready"] = pod_summary(ready_pod)
+
+    if args.verify:
+        require_binary("ssh")
+        if ready_pod is None:
+            ready_pod = wait_ready(args.pod_id, args.timeout_seconds)
+        run_ssh_verification(ready_pod)
+        result["verification"] = {
+            "ssh": "ok",
+            "proxyHealth": proxy_health_body(args.pod_id),
+        }
+
+    print_json(result)
+
+
+def add_source_env_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--from-template-id",
+        help="Reuse env/config from an existing template instead of reconstructing it locally",
+    )
+    parser.add_argument(
+        "--from-pod-id",
+        help="Reuse env/config from an existing pod instead of reconstructing it locally",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Manage Runpod templates and pods for computer-mcp using the official Runpod REST API.",
@@ -560,11 +898,13 @@ def build_parser() -> argparse.ArgumentParser:
     template_subparsers = template_parser.add_subparsers(dest="template_command", required=True)
 
     template_create = template_subparsers.add_parser("create", help="Create a template")
+    add_source_env_args(template_create)
     template_create.add_argument("--dry-run", action="store_true", help="Print request payload instead of sending it")
     template_create.set_defaults(func=handle_template_create)
 
     template_update = template_subparsers.add_parser("update", help="Update an existing template")
     template_update.add_argument("template_id", help="Runpod template id")
+    add_source_env_args(template_update)
     template_update.add_argument("--dry-run", action="store_true", help="Print request payload instead of sending it")
     template_update.set_defaults(func=handle_template_update)
 
@@ -576,6 +916,7 @@ def build_parser() -> argparse.ArgumentParser:
     pod_subparsers = pod_parser.add_subparsers(dest="pod_command", required=True)
 
     pod_create = pod_subparsers.add_parser("create", help="Create a pod")
+    add_source_env_args(pod_create)
     pod_create.add_argument("--dry-run", action="store_true", help="Print request payload instead of sending it")
     pod_create.set_defaults(func=handle_pod_create)
 
@@ -585,6 +926,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     pod_update = pod_subparsers.add_parser("update", help="Update an existing pod")
     pod_update.add_argument("pod_id", help="Runpod pod id")
+    add_source_env_args(pod_update)
     pod_update.add_argument("--dry-run", action="store_true", help="Print request payload instead of sending it")
     pod_update.set_defaults(func=handle_pod_update)
 
@@ -616,6 +958,47 @@ def build_parser() -> argparse.ArgumentParser:
         help="Maximum time to wait before failing",
     )
     pod_verify.set_defaults(func=handle_pod_verify)
+
+    rollout = subparsers.add_parser(
+        "rollout-image",
+        help="Update an existing template and pod to the current image while reusing existing env/config",
+    )
+    rollout.add_argument("template_id", help="Runpod template id")
+    rollout.add_argument("pod_id", help="Runpod pod id")
+    rollout.add_argument(
+        "--env-source",
+        choices=("pod", "template"),
+        default="pod",
+        help="Use env/config from the live pod or current template as the rollout source",
+    )
+    rollout.add_argument(
+        "--no-reset",
+        dest="reset",
+        action="store_false",
+        help="Update metadata only and skip the pod reset",
+    )
+    rollout.add_argument(
+        "--wait-ready",
+        action="store_true",
+        help="Wait for the pod to expose SSH again after the rollout",
+    )
+    rollout.add_argument(
+        "--verify",
+        action="store_true",
+        help="Run SSH verification and hit the public /health endpoint after the rollout",
+    )
+    rollout.add_argument(
+        "--timeout-seconds",
+        type=int,
+        default=int(os.environ.get("RUNPOD_WAIT_TIMEOUT_SECONDS", str(DEFAULT_WAIT_TIMEOUT_SECONDS))),
+        help="Maximum time to wait before failing",
+    )
+    rollout.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the update/reset plan instead of sending it",
+    )
+    rollout.set_defaults(func=handle_rollout_image, reset=True)
 
     return parser
 
