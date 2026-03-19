@@ -68,7 +68,7 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Connect => {
-            let saved = run_connect(cli.url, cli.key, profile_path)?;
+            let saved = run_connect(cli.url, cli.key, profile_path).await?;
             println!("saved connection profile at {}", saved.display());
         }
         Commands::Disconnect => {
@@ -125,12 +125,14 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn run_connect(
+async fn run_connect(
     url: Option<String>,
     key: Option<String>,
     profile_path: Option<&Path>,
 ) -> Result<PathBuf> {
     let resolved = resolve_connect_connection(url, key)?;
+    let client = ComputerClient::new(resolved.url.clone(), resolved.key.clone());
+    client.verify_connection().await?;
     save_profile(
         &ConnectionProfile {
             url: resolved.url,
@@ -160,10 +162,17 @@ fn print_json<T: serde::Serialize>(value: &T) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use axum::serve;
     use clap::Parser;
     use tempfile::tempdir;
+    use tokio::sync::oneshot;
 
     use super::{Cli, Commands, run_connect, run_disconnect};
+    use computer_mcp::config::Config;
+    use computer_mcp::http_api::build_http_api_router;
+    use computer_mcp::service::ComputerService;
 
     #[test]
     fn parses_exec_command_and_global_connection_flags() {
@@ -233,22 +242,79 @@ mod tests {
         }
     }
 
-    #[test]
-    fn connect_and_disconnect_persist_profile_at_overridden_path() {
+    async fn spawn_test_http_api(api_key: &str) -> (String, oneshot::Sender<()>, tokio::task::JoinHandle<()>) {
+        let config = Arc::new(Config {
+            api_key: api_key.to_string(),
+            ..Config::default()
+        });
+        let service = ComputerService::new(config.clone());
+        let app = build_http_api_router(config, service);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind listener");
+        let addr = listener.local_addr().expect("local addr");
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        let server = tokio::spawn(async move {
+            serve(listener, app.into_make_service())
+                .with_graceful_shutdown(async move {
+                    let _ = shutdown_rx.await;
+                })
+                .await
+                .expect("server should run");
+        });
+
+        (format!("http://{addr}"), shutdown_tx, server)
+    }
+
+    #[tokio::test]
+    async fn connect_and_disconnect_persist_profile_at_overridden_path() {
+        computer_mcp::install_rustls_crypto_provider();
+
         let dir = tempdir().expect("tempdir");
         let profile_path = dir.path().join("profile.json");
+        let api_key = "abc123";
+        let (url, shutdown_tx, server) = spawn_test_http_api(api_key).await;
 
         let saved = run_connect(
-            Some("https://example.invalid".to_string()),
-            Some("abc123".to_string()),
+            Some(url),
+            Some(api_key.to_string()),
             Some(profile_path.as_path()),
         )
-        .expect("connect should save profile");
+        .await
+        .expect("connect should verify and save profile");
         assert_eq!(saved, profile_path);
         assert!(saved.exists());
 
         let removed = run_disconnect(Some(saved.as_path())).expect("disconnect should succeed");
         assert!(removed);
         assert!(!saved.exists());
+
+        let _ = shutdown_tx.send(());
+        server.await.expect("server join should succeed");
+    }
+
+    #[tokio::test]
+    async fn connect_fails_without_saving_profile_when_auth_is_invalid() {
+        computer_mcp::install_rustls_crypto_provider();
+
+        let dir = tempdir().expect("tempdir");
+        let profile_path = dir.path().join("profile.json");
+        let (url, shutdown_tx, server) = spawn_test_http_api("expected-key").await;
+
+        let err = run_connect(
+            Some(url),
+            Some("wrong-key".to_string()),
+            Some(profile_path.as_path()),
+        )
+        .await
+        .expect_err("connect should fail for invalid key");
+        assert!(
+            err.to_string().contains("status 401"),
+            "unexpected error: {err:?}"
+        );
+        assert!(!profile_path.exists());
+
+        let _ = shutdown_tx.send(());
+        server.await.expect("server join should succeed");
     }
 }

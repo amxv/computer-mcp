@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::{error::Error as StdError, u64};
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde::de::DeserializeOwned;
@@ -195,6 +196,56 @@ impl ComputerClient {
         self.post_json("/v1/apply-patch", &input).await
     }
 
+    pub async fn verify_connection(&self) -> Result<()> {
+        let url = format!(
+            "{}/{}",
+            self.url.trim_end_matches('/'),
+            "v1/write-stdin"
+        );
+        let probe = WriteStdinInput {
+            session_id: u64::MAX,
+            chars: None,
+            yield_time_ms: Some(1),
+            kill_process: Some(false),
+        };
+
+        let send_request =
+            |client: &reqwest::Client| client.post(&url).bearer_auth(&self.key).json(&probe).send();
+        let response = match send_request(&self.http).await {
+            Ok(response) => response,
+            Err(err) if should_retry_insecure(&self.url, &err) => {
+                eprintln!(
+                    "warning: retrying {url} without TLS certificate verification for a self-signed computer-mcp server"
+                );
+                send_request(&self.insecure_http)
+                    .await
+                    .with_context(|| format!("request to {url} failed"))?
+            }
+            Err(err) => {
+                return Err(err).with_context(|| format!("request to {url} failed"));
+            }
+        };
+
+        let status = response.status();
+        if status.is_success() || status == reqwest::StatusCode::BAD_REQUEST {
+            return Ok(());
+        }
+
+        let body = response.text().await.unwrap_or_default();
+        if let Ok(parsed) = serde_json::from_str::<ErrorOutput>(&body) {
+            bail!(
+                "connection verification failed with status {}: {}",
+                status,
+                parsed.error
+            );
+        }
+        bail!(
+            "connection verification failed with status {}: {}",
+            status,
+            body.trim()
+        );
+    }
+
     async fn post_json<Req, Resp>(&self, path: &str, input: &Req) -> Result<Resp>
     where
         Req: Serialize + ?Sized,
@@ -211,7 +262,7 @@ impl ComputerClient {
 
         let response = match send_request(&self.http).await {
             Ok(response) => response,
-            Err(_) if should_retry_insecure(&self.url) => {
+            Err(err) if should_retry_insecure(&self.url, &err) => {
                 eprintln!(
                     "warning: retrying {url} without TLS certificate verification for a self-signed computer-mcp server"
                 );
@@ -240,11 +291,37 @@ impl ComputerClient {
     }
 }
 
-fn should_retry_insecure(base_url: &str) -> bool {
+fn should_retry_insecure(base_url: &str, error: &reqwest::Error) -> bool {
+    is_https_url(base_url) && is_tls_certificate_error(error)
+}
+
+fn is_https_url(base_url: &str) -> bool {
     base_url
         .trim_start()
         .to_ascii_lowercase()
         .starts_with("https://")
+}
+
+fn is_tls_certificate_error(error: &reqwest::Error) -> bool {
+    let mut current: Option<&(dyn StdError + 'static)> = Some(error);
+    while let Some(err) = current {
+        if is_tls_certificate_error_message(&err.to_string()) {
+            return true;
+        }
+        current = err.source();
+    }
+    false
+}
+
+fn is_tls_certificate_error_message(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("certificate")
+        || lower.contains("cert")
+        || lower.contains("unknown issuer")
+        || lower.contains("self-signed")
+        || lower.contains("self signed")
+        || lower.contains("invalid peer certificate")
+        || lower.contains("certificate verify failed")
 }
 
 #[cfg(test)]
@@ -262,14 +339,62 @@ mod tests {
 
     use super::{
         ComputerClient, ConnectionProfile, ConnectionSource, resolve_connection_precedence,
-        save_profile, should_retry_insecure,
+        is_tls_certificate_error_message, save_profile,
     };
 
     #[test]
-    fn insecure_retry_only_applies_to_https_urls() {
-        assert!(should_retry_insecure("https://example.invalid"));
-        assert!(should_retry_insecure("  HTTPS://example.invalid"));
-        assert!(!should_retry_insecure("http://example.invalid"));
+    fn tls_certificate_message_detection_is_narrow() {
+        assert!(is_tls_certificate_error_message(
+            "invalid peer certificate: UnknownIssuer"
+        ));
+        assert!(is_tls_certificate_error_message(
+            "certificate verify failed"
+        ));
+        assert!(!is_tls_certificate_error_message(
+            "dns error: failed to lookup address information"
+        ));
+        assert!(!is_tls_certificate_error_message(
+            "connection refused"
+        ));
+    }
+
+    #[tokio::test]
+    async fn verify_connection_rejects_unauthorized_target() {
+        crate::install_rustls_crypto_provider();
+
+        let api_key = "phase4-client-key".to_string();
+        let config = Arc::new(Config {
+            api_key,
+            ..Config::default()
+        });
+        let service = ComputerService::new(config.clone());
+        let app = build_http_api_router(config, service);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind listener");
+        let addr = listener.local_addr().expect("local addr");
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        let server = tokio::spawn(async move {
+            serve(listener, app.into_make_service())
+                .with_graceful_shutdown(async move {
+                    let _ = shutdown_rx.await;
+                })
+                .await
+                .expect("server should run");
+        });
+
+        let client = ComputerClient::new(format!("http://{addr}"), "wrong-key".to_string());
+        let err = client
+            .verify_connection()
+            .await
+            .expect_err("verify should fail for invalid key");
+        assert!(
+            err.to_string().contains("status 401"),
+            "unexpected error: {err:?}"
+        );
+
+        let _ = shutdown_tx.send(());
+        server.await.expect("server join should succeed");
     }
 
     #[test]
