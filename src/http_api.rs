@@ -1,0 +1,502 @@
+use std::sync::Arc;
+
+use axum::extract::{Request, State};
+use axum::http::{HeaderMap, StatusCode, header};
+use axum::middleware::{self, Next};
+use axum::response::Response;
+use axum::routing::post;
+use axum::{Json, Router};
+use serde::{Deserialize, Serialize};
+
+use crate::config::Config;
+use crate::protocol::{ApplyPatchInput, ExecCommandInput, ToolOutput, WriteStdinInput};
+use crate::service::ComputerService;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ApplyPatchOutput {
+    pub output: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct ErrorOutput {
+    error: String,
+}
+
+pub fn build_http_api_router(config: Arc<Config>, computer_service: ComputerService) -> Router {
+    Router::new()
+        .route("/v1/exec-command", post(exec_command))
+        .route("/v1/write-stdin", post(write_stdin))
+        .route("/v1/apply-patch", post(apply_patch))
+        .with_state(computer_service)
+        .layer(middleware::from_fn_with_state(config, bearer_auth))
+}
+
+async fn exec_command(
+    State(computer_service): State<ComputerService>,
+    Json(input): Json<ExecCommandInput>,
+) -> Result<Json<ToolOutput>, (StatusCode, Json<ErrorOutput>)> {
+    computer_service
+        .exec_command(input)
+        .await
+        .map(Json)
+        .map_err(bad_request)
+}
+
+async fn write_stdin(
+    State(computer_service): State<ComputerService>,
+    Json(input): Json<WriteStdinInput>,
+) -> Result<Json<ToolOutput>, (StatusCode, Json<ErrorOutput>)> {
+    computer_service
+        .write_stdin(input)
+        .await
+        .map(Json)
+        .map_err(bad_request)
+}
+
+async fn apply_patch(
+    State(computer_service): State<ComputerService>,
+    Json(input): Json<ApplyPatchInput>,
+) -> Result<Json<ApplyPatchOutput>, (StatusCode, Json<ErrorOutput>)> {
+    computer_service
+        .apply_patch(input)
+        .map(|output| Json(ApplyPatchOutput { output }))
+        .map_err(bad_request)
+}
+
+fn bad_request(err: anyhow::Error) -> (StatusCode, Json<ErrorOutput>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(ErrorOutput {
+            error: err.to_string(),
+        }),
+    )
+}
+
+async fn bearer_auth(
+    State(config): State<Arc<Config>>,
+    request: Request,
+    next: Next,
+) -> std::result::Result<Response, StatusCode> {
+    let supplied = bearer_token(request.headers());
+    if supplied == Some(config.api_key.as_str()) {
+        return Ok(next.run(request).await);
+    }
+
+    Err(StatusCode::UNAUTHORIZED)
+}
+
+fn bearer_token(headers: &HeaderMap) -> Option<&str> {
+    let raw = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
+    raw.strip_prefix("Bearer ")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::sync::Arc;
+
+    use axum::Router;
+    use axum::body::{Body, to_bytes};
+    use axum::http::{Request, StatusCode, header};
+    use serde::de::DeserializeOwned;
+    use serde_json::{Value, json};
+    use tempfile::tempdir;
+    use tower::util::ServiceExt;
+
+    use crate::config::Config;
+    use crate::protocol::{CommandStatus, ExecCommandInput, ToolOutput, WriteStdinInput};
+    use crate::service::ComputerService;
+
+    use super::{ApplyPatchOutput, bearer_token, build_http_api_router};
+
+    const TEST_API_KEY: &str = "phase3-test-key";
+
+    fn test_config() -> Arc<Config> {
+        Arc::new(Config {
+            api_key: TEST_API_KEY.to_string(),
+            ..Config::default()
+        })
+    }
+
+    fn test_router_with_service(service: ComputerService) -> Router {
+        build_http_api_router(test_config(), service)
+    }
+
+    async fn post_json(
+        app: &Router,
+        path: &str,
+        body: Value,
+        auth_header: Option<&str>,
+    ) -> axum::response::Response {
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri(path)
+            .header(header::CONTENT_TYPE, "application/json");
+        if let Some(auth) = auth_header {
+            builder = builder.header(header::AUTHORIZATION, auth);
+        }
+
+        app.clone()
+            .oneshot(
+                builder
+                    .body(Body::from(body.to_string()))
+                    .expect("request build"),
+            )
+            .await
+            .expect("request should succeed")
+    }
+
+    async fn response_json<T: DeserializeOwned>(response: axum::response::Response) -> T {
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body should be readable");
+        serde_json::from_slice(&bytes).expect("response should be valid json")
+    }
+
+    #[test]
+    fn bearer_token_extracts_bearer_scheme() {
+        let mut headers = header::HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            "Bearer token-value".parse().expect("header value"),
+        );
+        assert_eq!(bearer_token(&headers), Some("token-value"));
+    }
+
+    #[test]
+    fn bearer_token_rejects_missing_or_non_bearer() {
+        let mut headers = header::HeaderMap::new();
+        assert_eq!(bearer_token(&headers), None);
+
+        headers.insert(
+            header::AUTHORIZATION,
+            "Basic abc123".parse().expect("header value"),
+        );
+        assert_eq!(bearer_token(&headers), None);
+    }
+
+    #[tokio::test]
+    async fn rejects_unauthorized_v1_request() {
+        let app = test_router_with_service(ComputerService::new(test_config()));
+
+        let response = post_json(
+            &app,
+            "/v1/exec-command",
+            json!({
+                "cmd": "echo denied",
+                "yield_time_ms": 500
+            }),
+            None,
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn exec_command_http_reports_exited_and_running_states() {
+        let app = test_router_with_service(ComputerService::new(test_config()));
+        let auth = format!("Bearer {TEST_API_KEY}");
+
+        let exited = post_json(
+            &app,
+            "/v1/exec-command",
+            json!({
+                "cmd": "echo phase3-exit",
+                "yield_time_ms": 2_000
+            }),
+            Some(&auth),
+        )
+        .await;
+        assert_eq!(exited.status(), StatusCode::OK);
+        let exited_output: ToolOutput = response_json(exited).await;
+        assert_eq!(exited_output.status, CommandStatus::Exited);
+        assert!(exited_output.output.contains("phase3-exit"));
+        assert!(exited_output.session_id.is_none());
+
+        let running = post_json(
+            &app,
+            "/v1/exec-command",
+            json!({
+                "cmd": "sleep 5",
+                "yield_time_ms": 50
+            }),
+            Some(&auth),
+        )
+        .await;
+        assert_eq!(running.status(), StatusCode::OK);
+        let running_output: ToolOutput = response_json(running).await;
+        assert_eq!(running_output.status, CommandStatus::Running);
+        let running_session_id = running_output.session_id.expect("session id should exist");
+
+        let cleanup = post_json(
+            &app,
+            "/v1/write-stdin",
+            json!({
+                "session_id": running_session_id,
+                "kill_process": true,
+                "yield_time_ms": 2_000
+            }),
+            Some(&auth),
+        )
+        .await;
+        assert_eq!(cleanup.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn write_stdin_http_continues_real_session() {
+        let app = test_router_with_service(ComputerService::new(test_config()));
+        let auth = format!("Bearer {TEST_API_KEY}");
+
+        let started = post_json(
+            &app,
+            "/v1/exec-command",
+            json!({
+                "cmd": "bash --noprofile --norc",
+                "yield_time_ms": 50,
+                "timeout_ms": 60_000
+            }),
+            Some(&auth),
+        )
+        .await;
+        assert_eq!(started.status(), StatusCode::OK);
+        let started_output: ToolOutput = response_json(started).await;
+        let session_id = started_output
+            .session_id
+            .expect("stateful shell should remain running");
+
+        let echoed = post_json(
+            &app,
+            "/v1/write-stdin",
+            json!({
+                "session_id": session_id,
+                "chars": "echo phase3-write\n",
+                "yield_time_ms": 500,
+                "kill_process": false
+            }),
+            Some(&auth),
+        )
+        .await;
+        assert_eq!(echoed.status(), StatusCode::OK);
+        let echoed_output: ToolOutput = response_json(echoed).await;
+        assert_eq!(echoed_output.status, CommandStatus::Running);
+        assert!(echoed_output.output.contains("phase3-write"));
+
+        let done = post_json(
+            &app,
+            "/v1/write-stdin",
+            json!({
+                "session_id": session_id,
+                "chars": "exit\n",
+                "yield_time_ms": 2_000,
+                "kill_process": false
+            }),
+            Some(&auth),
+        )
+        .await;
+        assert_eq!(done.status(), StatusCode::OK);
+        let done_output: ToolOutput = response_json(done).await;
+        assert_eq!(done_output.status, CommandStatus::Exited);
+        assert!(done_output.session_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn apply_patch_http_preserves_relative_path_semantics() {
+        let app = test_router_with_service(ComputerService::new(test_config()));
+        let auth = format!("Bearer {TEST_API_KEY}");
+        let dir = tempdir().expect("tempdir");
+        let patch =
+            "*** Begin Patch\n*** Add File: nested/phase3.txt\n+hello-http\n*** End Patch\n";
+
+        let response = post_json(
+            &app,
+            "/v1/apply-patch",
+            json!({
+                "patch": patch,
+                "workdir": dir.path()
+            }),
+            Some(&auth),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: ApplyPatchOutput = response_json(response).await;
+
+        let expected = dir.path().join("nested/phase3.txt");
+        assert!(
+            body.output
+                .contains("Success. Updated the following files:")
+        );
+        assert!(body.output.contains(&format!("A {}", expected.display())));
+        assert_eq!(
+            fs::read_to_string(expected).expect("file should be created from relative path"),
+            "hello-http\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn exec_command_http_parity_with_service() {
+        let direct = ComputerService::new(test_config());
+        let app = test_router_with_service(ComputerService::new(test_config()));
+        let auth = format!("Bearer {TEST_API_KEY}");
+        let input = ExecCommandInput {
+            cmd: "printf 'phase3-parity-exec\\n'".to_string(),
+            yield_time_ms: Some(2_000),
+            workdir: None,
+            timeout_ms: None,
+        };
+
+        let direct_output = direct
+            .exec_command(input.clone())
+            .await
+            .expect("direct exec should succeed");
+        let http = post_json(
+            &app,
+            "/v1/exec-command",
+            serde_json::to_value(&input).expect("input should serialize"),
+            Some(&auth),
+        )
+        .await;
+        assert_eq!(http.status(), StatusCode::OK);
+        let http_output: ToolOutput = response_json(http).await;
+
+        assert_eq!(http_output.status, direct_output.status);
+        assert_eq!(http_output.exit_code, direct_output.exit_code);
+        assert_eq!(
+            http_output.termination_reason,
+            direct_output.termination_reason
+        );
+        assert!(http_output.output.contains("phase3-parity-exec"));
+        assert!(direct_output.output.contains("phase3-parity-exec"));
+    }
+
+    #[tokio::test]
+    async fn write_stdin_http_parity_with_service() {
+        let direct = ComputerService::new(test_config());
+        let app = test_router_with_service(ComputerService::new(test_config()));
+        let auth = format!("Bearer {TEST_API_KEY}");
+        let shell = ExecCommandInput {
+            cmd: "bash --noprofile --norc".to_string(),
+            yield_time_ms: Some(50),
+            workdir: None,
+            timeout_ms: Some(60_000),
+        };
+
+        let direct_started = direct
+            .exec_command(shell.clone())
+            .await
+            .expect("direct shell should start");
+        let direct_sid = direct_started.session_id.expect("direct session id");
+
+        let http_started = post_json(
+            &app,
+            "/v1/exec-command",
+            serde_json::to_value(&shell).expect("input should serialize"),
+            Some(&auth),
+        )
+        .await;
+        assert_eq!(http_started.status(), StatusCode::OK);
+        let http_started_output: ToolOutput = response_json(http_started).await;
+        let http_sid = http_started_output.session_id.expect("http session id");
+
+        let direct_write = direct
+            .write_stdin(WriteStdinInput {
+                session_id: direct_sid,
+                chars: Some("echo phase3-parity-write\n".to_string()),
+                yield_time_ms: Some(500),
+                kill_process: Some(false),
+            })
+            .await
+            .expect("direct write should succeed");
+        let http_write = post_json(
+            &app,
+            "/v1/write-stdin",
+            json!({
+                "session_id": http_sid,
+                "chars": "echo phase3-parity-write\n",
+                "yield_time_ms": 500,
+                "kill_process": false
+            }),
+            Some(&auth),
+        )
+        .await;
+        assert_eq!(http_write.status(), StatusCode::OK);
+        let http_write_output: ToolOutput = response_json(http_write).await;
+
+        assert_eq!(http_write_output.status, direct_write.status);
+        assert_eq!(
+            http_write_output.termination_reason,
+            direct_write.termination_reason
+        );
+        assert!(http_write_output.output.contains("phase3-parity-write"));
+        assert!(direct_write.output.contains("phase3-parity-write"));
+
+        let _ = direct
+            .write_stdin(WriteStdinInput {
+                session_id: direct_sid,
+                chars: Some("exit\n".to_string()),
+                yield_time_ms: Some(2_000),
+                kill_process: Some(false),
+            })
+            .await
+            .expect("direct shell should exit");
+        let http_cleanup = post_json(
+            &app,
+            "/v1/write-stdin",
+            json!({
+                "session_id": http_sid,
+                "chars": "exit\n",
+                "yield_time_ms": 2_000,
+                "kill_process": false
+            }),
+            Some(&auth),
+        )
+        .await;
+        assert_eq!(http_cleanup.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn apply_patch_http_parity_with_service() {
+        let direct = ComputerService::new(test_config());
+        let app = test_router_with_service(ComputerService::new(test_config()));
+        let auth = format!("Bearer {TEST_API_KEY}");
+        let direct_dir = tempdir().expect("direct tempdir");
+        let http_dir = tempdir().expect("http tempdir");
+        let patch =
+            "*** Begin Patch\n*** Add File: parity-http.txt\n+phase3-patch\n*** End Patch\n";
+
+        let direct_output = direct
+            .apply_patch(crate::protocol::ApplyPatchInput {
+                patch: patch.to_string(),
+                workdir: direct_dir.path().to_string_lossy().to_string(),
+            })
+            .expect("direct patch should succeed");
+        let http = post_json(
+            &app,
+            "/v1/apply-patch",
+            json!({
+                "patch": patch,
+                "workdir": http_dir.path()
+            }),
+            Some(&auth),
+        )
+        .await;
+        assert_eq!(http.status(), StatusCode::OK);
+        let http_output: ApplyPatchOutput = response_json(http).await;
+
+        assert!(direct_output.contains("Success. Updated the following files:"));
+        assert!(
+            http_output
+                .output
+                .contains("Success. Updated the following files:")
+        );
+        assert_eq!(
+            fs::read_to_string(direct_dir.path().join("parity-http.txt"))
+                .expect("read direct file"),
+            "phase3-patch\n"
+        );
+        assert_eq!(
+            fs::read_to_string(http_dir.path().join("parity-http.txt")).expect("read http file"),
+            "phase3-patch\n"
+        );
+    }
+}

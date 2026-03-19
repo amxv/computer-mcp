@@ -22,6 +22,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::config::Config;
+use crate::http_api;
 use crate::protocol::{ApplyPatchInput, ExecCommandInput, ToolOutput, WriteStdinInput};
 use crate::service::ComputerService;
 
@@ -125,14 +126,26 @@ fn build_mcp_service(
     )
 }
 
-fn build_app(config: Arc<Config>, mcp_service: McpHttpService) -> Router {
-    let protected_mcp_router = Router::new()
-        .nest_service("/mcp", mcp_service)
-        .layer(middleware::from_fn_with_state(config, query_key_auth));
+fn build_app(
+    config: Arc<Config>,
+    mcp_service: McpHttpService,
+    computer_service: ComputerService,
+) -> Router {
+    let mcp_auth_config = config.clone();
+    let http_auth_config = config;
+    let protected_mcp_router =
+        Router::new()
+            .nest_service("/mcp", mcp_service)
+            .layer(middleware::from_fn_with_state(
+                mcp_auth_config,
+                query_key_auth,
+            ));
+    let http_api_router = http_api::build_http_api_router(http_auth_config, computer_service);
 
     Router::new()
         .route("/health", get(health))
         .merge(protected_mcp_router)
+        .merge(http_api_router)
 }
 
 pub async fn run_server(config: Config) -> Result<()> {
@@ -174,8 +187,8 @@ pub async fn run_server(config: Config) -> Result<()> {
     let computer_service = ComputerService::new(config.clone());
 
     let cancellation = CancellationToken::new();
-    let mcp_service = build_mcp_service(computer_service, cancellation.child_token());
-    let app = build_app(config, mcp_service);
+    let mcp_service = build_mcp_service(computer_service.clone(), cancellation.child_token());
+    let app = build_app(config, mcp_service, computer_service);
 
     let handle = Handle::new();
     let shutdown_handle = handle.clone();
@@ -255,11 +268,16 @@ mod tests {
     use crate::config::Config;
     use crate::protocol::{ApplyPatchInput, CommandStatus, ExecCommandInput, WriteStdinInput};
     use crate::service::ComputerService;
+    use axum::body::{Body, to_bytes};
+    use axum::http::{Request, StatusCode};
     use rmcp::handler::server::wrapper::Parameters;
     use rmcp::model::ToolAnnotations;
+    use serde_json::json;
     use std::fs;
     use std::sync::Arc;
     use tempfile::tempdir;
+    use tokio_util::sync::CancellationToken;
+    use tower::util::ServiceExt;
 
     fn test_config() -> Arc<Config> {
         Arc::new(Config::default())
@@ -468,5 +486,34 @@ mod tests {
         assert_eq!(key_from_query(None), None);
         assert_eq!(key_from_query(Some("foo=1&bar=2")), None);
         assert_eq!(key_from_query(Some("foo=1&key&bar=2")), None);
+    }
+
+    #[tokio::test]
+    async fn health_route_stays_public_and_stable() {
+        let config = test_config();
+        let service = ComputerService::new(config.clone());
+        let app = super::build_app(
+            config,
+            super::build_mcp_service(service.clone(), CancellationToken::new()),
+            service,
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/health")
+                    .body(Body::empty())
+                    .expect("request build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body should be readable");
+        let value: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+        assert_eq!(value, json!({ "status": "ok" }));
     }
 }
