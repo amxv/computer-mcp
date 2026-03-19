@@ -237,11 +237,12 @@ resolve_release_asset_url() {
   local metadata
   metadata="$(curl -fsSL "$(resolve_release_api_url)")" || return 1
 
+  local server_archive_name="computer-mcp-${TARGET_TRIPLE}.tar.gz"
   local asset_url
   asset_url="$(printf '%s' "${metadata}" \
     | tr '\n' ' ' \
     | sed 's/},{/},\n{/g' \
-    | grep -Eo "\"browser_download_url\"[[:space:]]*:[[:space:]]*\"[^\"]*${TARGET_TRIPLE}[^\"]*\\.tar\\.gz\"" \
+    | grep -Eo "\"browser_download_url\"[[:space:]]*:[[:space:]]*\"[^\"]*/${server_archive_name}\"" \
     | head -n1 \
     | sed -E 's/"browser_download_url"[[:space:]]*:[[:space:]]*"([^"]+)"/\1/' \
   )"

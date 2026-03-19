@@ -29,6 +29,7 @@ COPY src ./src
 COPY tests ./tests
 
 RUN cargo build --locked --release \
+      --bin computer \
       --bin computer-mcp \
       --bin computer-mcpd \
       --bin computer-mcp-prd
@@ -177,6 +178,7 @@ RUN toolchain_bin="$(rustc --print sysroot)/bin" && \
     ln -sf /usr/bin/batcat /usr/local/bin/bat && \
     mkdir -p /workspace /etc/computer-mcp /var/lib/computer-mcp /app
 
+COPY --from=builder /workspace/target/release/computer /usr/local/bin/computer
 COPY --from=builder /workspace/target/release/computer-mcp /usr/local/bin/computer-mcp
 COPY --from=builder /workspace/target/release/computer-mcpd /usr/local/bin/computer-mcpd
 COPY --from=builder /workspace/target/release/computer-mcp-prd /usr/local/bin/computer-mcp-prd
@@ -184,7 +186,8 @@ COPY docker/computer-mcp-devtools.sh /etc/profile.d/computer-mcp-devtools.sh
 COPY docker/runpod-bootstrap.sh /usr/local/bin/computer-mcp-container-bootstrap
 COPY docker/runpod-run.sh /app/run.sh
 
-RUN chmod 0755 /usr/local/bin/computer-mcp \
+RUN chmod 0755 /usr/local/bin/computer \
+               /usr/local/bin/computer-mcp \
                /usr/local/bin/computer-mcpd \
                /usr/local/bin/computer-mcp-prd \
                /usr/local/bin/computer-mcp-container-bootstrap \
