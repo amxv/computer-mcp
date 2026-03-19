@@ -16,6 +16,10 @@ For extra detail, see:
 If the target host is Runpod, use [docs/runpod-deployment.md](docs/runpod-deployment.md).
 The main README below is the standard Linux VPS path.
 
+Container images:
+- `ghcr.io/amxv/computer-mcp` is the generic image built from [Dockerfile](Dockerfile)
+- `ghcr.io/amxv/computer-mcp-runpod` is the dedicated Runpod template image built from [Dockerfile.runpod](Dockerfile.runpod)
+
 ## What You Need
 
 - A Linux VPS
