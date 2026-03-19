@@ -4,6 +4,7 @@ pub mod protocol;
 pub mod publisher;
 pub mod redaction;
 pub mod server;
+pub mod service;
 pub mod session;
 
 pub fn install_rustls_crypto_provider() {

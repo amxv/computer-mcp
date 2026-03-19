@@ -18,31 +18,25 @@ use rmcp::transport::streamable_http_server::{
 };
 use rmcp::{Json as McpJson, ServerHandler, tool, tool_handler, tool_router};
 use serde_json::{Value, json};
-use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-use crate::apply_patch;
 use crate::config::Config;
 use crate::protocol::{ApplyPatchInput, ExecCommandInput, ToolOutput, WriteStdinInput};
-use crate::session::SessionManager;
+use crate::service::ComputerService;
 
-#[derive(Clone)]
-struct SharedState {
-    config: Arc<Config>,
-    sessions: Arc<Mutex<SessionManager>>,
-}
+type McpHttpService = StreamableHttpService<ComputerMcpService, LocalSessionManager>;
 
 #[derive(Clone)]
 struct ComputerMcpService {
-    state: SharedState,
+    computer_service: ComputerService,
     tool_router: ToolRouter<Self>,
 }
 
 impl ComputerMcpService {
-    fn new(state: SharedState) -> Self {
+    fn new(computer_service: ComputerService) -> Self {
         Self {
-            state,
+            computer_service,
             tool_router: Self::tool_router(),
         }
     }
@@ -63,9 +57,8 @@ impl ComputerMcpService {
         &self,
         Parameters(input): Parameters<ExecCommandInput>,
     ) -> Result<McpJson<ToolOutput>, String> {
-        let mut sessions = self.state.sessions.lock().await;
-        sessions
-            .exec_command(input, &self.state.config)
+        self.computer_service
+            .exec_command(input)
             .await
             .map(McpJson)
             .map_err(|e| e.to_string())
@@ -84,9 +77,8 @@ impl ComputerMcpService {
         &self,
         Parameters(input): Parameters<WriteStdinInput>,
     ) -> Result<McpJson<ToolOutput>, String> {
-        let mut sessions = self.state.sessions.lock().await;
-        sessions
-            .write_stdin(input, &self.state.config)
+        self.computer_service
+            .write_stdin(input)
             .await
             .map(McpJson)
             .map_err(|e| e.to_string())
@@ -105,7 +97,9 @@ impl ComputerMcpService {
         &self,
         Parameters(input): Parameters<ApplyPatchInput>,
     ) -> Result<String, String> {
-        apply_patch::apply_patch(&input.patch, &input.workdir).map_err(|e| e.to_string())
+        self.computer_service
+            .apply_patch(input)
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -115,6 +109,30 @@ impl ServerHandler for ComputerMcpService {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_instructions("computer-mcp remote execution tools")
     }
+}
+
+fn build_mcp_service(
+    service: ComputerService,
+    cancellation_token: CancellationToken,
+) -> McpHttpService {
+    StreamableHttpService::new(
+        move || Ok(ComputerMcpService::new(service.clone())),
+        LocalSessionManager::default().into(),
+        StreamableHttpServerConfig {
+            cancellation_token,
+            ..Default::default()
+        },
+    )
+}
+
+fn build_app(config: Arc<Config>, mcp_service: McpHttpService) -> Router {
+    let protected_mcp_router = Router::new()
+        .nest_service("/mcp", mcp_service)
+        .layer(middleware::from_fn_with_state(config, query_key_auth));
+
+    Router::new()
+        .route("/health", get(health))
+        .merge(protected_mcp_router)
 }
 
 pub async fn run_server(config: Config) -> Result<()> {
@@ -152,39 +170,12 @@ pub async fn run_server(config: Config) -> Result<()> {
         })
         .transpose()?;
 
-    let shared_state = SharedState {
-        sessions: Arc::new(Mutex::new(SessionManager::new(
-            config.max_sessions,
-            config.max_output_chars,
-        ))),
-        config: Arc::new(config),
-    };
+    let config = Arc::new(config);
+    let computer_service = ComputerService::new(config.clone());
 
     let cancellation = CancellationToken::new();
-    let mcp_service: StreamableHttpService<ComputerMcpService, LocalSessionManager> =
-        StreamableHttpService::new(
-            {
-                let state = shared_state.clone();
-                move || Ok(ComputerMcpService::new(state.clone()))
-            },
-            LocalSessionManager::default().into(),
-            StreamableHttpServerConfig {
-                cancellation_token: cancellation.child_token(),
-                ..Default::default()
-            },
-        );
-
-    let protected_mcp_router =
-        Router::new()
-            .nest_service("/mcp", mcp_service)
-            .layer(middleware::from_fn_with_state(
-                shared_state.config.clone(),
-                query_key_auth,
-            ));
-
-    let app = Router::new()
-        .route("/health", get(health))
-        .merge(protected_mcp_router);
+    let mcp_service = build_mcp_service(computer_service, cancellation.child_token());
+    let app = build_app(config, mcp_service);
 
     let handle = Handle::new();
     let shutdown_handle = handle.clone();
@@ -260,21 +251,15 @@ fn key_from_query(query: Option<&str>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ComputerMcpService, SharedState};
+    use super::ComputerMcpService;
     use crate::config::Config;
-    use crate::session::SessionManager;
+    use crate::service::ComputerService;
     use rmcp::model::ToolAnnotations;
     use std::sync::Arc;
-    use tokio::sync::Mutex;
 
     #[test]
     fn registers_apply_patch_tool() {
-        let state = SharedState {
-            config: Arc::new(Config::default()),
-            sessions: Arc::new(Mutex::new(SessionManager::new(64, 200_000))),
-        };
-
-        let service = ComputerMcpService::new(state);
+        let service = ComputerMcpService::new(ComputerService::new(Arc::new(Config::default())));
         let names: Vec<String> = service
             .tool_router
             .list_all()
@@ -289,12 +274,7 @@ mod tests {
 
     #[test]
     fn tools_have_expected_annotations() {
-        let state = SharedState {
-            config: Arc::new(Config::default()),
-            sessions: Arc::new(Mutex::new(SessionManager::new(64, 200_000))),
-        };
-
-        let service = ComputerMcpService::new(state);
+        let service = ComputerMcpService::new(ComputerService::new(Arc::new(Config::default())));
 
         let by_name = |name: &str| {
             service
