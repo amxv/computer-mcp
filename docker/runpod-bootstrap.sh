@@ -24,6 +24,7 @@ ensure_process_mode_accounts() {
   ensure_agent_user
   ensure_publisher_user
   ensure_agent_dev_environment
+  ensure_agent_ssh_access
 }
 
 ensure_agent_user() {
@@ -84,6 +85,61 @@ ensure_agent_dev_environment() {
     chown "${AGENT_USER}:${SERVICE_GROUP}" /workspace || true
     chmod 0775 /workspace || true
   fi
+}
+
+collect_agent_ssh_keys() {
+  local key_lines=()
+
+  if [[ -n "${SSH_PUBLIC_KEY:-}" ]]; then
+    key_lines+=("${SSH_PUBLIC_KEY}")
+  fi
+
+  if [[ -n "${PUBLIC_KEY:-}" ]]; then
+    key_lines+=("${PUBLIC_KEY}")
+  fi
+
+  if [[ -f /root/.ssh/authorized_keys ]]; then
+    while IFS= read -r line; do
+      key_lines+=("${line}")
+    done < /root/.ssh/authorized_keys
+  fi
+
+  if [[ ${#key_lines[@]} -eq 0 ]]; then
+    return
+  fi
+
+  printf '%s\n' "${key_lines[@]}" | awk 'NF && !seen[$0]++'
+}
+
+ensure_agent_ssh_access() {
+  local ssh_dir="${AGENT_HOME}/.ssh"
+  local authorized_keys="${ssh_dir}/authorized_keys"
+  local key_material
+  key_material="$(collect_agent_ssh_keys || true)"
+
+  if [[ -n "${key_material}" ]]; then
+    install -d -m 0700 -o "${AGENT_USER}" -g "${SERVICE_GROUP}" "${ssh_dir}"
+    printf '%s\n' "${key_material}" > "${authorized_keys}"
+    chown "${AGENT_USER}:${SERVICE_GROUP}" "${authorized_keys}" || true
+    chmod 0600 "${authorized_keys}" || true
+    log "installed SSH public key for ${AGENT_USER} access"
+  fi
+
+  ensure_agent_account_accepts_pubkey
+}
+
+ensure_agent_account_accepts_pubkey() {
+  local shadow_entry
+  shadow_entry="$(getent shadow "${AGENT_USER}" | cut -d: -f2 || true)"
+
+  case "${shadow_entry}" in
+    '!'*|'*'|'')
+      local password_hash
+      password_hash="$(openssl rand -base64 48 | tr -d '\n' | openssl passwd -6 -stdin)"
+      usermod -p "${password_hash}" "${AGENT_USER}"
+      log "set random password hash for ${AGENT_USER} to allow SSH public-key login"
+      ;;
+  esac
 }
 
 write_secret_file_from_env() {

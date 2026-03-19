@@ -80,6 +80,7 @@ The Runpod image is meant to be usable as an actual coding pod, not only as a se
 The bootstrap provisions:
 
 - an interactive `computer-mcp-agent` account with a real home directory
+- the injected Runpod SSH public key for both `root` and `computer-mcp-agent`
 - `/workspace` owned by `computer-mcp-agent`
 - login-shell PATH setup for Go, Rust, Node, Bun, Python, and user-local binaries
 - user-writable install locations for `pip --user`, `uv tool`, `npm install -g`, `go install`, and `cargo install`
