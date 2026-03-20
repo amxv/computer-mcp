@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use axum::extract::{Request, State};
-use axum::http::StatusCode;
+use axum::http::{StatusCode, Uri};
 use axum::middleware::{self, Next};
 use axum::response::Response;
 use axum::routing::get;
@@ -19,7 +19,6 @@ use rmcp::transport::streamable_http_server::{
 use rmcp::{Json as McpJson, ServerHandler, tool, tool_handler, tool_router};
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
-use tower_http::normalize_path::NormalizePathLayer;
 use tracing::info;
 
 use crate::config::Config;
@@ -137,14 +136,14 @@ fn build_app(
     let protected_mcp_router =
         Router::new()
             .nest_service("/mcp", mcp_service)
-            // Normalize only the MCP subrouter so both `/mcp` and `/mcp/`
-            // resolve to the same transport endpoint without affecting routes
-            // like `/health`.
-            .layer(NormalizePathLayer::append_trailing_slash())
             .layer(middleware::from_fn_with_state(
                 mcp_auth_config,
                 query_key_auth,
-            ));
+            ))
+            // ChatGPT and the Apps SDK expect `/mcp`, but the nested transport
+            // endpoint lives at `/mcp/`. Rewrite only the exact root path so
+            // both URL forms hit the same service while preserving the query.
+            .layer(middleware::from_fn(canonicalize_mcp_root_path));
     let http_api_router = http_api::build_http_api_router(http_auth_config, computer_service);
 
     Router::new()
@@ -240,6 +239,31 @@ async fn health() -> Json<Value> {
     Json(json!({ "status": "ok" }))
 }
 
+async fn canonicalize_mcp_root_path(
+    mut request: Request,
+    next: Next,
+) -> std::result::Result<Response, StatusCode> {
+    if let Some(uri) = rewrite_mcp_root_uri(request.uri()) {
+        *request.uri_mut() = uri;
+    }
+
+    Ok(next.run(request).await)
+}
+
+fn rewrite_mcp_root_uri(uri: &Uri) -> Option<Uri> {
+    if uri.path() != "/mcp" {
+        return None;
+    }
+
+    let mut parts = uri.clone().into_parts();
+    let path_and_query = match uri.query() {
+        Some(query) => format!("/mcp/?{query}"),
+        None => "/mcp/".to_string(),
+    };
+    parts.path_and_query = Some(path_and_query.parse().ok()?);
+    Uri::from_parts(parts).ok()
+}
+
 async fn query_key_auth(
     State(config): State<Arc<Config>>,
     request: Request,
@@ -269,14 +293,14 @@ fn key_from_query(query: Option<&str>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ComputerMcpService, key_from_query};
+    use super::{ComputerMcpService, key_from_query, rewrite_mcp_root_uri};
     use crate::config::Config;
     use crate::protocol::{
         ApplyPatchInput, CommandStatus, ExecCommandInput, ToolOutput, WriteStdinInput,
     };
     use crate::service::ComputerService;
     use axum::body::{Body, to_bytes};
-    use axum::http::{Request, StatusCode};
+    use axum::http::{Request, StatusCode, Uri};
     use rmcp::handler::server::wrapper::Parameters;
     use rmcp::model::ToolAnnotations;
     use serde_json::json;
@@ -556,6 +580,20 @@ mod tests {
         assert_eq!(key_from_query(None), None);
         assert_eq!(key_from_query(Some("foo=1&bar=2")), None);
         assert_eq!(key_from_query(Some("foo=1&key&bar=2")), None);
+    }
+
+    #[test]
+    fn rewrite_mcp_root_uri_appends_slash_and_preserves_query() {
+        let uri: Uri = "/mcp?key=secret&x=1".parse().expect("uri parse");
+        let rewritten = rewrite_mcp_root_uri(&uri).expect("uri should rewrite");
+        assert_eq!(rewritten.path(), "/mcp/");
+        assert_eq!(rewritten.query(), Some("key=secret&x=1"));
+    }
+
+    #[test]
+    fn rewrite_mcp_root_uri_skips_other_paths() {
+        let uri: Uri = "/health".parse().expect("uri parse");
+        assert_eq!(rewrite_mcp_root_uri(&uri), None);
     }
 
     #[tokio::test]
