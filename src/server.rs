@@ -19,6 +19,7 @@ use rmcp::transport::streamable_http_server::{
 use rmcp::{Json as McpJson, ServerHandler, tool, tool_handler, tool_router};
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
+use tower_http::normalize_path::NormalizePathLayer;
 use tracing::info;
 
 use crate::config::Config;
@@ -136,6 +137,10 @@ fn build_app(
     let protected_mcp_router =
         Router::new()
             .nest_service("/mcp", mcp_service)
+            // Normalize only the MCP subrouter so both `/mcp` and `/mcp/`
+            // resolve to the same transport endpoint without affecting routes
+            // like `/health`.
+            .layer(NormalizePathLayer::append_trailing_slash())
             .layer(middleware::from_fn_with_state(
                 mcp_auth_config,
                 query_key_auth,
@@ -580,5 +585,36 @@ mod tests {
             .expect("body should be readable");
         let value: serde_json::Value = serde_json::from_slice(&body).expect("json body");
         assert_eq!(value, json!({ "status": "ok" }));
+    }
+
+    #[tokio::test]
+    async fn mcp_routes_accept_both_with_and_without_trailing_slash() {
+        let config = test_config();
+        let service = ComputerService::new(config.clone());
+        let app = super::build_app(
+            config,
+            super::build_mcp_service(service.clone(), CancellationToken::new()),
+            service,
+        );
+
+        for path in ["/mcp", "/mcp/"] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(path)
+                        .body(Body::empty())
+                        .expect("request build"),
+                )
+                .await
+                .expect("request should succeed");
+
+            assert_eq!(
+                response.status(),
+                StatusCode::UNAUTHORIZED,
+                "expected auth middleware to protect {path}"
+            );
+        }
     }
 }
