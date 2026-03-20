@@ -121,6 +121,7 @@ Ports:
 Compute:
 
 - CPU pod is the normal lightweight coding setup
+- Preferred CPU flavor: `cpu3c-2-4` (`4 GB RAM`, `2 vCPU`, `5 GB` total disk on the base pod SKU shown in Runpod)
 
 ### Recommended Environment Variables
 
