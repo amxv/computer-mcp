@@ -1,6 +1,6 @@
 [package]
 name = "computer-mcp"
-version = "0.1.23"
+version = "0.1.24"
 edition = "2024"
 
 [[bin]]
@@ -45,9 +45,9 @@ tempfile = "3.14"
 tokio = { version = "1.44", features = ["full"] }
 tokio-util = "0.7"
 toml = "1.0"
+tower = { version = "0.5", features = ["util"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 
 [dev-dependencies]
 pretty_assertions = "1.4"
-tower = "0.5"

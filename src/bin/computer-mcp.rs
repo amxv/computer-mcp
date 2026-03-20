@@ -199,7 +199,7 @@ async fn main() -> Result<()> {
         }
         Commands::ShowUrl { host } => {
             let config = Config::load(Some(Path::new(&config_path)))?;
-            let raw_url = format!("https://{host}/mcp/?key={}", config.api_key);
+            let raw_url = format!("https://{host}/mcp?key={}", config.api_key);
             println!(
                 "{} (key redacted in CLI output)",
                 redact_api_key_query_params(&raw_url)
@@ -329,7 +329,7 @@ fn stop_main_service(config: &Config) -> Result<()> {
 fn print_stack_ready_summary(config: &Config) {
     let host_hint = status_host_hint(&config.bind_host, detect_public_ip());
     let url_hint =
-        redact_api_key_query_params(&format!("https://{host_hint}/mcp/?key={}", config.api_key));
+        redact_api_key_query_params(&format!("https://{host_hint}/mcp?key={}", config.api_key));
     println!("stack-ready: {SERVICE_NAME} + {PUBLISHER_SERVICE_LABEL}");
     println!("url-hint: {url_hint}");
     if let Some(port) = config.http_bind_port {
@@ -1319,7 +1319,7 @@ fn build_process_status_lines(
     let state = state?;
     let host_hint = status_host_hint(&config.bind_host, public_ip);
     let url_hint =
-        redact_api_key_query_params(&format!("https://{host_hint}/mcp/?key={}", config.api_key));
+        redact_api_key_query_params(&format!("https://{host_hint}/mcp?key={}", config.api_key));
     let health_hint = format!("https://{host_hint}/health");
     let active = match state {
         ProcessModeState::Running(_) => "active (running)",
@@ -1589,7 +1589,7 @@ fn build_status_summary_lines(
 
     let host_hint = status_host_hint(&config.bind_host, public_ip);
     let url_hint =
-        redact_api_key_query_params(&format!("https://{host_hint}/mcp/?key={}", config.api_key));
+        redact_api_key_query_params(&format!("https://{host_hint}/mcp?key={}", config.api_key));
     let health_hint = format!("https://{host_hint}/health");
 
     let mut lines = vec![
@@ -2113,7 +2113,7 @@ mod tests {
         assert!(joined.contains("tls-mode: self_signed"));
         assert!(joined.contains("tls-cert: /var/lib/computer-mcp/tls/cert.pem"));
         assert!(joined.contains("tls-key: /var/lib/computer-mcp/tls/key.pem"));
-        assert!(joined.contains("url-hint: https://198.51.100.88/mcp/?key=<redacted>"));
+        assert!(joined.contains("url-hint: https://198.51.100.88/mcp?key=<redacted>"));
         assert!(joined.contains("health-hint: https://198.51.100.88/health"));
         assert!(joined.contains("http-proxy-listen: 0.0.0.0:8080"));
     }
@@ -2141,7 +2141,7 @@ mod tests {
         assert!(joined.contains("service-mode: process"));
         assert!(joined.contains("active: active (running)"));
         assert!(joined.contains("exec-main-status: running pid 4242"));
-        assert!(joined.contains("url-hint: https://198.51.100.88/mcp/?key=<redacted>"));
+        assert!(joined.contains("url-hint: https://198.51.100.88/mcp?key=<redacted>"));
         assert!(joined.contains("health-hint: https://198.51.100.88/health"));
         assert!(joined.contains("http-proxy-listen: 0.0.0.0:8080"));
     }

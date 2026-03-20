@@ -1,3 +1,4 @@
+use std::convert::Infallible;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,6 +20,7 @@ use rmcp::transport::streamable_http_server::{
 use rmcp::{Json as McpJson, ServerHandler, tool, tool_handler, tool_router};
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
+use tower::{ServiceExt, service_fn};
 use tracing::info;
 
 use crate::config::Config;
@@ -133,17 +135,29 @@ fn build_app(
 ) -> Router {
     let mcp_auth_config = config.clone();
     let http_auth_config = config;
-    let protected_mcp_router =
-        Router::new()
-            .nest_service("/mcp", mcp_service)
-            .layer(middleware::from_fn_with_state(
-                mcp_auth_config,
-                query_key_auth,
-            ))
-            // ChatGPT and the Apps SDK expect `/mcp`, but the nested transport
-            // endpoint lives at `/mcp/`. Rewrite only the exact root path so
-            // both URL forms hit the same service while preserving the query.
-            .layer(middleware::from_fn(canonicalize_mcp_root_path));
+    let mcp_root_service = |mcp_service: McpHttpService| {
+        service_fn(move |mut request: Request| {
+            let mcp_service = mcp_service.clone();
+            async move {
+                let uri = rewrite_mcp_transport_root_uri(request.uri())
+                    .expect("mcp root service only handles /mcp and /mcp/");
+                *request.uri_mut() = uri;
+
+                let response = mcp_service
+                    .oneshot(request)
+                    .await
+                    .unwrap_or_else(|never| match never {});
+                Ok::<_, Infallible>(response)
+            }
+        })
+    };
+    let protected_mcp_router = Router::new()
+        .route_service("/mcp", mcp_root_service(mcp_service.clone()))
+        .route_service("/mcp/", mcp_root_service(mcp_service))
+        .layer(middleware::from_fn_with_state(
+            mcp_auth_config,
+            query_key_auth,
+        ));
     let http_api_router = http_api::build_http_api_router(http_auth_config, computer_service);
 
     Router::new()
@@ -239,26 +253,15 @@ async fn health() -> Json<Value> {
     Json(json!({ "status": "ok" }))
 }
 
-async fn canonicalize_mcp_root_path(
-    mut request: Request,
-    next: Next,
-) -> std::result::Result<Response, StatusCode> {
-    if let Some(uri) = rewrite_mcp_root_uri(request.uri()) {
-        *request.uri_mut() = uri;
-    }
-
-    Ok(next.run(request).await)
-}
-
-fn rewrite_mcp_root_uri(uri: &Uri) -> Option<Uri> {
-    if uri.path() != "/mcp" {
+fn rewrite_mcp_transport_root_uri(uri: &Uri) -> Option<Uri> {
+    if uri.path() != "/mcp" && uri.path() != "/mcp/" {
         return None;
     }
 
     let mut parts = uri.clone().into_parts();
     let path_and_query = match uri.query() {
-        Some(query) => format!("/mcp/?{query}"),
-        None => "/mcp/".to_string(),
+        Some(query) => format!("/?{query}"),
+        None => "/".to_string(),
     };
     parts.path_and_query = Some(path_and_query.parse().ok()?);
     Uri::from_parts(parts).ok()
@@ -293,7 +296,7 @@ fn key_from_query(query: Option<&str>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ComputerMcpService, key_from_query, rewrite_mcp_root_uri};
+    use super::{ComputerMcpService, key_from_query, rewrite_mcp_transport_root_uri};
     use crate::config::Config;
     use crate::protocol::{
         ApplyPatchInput, CommandStatus, ExecCommandInput, ToolOutput, WriteStdinInput,
@@ -583,17 +586,23 @@ mod tests {
     }
 
     #[test]
-    fn rewrite_mcp_root_uri_appends_slash_and_preserves_query() {
+    fn rewrite_mcp_transport_root_uri_rewrites_both_mcp_forms_preserving_query() {
         let uri: Uri = "/mcp?key=secret&x=1".parse().expect("uri parse");
-        let rewritten = rewrite_mcp_root_uri(&uri).expect("uri should rewrite");
-        assert_eq!(rewritten.path(), "/mcp/");
+        let rewritten = rewrite_mcp_transport_root_uri(&uri).expect("uri should rewrite");
+        assert_eq!(rewritten.path(), "/");
         assert_eq!(rewritten.query(), Some("key=secret&x=1"));
+
+        let slash_uri: Uri = "/mcp/?key=secret&x=1".parse().expect("uri parse");
+        let slash_rewritten =
+            rewrite_mcp_transport_root_uri(&slash_uri).expect("uri should rewrite");
+        assert_eq!(slash_rewritten.path(), "/");
+        assert_eq!(slash_rewritten.query(), Some("key=secret&x=1"));
     }
 
     #[test]
-    fn rewrite_mcp_root_uri_skips_other_paths() {
+    fn rewrite_mcp_transport_root_uri_skips_other_paths() {
         let uri: Uri = "/health".parse().expect("uri parse");
-        assert_eq!(rewrite_mcp_root_uri(&uri), None);
+        assert_eq!(rewrite_mcp_transport_root_uri(&uri), None);
     }
 
     #[tokio::test]
@@ -628,21 +637,40 @@ mod tests {
     #[tokio::test]
     async fn mcp_routes_accept_both_with_and_without_trailing_slash() {
         let config = test_config();
+        let api_key = config.api_key.clone();
         let service = ComputerService::new(config.clone());
         let app = super::build_app(
             config,
             super::build_mcp_service(service.clone(), CancellationToken::new()),
             service,
         );
+        let initialize_request = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {},
+                "clientInfo": {
+                    "name": "test-client",
+                    "version": "0.1"
+                }
+            }
+        });
 
-        for path in ["/mcp", "/mcp/"] {
+        for path in [
+            format!("/mcp?key={api_key}"),
+            format!("/mcp/?key={api_key}"),
+        ] {
             let response = app
                 .clone()
                 .oneshot(
                     Request::builder()
                         .method("POST")
-                        .uri(path)
-                        .body(Body::empty())
+                        .uri(&path)
+                        .header("content-type", "application/json")
+                        .header("accept", "application/json, text/event-stream")
+                        .body(Body::from(initialize_request.to_string()))
                         .expect("request build"),
                 )
                 .await
@@ -650,8 +678,8 @@ mod tests {
 
             assert_eq!(
                 response.status(),
-                StatusCode::UNAUTHORIZED,
-                "expected auth middleware to protect {path}"
+                StatusCode::OK,
+                "expected initialize to succeed for {path}"
             );
         }
     }
