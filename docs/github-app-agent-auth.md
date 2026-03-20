@@ -17,7 +17,10 @@ The goal is simple:
 - the agent gets read-only GitHub access through the reader app
 - the agent can ask for a PR without ever holding the publisher write credential itself
 
-For the full step-by-step operator flow, use [agent-vps-setup-runbook.md](agent-vps-setup-runbook.md).
+For full operator runbooks:
+
+- Sprites: [agent-sprites-setup-runbook.md](agent-sprites-setup-runbook.md)
+- VPS: [agent-vps-setup-runbook.md](agent-vps-setup-runbook.md)
 
 Default config file: `/etc/computer-mcp/config.toml`
 

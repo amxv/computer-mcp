@@ -2,6 +2,8 @@
 
 This runbook is for an agent that is helping a human set up `computer-mcp` on a fresh Linux VPS.
 
+If the target host is Sprites, use [agent-sprites-setup-runbook.md](agent-sprites-setup-runbook.md) instead.
+
 Use this document exactly as written. It is optimized for:
 
 - a fresh VPS

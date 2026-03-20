@@ -4,9 +4,13 @@ Remote coding MCP server for Linux VPS deployment.
 
 This README is the fast path for a fresh VPS.
 
-Agents doing a full operator-led setup should read [docs/agent-vps-setup-runbook.md](docs/agent-vps-setup-runbook.md) first.
+Agents doing a full operator-led setup should read the runbook that matches the target environment first:
+
+- Sprites: [docs/agent-sprites-setup-runbook.md](docs/agent-sprites-setup-runbook.md)
+- VPS: [docs/agent-vps-setup-runbook.md](docs/agent-vps-setup-runbook.md)
 
 For extra detail, see:
+- [docs/agent-sprites-setup-runbook.md](docs/agent-sprites-setup-runbook.md)
 - [docs/agent-vps-setup-runbook.md](docs/agent-vps-setup-runbook.md)
 - [docs/deployment-notes.md](docs/deployment-notes.md)
 - [docs/github-app-agent-auth.md](docs/github-app-agent-auth.md)
@@ -14,6 +18,7 @@ For extra detail, see:
 - [gg/agent-outputs/computer-cli-quickstart-for-agents.md](gg/agent-outputs/computer-cli-quickstart-for-agents.md)
 
 If the target host is Runpod, use [.agents/skills/runpod-deployment/SKILL.md](.agents/skills/runpod-deployment/SKILL.md).
+If the target host is Sprites, use [docs/agent-sprites-setup-runbook.md](docs/agent-sprites-setup-runbook.md).
 The main README below is the standard Linux VPS path.
 
 Container images:
