@@ -123,6 +123,7 @@ If you cannot use the script, follow the same sequence manually:
    - `sprite exec -s <sprite> -- sudo computer-mcp stop || true`
 7. Register Sprite Services:
    - `scripts/sprite-services.sh sync --sprite <sprite> [--org <org-name>]`
+   - if Sprite reports stale running state, use `scripts/sprite-services.sh sync --sprite <sprite> [--org <org-name>] --force-recreate`
 8. Verify:
    - `scripts/sprite-services.sh status --sprite <sprite> [--org <org-name>]`
    - `scripts/sprite-services.sh logs --sprite <sprite> [--org <org-name>] --service computer-mcp-prd --lines 20`
@@ -138,11 +139,14 @@ For Sprite deployments, the authoritative runtime view is the Sprite Services AP
 Useful commands:
 
 - `scripts/sprite-services.sh status --sprite <sprite> [--org <org-name>]`
+- `scripts/sprite-services.sh sync --sprite <sprite> [--org <org-name>] --force-recreate`
 - `scripts/sprite-services.sh logs --sprite <sprite> [--org <org-name>] --service computer-mcpd --lines 100`
 - `scripts/sprite-services.sh logs --sprite <sprite> [--org <org-name>] --service computer-mcp-prd --lines 100`
 - `computer-mcp sprite services-status --sprite <sprite> [--org <org-name>]`
 - `computer-mcp sprite service-logs --sprite <sprite> [--org <org-name>] --service computer-mcpd --lines 100`
 - inside the Sprite guest, `sudo computer-mcp restart` and `sudo computer-mcp upgrade --version <tag>` should recycle the existing Sprite-managed services instead of falling back to detached process mode
+
+If `scripts/sprite-services.sh status` shows a service as running but guest-side `ps` or `/health` disagrees, prefer `--force-recreate` from a machine with Sprite CLI access. That clears stale control-plane state without widening agent-user access or exposing the publisher key.
 
 ## Verification Checklist
 

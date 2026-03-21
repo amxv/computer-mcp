@@ -57,6 +57,7 @@ On Sprite-like hosts:
 - keep the coding daemon on the dedicated `computer-mcp-agent` user instead of the built-in `sprite` user
 - keep the publisher daemon on `computer-mcp-publisher`
 - register Sprite Services with [`scripts/sprite-services.sh`](../scripts/sprite-services.sh) instead of relying on detached process mode
+- if Sprite Services drift into stale "running" state, use `scripts/sprite-services.sh sync --force-recreate --sprite <sprite> [--org <org>]` from the control-plane side
 - treat `sprite api -s <sprite> /services` and `.../logs` as the lifecycle source of truth
 - `computer-mcp upgrade` and `computer-mcp restart` should recycle the existing Sprite-managed service processes in guest instead of trying to start detached process mode
 
