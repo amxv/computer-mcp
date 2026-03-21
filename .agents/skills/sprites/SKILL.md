@@ -63,6 +63,14 @@ sprite console
 Use `sprite exec` for automation and repeatable scripts.
 Use `sprite console` for exploratory debugging.
 
+For `computer-mcp` on Sprites, prefer control-plane lifecycle commands over in-guest service management:
+
+- Initial install or full reconfiguration: `scripts/setup-sprite.sh`
+- Routine upgrade: `scripts/upgrade-sprite.sh --sprite <sprite> [--org <org>]`
+- If control-plane state is stale: `scripts/sprite-services.sh sync --sprite <sprite> [--org <org>] --force-recreate`
+
+That keeps Sprite Services as the lifecycle owner and avoids depending on guest-local process state when upgrading.
+
 ## Persistence Rules
 
 Persists:

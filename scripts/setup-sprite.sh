@@ -194,7 +194,7 @@ log "validating publisher app token mint"
 )
 
 TMP_REMOTE_SCRIPT="$(mktemp)"
-trap 'rm -f "${TMP_REMOTE_SCRIPT}"' EXIT
+trap '/bin/rm -f "${TMP_REMOTE_SCRIPT}"' EXIT
 
 cat > "${TMP_REMOTE_SCRIPT}" <<EOF
 #!/usr/bin/env bash
@@ -331,6 +331,13 @@ echo "[remote] verify private GitHub HTTPS access through reader helper"
 sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent \
   git -C /workspace ls-remote "https://github.com/${TARGET_REPO}.git" HEAD >/dev/null
 
+echo "[remote] verify agent still cannot read publisher private key"
+if sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent \
+  bash -lc 'cat /etc/computer-mcp/publisher/private-key.pem >/dev/null 2>&1'; then
+  echo "[remote] ERROR: computer-mcp-agent unexpectedly gained publisher key access" >&2
+  exit 1
+fi
+
 echo "[remote] stop detached process-mode stack before Sprite service handoff"
 sudo computer-mcp stop || true
 
@@ -349,7 +356,21 @@ log "syncing Sprite Services"
   sync \
   --sprite "${SPRITE_NAME}" \
   "${SPRITE_SERVICE_ARGS[@]}" \
-  --config /etc/computer-mcp/config.toml
+  --config /etc/computer-mcp/config.toml \
+  --force-recreate
+
+log "verifying publisher socket permissions after Sprite service handoff"
+sprite "${SPRITE_SCOPE_ARGS[@]}" exec -- sudo bash -lc '
+  set -euo pipefail
+  dir_path=/var/lib/computer-mcp/publisher/run
+  sock_path=/var/lib/computer-mcp/publisher/run/computer-mcp-prd.sock
+  [[ "$(stat -c %a "$dir_path")" == "750" ]]
+  [[ "$(stat -c %U "$dir_path")" == "computer-mcp-publisher" ]]
+  [[ "$(stat -c %G "$dir_path")" == "computer-mcp" ]]
+  [[ "$(stat -c %a "$sock_path")" == "660" ]]
+  [[ "$(stat -c %U "$sock_path")" == "computer-mcp-publisher" ]]
+  [[ "$(stat -c %G "$sock_path")" == "computer-mcp" ]]
+'
 
 log "verifying Sprite Service logs are readable"
 "${REPO_ROOT}/scripts/sprite-services.sh" \
