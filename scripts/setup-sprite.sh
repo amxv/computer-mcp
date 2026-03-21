@@ -23,10 +23,11 @@ What this script does:
   2. Validates reader/publisher app token minting locally.
   3. Installs latest computer-mcp on the target Sprite.
   4. Installs PEM keys + writes managed config block.
-  5. Adapts ports for Sprite process-mode runtime:
+  5. Adapts ports for Sprite service-mode runtime:
      - bind_port = 8443 (TLS)
      - http_bind_port = 8080 (Sprite URL routing)
-  6. Starts/restarts computer-mcp and prints status + URL hints.
+  6. Verifies reader-backed GitHub HTTPS access for the agent user.
+  7. Registers Sprite Services and validates Sprite-native lifecycle.
 EOF
 }
 
@@ -74,9 +75,12 @@ validate_local_prereqs() {
   require_cmd curl
   require_cmd jq
   require_cmd openssl
+  require_cmd bash
 
   [[ -x "${REPO_ROOT}/scripts/mint-gh-app-installation-token.sh" ]] \
     || die "missing executable ${REPO_ROOT}/scripts/mint-gh-app-installation-token.sh"
+  [[ -x "${REPO_ROOT}/scripts/sprite-services.sh" ]] \
+    || die "missing executable ${REPO_ROOT}/scripts/sprite-services.sh"
 }
 
 SPRITE_NAME=""
@@ -153,6 +157,11 @@ validate_local_prereqs
 SPRITE_SCOPE_ARGS=("-s" "${SPRITE_NAME}")
 if [[ -n "${ORG_NAME}" ]]; then
   SPRITE_SCOPE_ARGS=("-o" "${ORG_NAME}" "-s" "${SPRITE_NAME}")
+fi
+
+SPRITE_SERVICE_ARGS=()
+if [[ -n "${ORG_NAME}" ]]; then
+  SPRITE_SERVICE_ARGS+=(--org "${ORG_NAME}")
 fi
 
 log "deriving installation IDs for ${TARGET_REPO}"
@@ -292,15 +301,7 @@ sudo chgrp computer-mcp "\$CFG"
 sudo chmod 0640 "\$CFG"
 rm -f /tmp/reader.pem /tmp/publisher.pem /tmp/setup-computer-mcp-sprite.sh
 
-echo "[remote] restart stack"
-sudo computer-mcp restart || sudo computer-mcp start
-
-echo "[remote] health checks"
-sudo computer-mcp status
-sudo curl -kfsS https://127.0.0.1:8443/health
-echo
-sudo curl -fsS http://127.0.0.1:8080/health
-echo
+echo "[remote] verify agent workspace defaults"
 sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent bash -lc '
   cd /workspace
   test -w /workspace
@@ -309,6 +310,13 @@ sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent bash -lc '
   rm -f .computer-mcp-write-check
 '
 echo
+
+echo "[remote] verify private GitHub HTTPS access through reader helper"
+sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent \
+  git -C /workspace ls-remote "https://github.com/${TARGET_REPO}.git" HEAD >/dev/null
+
+echo "[remote] stop detached process-mode stack before Sprite service handoff"
+sudo computer-mcp stop || true
 
 echo "[remote] done"
 EOF
@@ -320,6 +328,27 @@ sprite "${SPRITE_SCOPE_ARGS[@]}" exec \
   --file "${PUBLISHER_PEM}:/tmp/publisher.pem" \
   bash /tmp/setup-computer-mcp-sprite.sh
 
+log "syncing Sprite Services"
+"${REPO_ROOT}/scripts/sprite-services.sh" \
+  sync \
+  --sprite "${SPRITE_NAME}" \
+  "${SPRITE_SERVICE_ARGS[@]}" \
+  --config /etc/computer-mcp/config.toml
+
+log "verifying Sprite Service logs are readable"
+"${REPO_ROOT}/scripts/sprite-services.sh" \
+  logs \
+  --sprite "${SPRITE_NAME}" \
+  "${SPRITE_SERVICE_ARGS[@]}" \
+  --service computer-mcp-prd \
+  --lines 20 >/dev/null
+"${REPO_ROOT}/scripts/sprite-services.sh" \
+  logs \
+  --sprite "${SPRITE_NAME}" \
+  "${SPRITE_SERVICE_ARGS[@]}" \
+  --service computer-mcpd \
+  --lines 20 >/dev/null
+
 log "setting sprite URL auth: ${URL_AUTH}"
 sprite "${SPRITE_SCOPE_ARGS[@]}" url update --auth "${URL_AUTH}" >/dev/null
 
@@ -327,6 +356,9 @@ SPRITE_URL="$(sprite "${SPRITE_SCOPE_ARGS[@]}" url | awk '/^URL:/ {print $2; exi
 if [[ -n "${SPRITE_URL}" ]]; then
   SPRITE_HOST="${SPRITE_URL#https://}"
   SPRITE_HOST="${SPRITE_HOST%/}"
+  log "verifying Sprite health via public URL"
+  curl -fsS --retry 3 --retry-all-errors --retry-delay 2 "${SPRITE_URL%/}/health" >/dev/null
+  log "Sprite health OK: ${SPRITE_URL%/}/health"
   log "MCP URL hint:"
   sprite "${SPRITE_SCOPE_ARGS[@]}" exec -- sudo computer-mcp show-url --host "${SPRITE_HOST}" || true
 else

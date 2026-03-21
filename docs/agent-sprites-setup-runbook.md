@@ -13,13 +13,22 @@ When this runbook is complete:
 
 - latest `computer-mcp` is installed in the target Sprite
 - reader + publisher GitHub App auth is configured
-- publisher and MCP daemons are running in Sprite-safe process mode
+- publisher and MCP daemons are registered as Sprite Services
 - the coding agent starts in a writable non-root workspace (`/workspace`)
+- the coding agent can `git clone` private GitHub repos over HTTPS through the reader app
 - MCP endpoint is reachable through the Sprite URL
 
 ## Why Sprites Need A Slightly Different Path
 
-Sprites are Linux boxes, but this runtime commonly uses process mode and non-root service users.
+Sprites are Linux boxes, but ad hoc processes do not survive Sprite sleep and wake cycles.
+
+For `computer-mcp`, the durable deployment model on Sprites is:
+
+- non-root local service users inside the Sprite
+- Sprite Services as the platform lifecycle owner
+- `http_bind_port = 8080` as the public Sprite URL target
+
+Detached process mode is still part of the installer fallback, but it is not the operational source of truth on Sprites.
 
 To avoid privileged port binding failures in process mode, this runbook uses:
 
@@ -84,8 +93,11 @@ What the script does:
 5. writes a managed GitHub app config block
 6. enforces Sprite-safe ports (`8443` TLS + `8080` HTTP)
 7. enforces agent workspace defaults (`agent_home = "/home/computer-mcp-agent"`, `default_workdir = "/workspace"`)
-8. restarts stack, verifies health, and verifies that `computer-mcp-agent` can write in `/workspace`
-9. prints MCP URL hint based on Sprite URL host
+8. stops any detached process-mode daemons left from older installs
+9. creates or updates Sprite Services for `computer-mcp-prd` and `computer-mcpd`
+10. verifies Service inventory, Service logs, and public Sprite health
+11. verifies the agent can mint reader-backed Git credentials for GitHub HTTPS access
+12. prints MCP URL hint based on Sprite URL host
 
 ## Manual Path (If You Need It)
 
@@ -105,25 +117,43 @@ If you cannot use the script, follow the same sequence manually:
    - `default_workdir = "/workspace"`
    - reader app fields
    - publisher app fields and target repo
-6. `sudo computer-mcp restart || sudo computer-mcp start`
-7. Verify:
-   - `sudo computer-mcp status`
-   - `sudo curl -k https://127.0.0.1:8443/health`
-   - `sudo curl http://127.0.0.1:8080/health`
+6. Stop any old detached daemons:
+   - `sprite exec -s <sprite> -- sudo computer-mcp stop || true`
+7. Register Sprite Services:
+   - `scripts/sprite-services.sh sync --sprite <sprite> [--org <org-name>]`
+8. Verify:
+   - `scripts/sprite-services.sh status --sprite <sprite> [--org <org-name>]`
+   - `scripts/sprite-services.sh logs --sprite <sprite> [--org <org-name>] --service computer-mcp-prd --lines 20`
+   - `scripts/sprite-services.sh logs --sprite <sprite> [--org <org-name>] --service computer-mcpd --lines 20`
+   - `curl -fsS https://<sprite-host>/health`
    - `sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent bash -lc 'cd /workspace && touch .ok && rm -f .ok'`
+   - `sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent git -C /workspace ls-remote https://github.com/<owner>/<private-repo>.git HEAD`
+
+## Sprite Service Lifecycle
+
+For Sprite deployments, the authoritative runtime view is the Sprite Services API, not detached pid files inside the Sprite.
+
+Useful commands:
+
+- `scripts/sprite-services.sh status --sprite <sprite> [--org <org-name>]`
+- `scripts/sprite-services.sh logs --sprite <sprite> [--org <org-name>] --service computer-mcpd --lines 100`
+- `scripts/sprite-services.sh logs --sprite <sprite> [--org <org-name>] --service computer-mcp-prd --lines 100`
+- `computer-mcp sprite services-status --sprite <sprite> [--org <org-name>]`
+- `computer-mcp sprite service-logs --sprite <sprite> [--org <org-name>] --service computer-mcpd --lines 100`
 
 ## Verification Checklist
 
-- `computer-mcp status` shows:
-  - `computer-mcpd.service` active
-  - `computer-mcp-prd` active
-  - `agent-home: /home/computer-mcp-agent`
-  - `default-workdir: /workspace`
-  - reader config ready
+- `scripts/sprite-services.sh status` shows both:
+  - `computer-mcp-prd`
+  - `computer-mcpd`
+- `computer-mcpd` depends on `computer-mcp-prd`
+- `computer-mcpd` exposes `http_port = 8080`
 - config file contains expected app IDs and installation IDs
 - reader and publisher PEM permissions are correct
 - `computer-mcp-agent` can write inside `/workspace`
+- `computer-mcp-agent` can access private GitHub repos over HTTPS without a manual username/password prompt
 - Sprite URL auth mode is intentional (`sprite` by default; `public` only if required)
+- Service logs are readable under the Sprite Services API
 
 ## Stop Conditions
 

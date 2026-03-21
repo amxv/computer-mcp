@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::fs::OpenOptions;
-use std::io;
+use std::io::{self, Read};
 use std::net::IpAddr;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -16,7 +16,9 @@ use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand};
 use computer_mcp::config::{Config, DEFAULT_CONFIG_PATH};
 use computer_mcp::install_rustls_crypto_provider;
-use computer_mcp::publisher::{build_publish_request, detect_repo_root, submit_publish_request};
+use computer_mcp::publisher::{
+    build_publish_request, detect_repo_root, mint_reader_installation_token, submit_publish_request,
+};
 use computer_mcp::redaction::redact_api_key_query_params;
 #[cfg(unix)]
 use nix::errno::Errno;
@@ -26,9 +28,11 @@ use nix::sys::signal::{Signal, kill};
 use nix::unistd::{Group, Pid, Uid, User, chown, setsid};
 use rand::distr::{Alphanumeric, SampleString};
 use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, SanType};
+use serde::Deserialize;
 
 const SERVICE_NAME: &str = "computer-mcpd.service";
 const SYSTEMD_UNIT_PATH: &str = "/etc/systemd/system/computer-mcpd.service";
+const SPRITE_MAIN_SERVICE_LABEL: &str = "computer-mcpd";
 const STATE_DIR: &str = "/var/lib/computer-mcp";
 const TLS_DIR: &str = "/var/lib/computer-mcp/tls";
 const LETSENCRYPT_LIVE_DIR: &str = "/etc/letsencrypt/live";
@@ -82,6 +86,9 @@ enum Commands {
         value: String,
     },
     RotateKey,
+    GitCredentialHelper {
+        operation: String,
+    },
     ShowUrl {
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
@@ -108,6 +115,10 @@ enum Commands {
         #[command(subcommand)]
         command: PublisherCommand,
     },
+    Sprite {
+        #[command(subcommand)]
+        command: SpriteCommand,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -121,6 +132,54 @@ enum PublisherCommand {
     Stop,
     Status,
     Logs,
+}
+
+#[derive(Debug, Subcommand)]
+enum SpriteCommand {
+    ServicesStatus {
+        #[arg(long)]
+        sprite: String,
+        #[arg(long)]
+        org: Option<String>,
+    },
+    ServiceLogs {
+        #[arg(long)]
+        sprite: String,
+        #[arg(long)]
+        service: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        lines: Option<usize>,
+        #[arg(long)]
+        duration: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SpriteServiceDefinition {
+    cmd: String,
+    args: Vec<String>,
+    needs: Vec<String>,
+    http_port: Option<u16>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+struct SpriteServiceStatus {
+    name: String,
+    cmd: String,
+    args: Vec<String>,
+    needs: Vec<String>,
+    http_port: Option<u16>,
+    state: Option<SpriteServiceState>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+struct SpriteServiceState {
+    name: Option<String>,
+    pid: Option<u32>,
+    started_at: Option<String>,
+    status: Option<String>,
 }
 
 #[tokio::main]
@@ -197,6 +256,10 @@ async fn main() -> Result<()> {
             ensure_shared_group_permissions(&config, &config_path)?;
             println!("rotated API key in {}", config_path.display());
         }
+        Commands::GitCredentialHelper { operation } => {
+            let config = Config::load(Some(Path::new(&config_path)))?;
+            handle_git_credential_helper(&config, &operation).await?;
+        }
         Commands::ShowUrl { host } => {
             let config = Config::load(Some(Path::new(&config_path)))?;
             let raw_url = format!("https://{host}/mcp?key={}", config.api_key);
@@ -250,6 +313,34 @@ async fn main() -> Result<()> {
                 }
             }
         }
+        Commands::Sprite { command } => {
+            let config = Config::load(Some(Path::new(&config_path)))?;
+            match command {
+                SpriteCommand::ServicesStatus { sprite, org } => {
+                    print_sprite_services_status_summary(
+                        &config,
+                        Path::new(&config_path),
+                        &sprite,
+                        org.as_deref(),
+                    )?;
+                }
+                SpriteCommand::ServiceLogs {
+                    sprite,
+                    service,
+                    org,
+                    lines,
+                    duration,
+                } => {
+                    print_sprite_service_logs(
+                        &sprite,
+                        org.as_deref(),
+                        &service,
+                        lines,
+                        duration.as_deref(),
+                    )?;
+                }
+            }
+        }
     }
 
     Ok(())
@@ -264,6 +355,99 @@ fn resolve_pr_body(body: Option<String>, body_file: Option<&str>) -> Result<Stri
         }
         (None, None) => Ok(String::new()),
     }
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct GitCredentialRequest {
+    protocol: Option<String>,
+    host: Option<String>,
+    path: Option<String>,
+    url: Option<String>,
+    username: Option<String>,
+}
+
+async fn handle_git_credential_helper(config: &Config, operation: &str) -> Result<()> {
+    let request = read_git_credential_request()?;
+
+    if operation != "get" || !git_credential_request_targets_github(&request) {
+        return Ok(());
+    }
+
+    ensure_reader_ready_for_start(config)?;
+    let token = mint_reader_installation_token(
+        config.reader_app_id.unwrap_or_default(),
+        Path::new(&config.reader_private_key_path),
+        config.reader_installation_id.unwrap_or_default(),
+    )
+    .await?;
+
+    println!("username=x-access-token");
+    println!("password={token}");
+    println!();
+    Ok(())
+}
+
+fn read_git_credential_request() -> Result<GitCredentialRequest> {
+    let mut raw = String::new();
+    io::stdin()
+        .read_to_string(&mut raw)
+        .context("failed to read git credential request from stdin")?;
+    Ok(parse_git_credential_request(&raw))
+}
+
+fn parse_git_credential_request(raw: &str) -> GitCredentialRequest {
+    let mut request = GitCredentialRequest::default();
+
+    for line in raw.lines().filter(|line| !line.trim().is_empty()) {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+
+        match key {
+            "protocol" => request.protocol = Some(value.to_string()),
+            "host" => request.host = Some(value.to_string()),
+            "path" => request.path = Some(value.to_string()),
+            "url" => request.url = Some(value.to_string()),
+            "username" => request.username = Some(value.to_string()),
+            _ => {}
+        }
+    }
+
+    request
+}
+
+fn git_credential_request_targets_github(request: &GitCredentialRequest) -> bool {
+    let protocol = request
+        .protocol
+        .as_deref()
+        .or_else(|| request.url.as_deref().and_then(credential_url_protocol));
+    let host = request
+        .host
+        .as_deref()
+        .or_else(|| request.url.as_deref().and_then(credential_url_host));
+
+    matches!(protocol, Some(protocol) if protocol.eq_ignore_ascii_case("https"))
+        && matches!(host, Some(host) if credential_host_is_github(host))
+}
+
+fn credential_url_protocol(url: &str) -> Option<&str> {
+    url.split_once("://").map(|(scheme, _)| scheme)
+}
+
+fn credential_url_host(url: &str) -> Option<&str> {
+    let (_, rest) = url.split_once("://")?;
+    let host = rest.split('/').next()?;
+    Some(host.split('@').next_back().unwrap_or(host))
+}
+
+fn credential_host_is_github(host: &str) -> bool {
+    let normalized = host
+        .split(':')
+        .next()
+        .unwrap_or(host)
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    normalized == "github.com" || normalized == "www.github.com"
 }
 
 fn start_stack(config_path: &Path) -> Result<()> {
@@ -1361,6 +1545,289 @@ fn print_publisher_status_summary(config: &Config) {
     }
 }
 
+fn print_sprite_services_status_summary(
+    config: &Config,
+    config_path: &Path,
+    sprite: &str,
+    org: Option<&str>,
+) -> Result<()> {
+    let services = fetch_sprite_services(sprite, org)?;
+    let lines = build_sprite_services_status_lines(config, config_path, sprite, &services);
+    for line in lines {
+        println!("{line}");
+    }
+    Ok(())
+}
+
+fn print_sprite_service_logs(
+    sprite: &str,
+    org: Option<&str>,
+    service: &str,
+    lines: Option<usize>,
+    duration: Option<&str>,
+) -> Result<()> {
+    let path = sprite_service_logs_api_path(service, lines, duration);
+    let raw = run_sprite_api(sprite, org, &path, &["-sS".to_string()])?;
+
+    match serde_json::from_str::<serde_json::Value>(&raw) {
+        Ok(parsed) => println!(
+            "{}",
+            serde_json::to_string_pretty(&parsed)
+                .context("failed to format Sprite Service logs")?
+        ),
+        Err(_) => print!("{raw}"),
+    }
+
+    Ok(())
+}
+
+fn fetch_sprite_services(sprite: &str, org: Option<&str>) -> Result<Vec<SpriteServiceStatus>> {
+    let raw = run_sprite_api(sprite, org, "/services", &["-sS".to_string()])?;
+    serde_json::from_str(&raw).context("failed to parse Sprite Services response")
+}
+
+fn build_sprite_services_status_lines(
+    config: &Config,
+    config_path: &Path,
+    sprite: &str,
+    services: &[SpriteServiceStatus],
+) -> Vec<String> {
+    let expected = expected_sprite_service_definitions(config_path);
+    let service_map: BTreeMap<&str, &SpriteServiceStatus> = services
+        .iter()
+        .map(|service| (service.name.as_str(), service))
+        .collect();
+
+    let mut lines = vec![
+        format!("service-mode: sprite-services"),
+        format!("sprite: {sprite}"),
+        format!("config: {}", config_path.display()),
+        format!("agent-home: {}", config.agent_home),
+        format!("default-workdir: {}", config.default_workdir),
+        format!("source-of-truth: sprite api -s {sprite} /services"),
+    ];
+
+    for service_name in [PUBLISHER_SERVICE_LABEL, SPRITE_MAIN_SERVICE_LABEL] {
+        lines.push(String::new());
+        lines.extend(build_single_sprite_service_status_lines(
+            service_name,
+            config,
+            sprite,
+            service_map.get(service_name).copied(),
+            expected.get(service_name),
+        ));
+    }
+
+    lines
+}
+
+fn build_single_sprite_service_status_lines(
+    service_name: &str,
+    config: &Config,
+    sprite: &str,
+    actual: Option<&SpriteServiceStatus>,
+    expected: Option<&SpriteServiceDefinition>,
+) -> Vec<String> {
+    let mut lines = vec![format!("service: {service_name}")];
+
+    let expected_run_user = if service_name == PUBLISHER_SERVICE_LABEL {
+        config.publisher_user.as_str()
+    } else {
+        config.agent_user.as_str()
+    };
+    lines.push(format!("expected-run-user: {expected_run_user}"));
+
+    let Some(service) = actual else {
+        lines.push("active: missing".to_string());
+        lines.push(format!(
+            "hint: register Sprite Services with `scripts/sprite-services.sh sync --sprite {sprite}`"
+        ));
+        return lines;
+    };
+
+    let status = service
+        .state
+        .as_ref()
+        .and_then(|state| state.status.as_deref())
+        .unwrap_or("unknown");
+    let pid = service
+        .state
+        .as_ref()
+        .and_then(|state| state.pid)
+        .map(|pid| pid.to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    let started_at = service
+        .state
+        .as_ref()
+        .and_then(|state| state.started_at.as_deref())
+        .unwrap_or("unknown");
+
+    lines.push(format!("active: {status}"));
+    lines.push(format!("pid: {pid}"));
+    lines.push(format!("started-at: {started_at}"));
+    lines.push(format!(
+        "http-port: {}",
+        service
+            .http_port
+            .map(|port| port.to_string())
+            .unwrap_or_else(|| "n/a".to_string())
+    ));
+    lines.push(format!(
+        "needs: {}",
+        if service.needs.is_empty() {
+            "none".to_string()
+        } else {
+            service.needs.join(", ")
+        }
+    ));
+    lines.push(format!("cmd: {}", service.cmd));
+    lines.push(format!("args: {}", service.args.join(" ")));
+
+    if let Some(expected_definition) = expected {
+        let matches = sprite_service_matches_definition(service, expected_definition);
+        lines.push(format!(
+            "definition-match: {}",
+            if matches { "yes" } else { "no" }
+        ));
+        if !matches {
+            lines.push(format!(
+                "hint: re-sync with `scripts/sprite-services.sh sync --sprite {sprite}`"
+            ));
+        }
+    }
+
+    if status != "running" {
+        lines.push(format!(
+            "hint: inspect logs with `computer-mcp sprite service-logs --sprite {sprite} --service {service_name}`"
+        ));
+    }
+
+    lines
+}
+
+fn expected_sprite_service_definitions(
+    config_path: &Path,
+) -> BTreeMap<&'static str, SpriteServiceDefinition> {
+    let config_arg = config_path.display().to_string();
+    BTreeMap::from([
+        (
+            PUBLISHER_SERVICE_LABEL,
+            SpriteServiceDefinition {
+                cmd: "sudo".to_string(),
+                args: vec![
+                    "-n".to_string(),
+                    "-u".to_string(),
+                    "computer-mcp-publisher".to_string(),
+                    format!("/usr/local/bin/{PUBLISHER_SERVICE_LABEL}"),
+                    "--config".to_string(),
+                    config_arg.clone(),
+                ],
+                needs: Vec::new(),
+                http_port: None,
+            },
+        ),
+        (
+            SPRITE_MAIN_SERVICE_LABEL,
+            SpriteServiceDefinition {
+                cmd: "sudo".to_string(),
+                args: vec![
+                    "-n".to_string(),
+                    "-u".to_string(),
+                    "computer-mcp-agent".to_string(),
+                    format!("/usr/local/bin/{SPRITE_MAIN_SERVICE_LABEL}"),
+                    "--config".to_string(),
+                    config_arg,
+                ],
+                needs: vec![PUBLISHER_SERVICE_LABEL.to_string()],
+                http_port: Some(8080),
+            },
+        ),
+    ])
+}
+
+fn sprite_service_matches_definition(
+    actual: &SpriteServiceStatus,
+    expected: &SpriteServiceDefinition,
+) -> bool {
+    actual.cmd == expected.cmd
+        && actual.args == expected.args
+        && actual.needs == expected.needs
+        && actual.http_port == expected.http_port
+}
+
+fn sprite_service_logs_api_path(
+    service: &str,
+    lines: Option<usize>,
+    duration: Option<&str>,
+) -> String {
+    let mut query = Vec::new();
+    if let Some(lines) = lines {
+        query.push(format!("lines={lines}"));
+    }
+    if let Some(duration) = duration
+        && !duration.is_empty()
+    {
+        query.push(format!("duration={duration}"));
+    }
+
+    if query.is_empty() {
+        format!("/services/{service}/logs")
+    } else {
+        format!("/services/{service}/logs?{}", query.join("&"))
+    }
+}
+
+fn run_sprite_api(
+    sprite: &str,
+    org: Option<&str>,
+    path: &str,
+    curl_args: &[String],
+) -> Result<String> {
+    if !command_exists("sprite") {
+        bail!("sprite CLI is required for Sprite service inspection");
+    }
+
+    let raw = run_command_capture(
+        "sprite",
+        &build_sprite_api_args(sprite, org, path, curl_args),
+    )?;
+    Ok(strip_sprite_api_prelude(&raw))
+}
+
+fn build_sprite_api_args(
+    sprite: &str,
+    org: Option<&str>,
+    path: &str,
+    curl_args: &[String],
+) -> Vec<String> {
+    let mut args = vec!["api".to_string()];
+    if let Some(org) = org {
+        args.push("-o".to_string());
+        args.push(org.to_string());
+    }
+    args.push("-s".to_string());
+    args.push(sprite.to_string());
+    args.push(path.to_string());
+    if !curl_args.is_empty() {
+        args.push("--".to_string());
+        args.extend(curl_args.iter().cloned());
+    }
+    args
+}
+
+fn strip_sprite_api_prelude(raw: &str) -> String {
+    let lines: Vec<&str> = raw.lines().collect();
+    if lines.len() >= 2 && lines[0].starts_with("Calling API:") && lines[1].starts_with("URL:") {
+        let mut stripped = lines[2..].join("\n");
+        if raw.ends_with('\n') && !stripped.ends_with('\n') {
+            stripped.push('\n');
+        }
+        return stripped.trim_start_matches('\n').to_string();
+    }
+
+    raw.to_string()
+}
+
 fn build_reader_status_lines(config: &Config) -> Vec<String> {
     let app_id = config
         .reader_app_id
@@ -1392,6 +1859,19 @@ fn build_reader_status_lines(config: &Config) -> Vec<String> {
     }
 
     lines
+}
+
+fn sprite_runtime_note_lines() -> Vec<String> {
+    if !Path::new("/.sprite").exists() {
+        return Vec::new();
+    }
+
+    vec![
+        "note: Sprite runtime detected; detached pid files are not authoritative across sleep/wake"
+            .to_string(),
+        "hint: use Sprite Services for lifecycle and inspect them from a machine with Sprite CLI access"
+            .to_string(),
+    ]
 }
 
 fn build_process_status_lines(
@@ -1451,6 +1931,7 @@ fn build_process_status_lines(
                 .to_string(),
         );
     }
+    lines.extend(sprite_runtime_note_lines());
 
     Ok(lines)
 }
@@ -1503,6 +1984,7 @@ fn build_publisher_status_lines(
     if config.publisher_targets.is_empty() {
         lines.push("hint: add at least one `publisher_targets` entry to config".to_string());
     }
+    lines.extend(sprite_runtime_note_lines());
 
     Ok(lines)
 }
@@ -1935,15 +2417,19 @@ run `computer-mcp --config \"{}\" restart` manually.\n{}",
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_LOG_LINES, ProcessModeState, SERVICE_NAME, ServiceManager, SystemctlAction,
-        build_certbot_args, build_journalctl_args, build_process_status_lines,
-        build_publisher_status_lines, build_reader_status_lines, build_status_summary_lines,
-        build_systemctl_args, build_upgrade_shell_args, certbot_cert_name,
-        ensure_http_listener_ready_for_start, generate_self_signed_certificate,
-        parse_systemctl_show, process_log_path, process_pid_path, read_tail_lines,
-        render_systemd_unit, select_tls_san_ip, service_manager_from_pid1,
-        shell_escape_single_quotes, state_root_for_config, status_host_hint, tls_artifacts_exist,
-        write_if_changed,
+        DEFAULT_LOG_LINES, PUBLISHER_SERVICE_LABEL, ProcessModeState, SERVICE_NAME,
+        SPRITE_MAIN_SERVICE_LABEL, ServiceManager, SpriteServiceState, SpriteServiceStatus,
+        SystemctlAction, build_certbot_args, build_journalctl_args, build_process_status_lines,
+        build_publisher_status_lines, build_reader_status_lines, build_sprite_api_args,
+        build_sprite_services_status_lines, build_status_summary_lines, build_systemctl_args,
+        build_upgrade_shell_args, certbot_cert_name, credential_host_is_github,
+        credential_url_host, credential_url_protocol, ensure_http_listener_ready_for_start,
+        expected_sprite_service_definitions, generate_self_signed_certificate,
+        git_credential_request_targets_github, parse_git_credential_request, parse_systemctl_show,
+        process_log_path, process_pid_path, read_tail_lines, render_systemd_unit,
+        select_tls_san_ip, service_manager_from_pid1, shell_escape_single_quotes,
+        sprite_service_logs_api_path, state_root_for_config, status_host_hint,
+        strip_sprite_api_prelude, tls_artifacts_exist, write_if_changed,
     };
     use computer_mcp::config::Config;
     use std::fs;
@@ -2261,6 +2747,161 @@ mod tests {
     }
 
     #[test]
+    fn expected_sprite_service_definitions_use_config_path() {
+        let defs = expected_sprite_service_definitions(Path::new("/etc/computer-mcp/custom.toml"));
+
+        assert_eq!(
+            defs.get(PUBLISHER_SERVICE_LABEL)
+                .expect("publisher definition")
+                .args,
+            vec![
+                "-n".to_string(),
+                "-u".to_string(),
+                "computer-mcp-publisher".to_string(),
+                "/usr/local/bin/computer-mcp-prd".to_string(),
+                "--config".to_string(),
+                "/etc/computer-mcp/custom.toml".to_string(),
+            ]
+        );
+        assert_eq!(
+            defs.get(SPRITE_MAIN_SERVICE_LABEL)
+                .expect("main definition")
+                .http_port,
+            Some(8080)
+        );
+    }
+
+    #[test]
+    fn build_sprite_api_args_include_scope_and_passthrough_curl_flags() {
+        let args = build_sprite_api_args(
+            "computer",
+            Some("amxv"),
+            "/services",
+            &["-sS".to_string(), "-X".to_string(), "PUT".to_string()],
+        );
+
+        assert_eq!(
+            args,
+            vec![
+                "api".to_string(),
+                "-o".to_string(),
+                "amxv".to_string(),
+                "-s".to_string(),
+                "computer".to_string(),
+                "/services".to_string(),
+                "--".to_string(),
+                "-sS".to_string(),
+                "-X".to_string(),
+                "PUT".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn strip_sprite_api_prelude_removes_wrapper_lines() {
+        let raw = "Calling API: amxv computer\nURL: https://api.sprites.dev/v1/sprites/computer/services\n\n[]\n";
+        assert_eq!(strip_sprite_api_prelude(raw), "[]\n");
+    }
+
+    #[test]
+    fn sprite_service_logs_api_path_adds_optional_query_params() {
+        assert_eq!(
+            sprite_service_logs_api_path("computer-mcpd", Some(50), Some("5s")),
+            "/services/computer-mcpd/logs?lines=50&duration=5s"
+        );
+        assert_eq!(
+            sprite_service_logs_api_path("computer-mcpd", None, None),
+            "/services/computer-mcpd/logs"
+        );
+    }
+
+    #[test]
+    fn build_sprite_services_status_lines_report_missing_services() {
+        let config = Config::default();
+        let lines = build_sprite_services_status_lines(
+            &config,
+            Path::new("/etc/computer-mcp/config.toml"),
+            "computer",
+            &[],
+        );
+        let joined = lines.join("\n");
+
+        assert!(joined.contains("service-mode: sprite-services"));
+        assert!(joined.contains("service: computer-mcp-prd"));
+        assert!(joined.contains("active: missing"));
+        assert!(joined.contains("service: computer-mcpd"));
+        assert!(joined.contains(
+            "hint: register Sprite Services with `scripts/sprite-services.sh sync --sprite computer`"
+        ));
+    }
+
+    #[test]
+    fn build_sprite_services_status_lines_report_definition_drift() {
+        let config = Config::default();
+        let services = vec![
+            SpriteServiceStatus {
+                name: PUBLISHER_SERVICE_LABEL.to_string(),
+                cmd: "sudo".to_string(),
+                args: vec![
+                    "-n".to_string(),
+                    "-u".to_string(),
+                    "computer-mcp-publisher".to_string(),
+                    "/usr/local/bin/computer-mcp-prd".to_string(),
+                    "--config".to_string(),
+                    "/etc/computer-mcp/config.toml".to_string(),
+                ],
+                needs: Vec::new(),
+                http_port: None,
+                state: Some(SpriteServiceState {
+                    name: Some(PUBLISHER_SERVICE_LABEL.to_string()),
+                    pid: Some(111),
+                    started_at: Some("2026-03-21T08:00:00Z".to_string()),
+                    status: Some("running".to_string()),
+                }),
+            },
+            SpriteServiceStatus {
+                name: SPRITE_MAIN_SERVICE_LABEL.to_string(),
+                cmd: "sudo".to_string(),
+                args: vec![
+                    "-n".to_string(),
+                    "-u".to_string(),
+                    "computer-mcp-agent".to_string(),
+                    "/usr/local/bin/computer-mcpd".to_string(),
+                    "--config".to_string(),
+                    "/etc/computer-mcp/other.toml".to_string(),
+                ],
+                needs: vec![PUBLISHER_SERVICE_LABEL.to_string()],
+                http_port: Some(8080),
+                state: Some(SpriteServiceState {
+                    name: Some(SPRITE_MAIN_SERVICE_LABEL.to_string()),
+                    pid: Some(222),
+                    started_at: Some("2026-03-21T08:01:00Z".to_string()),
+                    status: Some("starting".to_string()),
+                }),
+            },
+        ];
+
+        let lines = build_sprite_services_status_lines(
+            &config,
+            Path::new("/etc/computer-mcp/config.toml"),
+            "computer",
+            &services,
+        );
+        let joined = lines.join("\n");
+
+        assert!(joined.contains("service: computer-mcpd"));
+        assert!(joined.contains("active: starting"));
+        assert!(joined.contains("definition-match: no"));
+        assert!(
+            joined
+                .contains("hint: re-sync with `scripts/sprite-services.sh sync --sprite computer`")
+        );
+        assert!(joined.contains(
+            "hint: inspect logs with `computer-mcp sprite service-logs --sprite computer --service computer-mcpd`"
+        ));
+    }
+
+    #[test]
     fn ensure_http_listener_ready_rejects_same_port_as_https() {
         let config = Config {
             bind_port: 443,
@@ -2340,5 +2981,55 @@ mod tests {
         assert!(joined.contains("active: not-ready"));
         assert!(joined.contains("hint: set `reader_app_id` in config"));
         assert!(joined.contains("hint: set `reader_installation_id` in config"));
+    }
+
+    #[test]
+    fn parse_git_credential_request_extracts_known_fields() {
+        let request = parse_git_credential_request(
+            "protocol=https\nhost=github.com\npath=amxv/computer-mcp.git\nusername=x-access-token\n\n",
+        );
+
+        assert_eq!(request.protocol.as_deref(), Some("https"));
+        assert_eq!(request.host.as_deref(), Some("github.com"));
+        assert_eq!(request.path.as_deref(), Some("amxv/computer-mcp.git"));
+        assert_eq!(request.username.as_deref(), Some("x-access-token"));
+    }
+
+    #[test]
+    fn git_credential_request_targets_github_for_https_host() {
+        let request = parse_git_credential_request("protocol=https\nhost=github.com\n\n");
+        assert!(git_credential_request_targets_github(&request));
+    }
+
+    #[test]
+    fn git_credential_request_targets_github_for_https_url_fallback() {
+        let request =
+            parse_git_credential_request("url=https://github.com/amxv/computer-mcp.git\n\n");
+        assert!(git_credential_request_targets_github(&request));
+    }
+
+    #[test]
+    fn git_credential_request_rejects_non_github_or_non_https() {
+        let ssh_request = parse_git_credential_request("protocol=ssh\nhost=github.com\n\n");
+        let other_host_request =
+            parse_git_credential_request("protocol=https\nhost=example.com\n\n");
+
+        assert!(!git_credential_request_targets_github(&ssh_request));
+        assert!(!git_credential_request_targets_github(&other_host_request));
+    }
+
+    #[test]
+    fn credential_url_helpers_extract_protocol_and_host() {
+        assert_eq!(
+            credential_url_protocol("https://github.com/amxv/computer-mcp.git"),
+            Some("https")
+        );
+        assert_eq!(
+            credential_url_host("https://token@github.com/amxv/computer-mcp.git"),
+            Some("github.com")
+        );
+        assert!(credential_host_is_github("github.com:443"));
+        assert!(credential_host_is_github("www.github.com"));
+        assert!(!credential_host_is_github("gitlab.com"));
     }
 }

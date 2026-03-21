@@ -21,6 +21,7 @@ The goal is simple:
 
 - the agent gets read-only GitHub access through the reader app
 - the agent can ask for a PR without ever holding the publisher write credential itself
+- plain `git clone https://github.com/<owner>/<repo>.git` works for the agent through a short-lived reader credential helper
 
 For full operator runbooks:
 
@@ -106,6 +107,8 @@ computer-mcp start
 
 `computer-mcp start` validates both apps, creates TLS artifacts if needed, starts the publisher daemon, and starts the MCP daemon.
 
+The installer also configures the agent user's Git config with a host-scoped helper for `https://github.com`. Once `reader_app_id`, `reader_installation_id`, and the reader PEM are present, normal HTTPS `git clone`, `git fetch`, and `git ls-remote` use short-lived reader tokens automatically.
+
 ## How `publish-pr` Works
 
 Run `publish-pr` from inside the repo checkout after the change has already been committed:
@@ -135,6 +138,7 @@ Good:
 - `computer-mcp-prd` runs as `computer-mcp-publisher`
 - the publisher key is readable only by `computer-mcp-publisher`
 - the agent gets a writable non-root workspace such as `/workspace`
+- the agent's GitHub clone access is limited to the reader app permissions
 
 Bad:
 - the coding agent runs as `root`
@@ -148,4 +152,4 @@ On a private personal GitHub repo without GitHub Pro, GitHub will not enforce pr
 
 With this architecture, the main safety property does not come from GitHub blocking `main`. It comes from keeping the GitHub write credential inside the publisher daemon instead of handing it to the coding agent.
 
-If the coding agent also needs to clone private repos directly, give it a separate read-only credential or prepare the checkout another way. This document only covers the publisher write-auth path.
+If the coding agent also needs to clone private repos directly, use the built-in reader helper and keep the reader app permissions read-only. Do not reuse the publisher credential for clone access.

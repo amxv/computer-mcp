@@ -395,7 +395,7 @@ async fn handle_publish_request(
     target: &PublishTarget,
     bundle_bytes: &[u8],
 ) -> Result<PublishPrResponse> {
-    let token = mint_installation_token(
+    let token = mint_publisher_installation_token(
         config
             .publisher_app_id
             .ok_or_else(|| anyhow!("publisher_app_id is not configured"))?,
@@ -556,15 +556,54 @@ fn check_command_output(
     )
 }
 
-async fn mint_installation_token(
+pub async fn mint_reader_installation_token(
     app_id: u64,
     private_key_path: &Path,
     installation_id: u64,
 ) -> Result<String> {
+    mint_installation_token(
+        app_id,
+        private_key_path,
+        installation_id,
+        TokenPermissionProfile::Reader,
+    )
+    .await
+}
+
+pub async fn mint_publisher_installation_token(
+    app_id: u64,
+    private_key_path: &Path,
+    installation_id: u64,
+) -> Result<String> {
+    mint_installation_token(
+        app_id,
+        private_key_path,
+        installation_id,
+        TokenPermissionProfile::Publisher,
+    )
+    .await
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TokenPermissionProfile {
+    Reader,
+    Publisher,
+}
+
+async fn mint_installation_token(
+    app_id: u64,
+    private_key_path: &Path,
+    installation_id: u64,
+    permissions: TokenPermissionProfile,
+) -> Result<String> {
     let key_pem = fs::read(private_key_path)
         .with_context(|| format!("failed to read {}", private_key_path.display()))?;
-    let encoding_key =
-        EncodingKey::from_rsa_pem(&key_pem).context("failed to parse publisher RSA private key")?;
+    let encoding_key = EncodingKey::from_rsa_pem(&key_pem).with_context(|| {
+        format!(
+            "failed to parse {} RSA private key",
+            permissions.private_key_label()
+        )
+    })?;
 
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -587,12 +626,7 @@ async fn mint_installation_token(
         .header(AUTHORIZATION, format!("Bearer {jwt}"))
         .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
         .header(USER_AGENT, DEFAULT_USER_AGENT)
-        .json(&serde_json::json!({
-            "permissions": {
-                "contents": "write",
-                "pull_requests": "write"
-            }
-        }))
+        .json(&serde_json::json!({ "permissions": permissions.github_permissions() }))
         .send()
         .await
         .context("failed to request GitHub installation token")?;
@@ -608,6 +642,27 @@ async fn mint_installation_token(
         .await
         .context("failed to decode GitHub installation token response")?;
     Ok(payload.token)
+}
+
+impl TokenPermissionProfile {
+    fn private_key_label(self) -> &'static str {
+        match self {
+            Self::Reader => "reader",
+            Self::Publisher => "publisher",
+        }
+    }
+
+    fn github_permissions(self) -> serde_json::Value {
+        match self {
+            Self::Reader => serde_json::json!({
+                "contents": "read"
+            }),
+            Self::Publisher => serde_json::json!({
+                "contents": "write",
+                "pull_requests": "write"
+            }),
+        }
+    }
 }
 
 async fn create_pull_request(
