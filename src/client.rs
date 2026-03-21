@@ -199,7 +199,7 @@ impl ComputerClient {
     pub async fn verify_connection(&self) -> Result<()> {
         let url = format!("{}/{}", self.url.trim_end_matches('/'), "v1/write-stdin");
         let probe = WriteStdinInput {
-            session_id: u64::MAX,
+            session_handle: "__probe_invalid_handle__".to_string(),
             chars: None,
             yield_time_ms: Some(1),
             kill_process: Some(false),

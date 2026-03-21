@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::Config;
 use crate::protocol::{ApplyPatchInput, ExecCommandInput, ToolOutput, WriteStdinInput};
 use crate::service::ComputerService;
+use crate::session::SessionOrigin;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ApplyPatchOutput {
@@ -33,10 +34,12 @@ pub fn build_http_api_router(config: Arc<Config>, computer_service: ComputerServ
 
 async fn exec_command(
     State(computer_service): State<ComputerService>,
+    headers: HeaderMap,
     Json(input): Json<ExecCommandInput>,
 ) -> Result<Json<ToolOutput>, (StatusCode, Json<ErrorOutput>)> {
+    let caller_label = caller_label_from_headers(&headers);
     computer_service
-        .exec_command(input)
+        .exec_command_with_origin(input, SessionOrigin::http(caller_label))
         .await
         .map(Json)
         .map_err(bad_request)
@@ -88,6 +91,22 @@ async fn bearer_auth(
 fn bearer_token(headers: &HeaderMap) -> Option<&str> {
     let raw = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
     raw.strip_prefix("Bearer ")
+}
+
+fn caller_label_from_headers(headers: &HeaderMap) -> Option<String> {
+    let candidate = headers
+        .get("x-caller-label")
+        .and_then(|v| v.to_str().ok())
+        .or_else(|| {
+            headers
+                .get(header::USER_AGENT)
+                .and_then(|v| v.to_str().ok())
+        })?;
+    let trimmed = candidate.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.chars().take(128).collect())
 }
 
 #[cfg(test)]
@@ -232,7 +251,7 @@ mod tests {
         let exited_output: ToolOutput = response_json(exited).await;
         assert_eq!(exited_output.status, CommandStatus::Exited);
         assert!(exited_output.output.contains("phase3-exit"));
-        assert!(exited_output.session_id.is_none());
+        assert!(exited_output.session_handle.is_none());
 
         let running = post_json(
             &app,
@@ -247,13 +266,15 @@ mod tests {
         assert_eq!(running.status(), StatusCode::OK);
         let running_output: ToolOutput = response_json(running).await;
         assert_eq!(running_output.status, CommandStatus::Running);
-        let running_session_id = running_output.session_id.expect("session id should exist");
+        let running_session_handle = running_output
+            .session_handle
+            .expect("session handle should exist");
 
         let cleanup = post_json(
             &app,
             "/v1/write-stdin",
             json!({
-                "session_id": running_session_id,
+                "session_handle": running_session_handle,
                 "kill_process": true,
                 "yield_time_ms": 2_000
             }),
@@ -281,15 +302,15 @@ mod tests {
         .await;
         assert_eq!(started.status(), StatusCode::OK);
         let started_output: ToolOutput = response_json(started).await;
-        let session_id = started_output
-            .session_id
+        let session_handle = started_output
+            .session_handle
             .expect("stateful shell should remain running");
 
         let echoed = post_json(
             &app,
             "/v1/write-stdin",
             json!({
-                "session_id": session_id,
+                "session_handle": session_handle,
                 "chars": "echo phase3-write\n",
                 "yield_time_ms": 500,
                 "kill_process": false
@@ -306,7 +327,7 @@ mod tests {
             &app,
             "/v1/write-stdin",
             json!({
-                "session_id": session_id,
+                "session_handle": session_handle,
                 "chars": "exit\n",
                 "yield_time_ms": 2_000,
                 "kill_process": false
@@ -317,7 +338,7 @@ mod tests {
         assert_eq!(done.status(), StatusCode::OK);
         let done_output: ToolOutput = response_json(done).await;
         assert_eq!(done_output.status, CommandStatus::Exited);
-        assert!(done_output.session_id.is_none());
+        assert!(done_output.session_handle.is_none());
     }
 
     #[tokio::test]
@@ -405,7 +426,9 @@ mod tests {
             .exec_command(shell.clone())
             .await
             .expect("direct shell should start");
-        let direct_sid = direct_started.session_id.expect("direct session id");
+        let direct_handle = direct_started
+            .session_handle
+            .expect("direct session handle");
 
         let http_started = post_json(
             &app,
@@ -416,11 +439,13 @@ mod tests {
         .await;
         assert_eq!(http_started.status(), StatusCode::OK);
         let http_started_output: ToolOutput = response_json(http_started).await;
-        let http_sid = http_started_output.session_id.expect("http session id");
+        let http_handle = http_started_output
+            .session_handle
+            .expect("http session handle");
 
         let direct_write = direct
             .write_stdin(WriteStdinInput {
-                session_id: direct_sid,
+                session_handle: direct_handle.clone(),
                 chars: Some("echo phase3-parity-write\n".to_string()),
                 yield_time_ms: Some(500),
                 kill_process: Some(false),
@@ -431,7 +456,7 @@ mod tests {
             &app,
             "/v1/write-stdin",
             json!({
-                "session_id": http_sid,
+                "session_handle": http_handle.clone(),
                 "chars": "echo phase3-parity-write\n",
                 "yield_time_ms": 500,
                 "kill_process": false
@@ -452,7 +477,7 @@ mod tests {
 
         let _ = direct
             .write_stdin(WriteStdinInput {
-                session_id: direct_sid,
+                session_handle: direct_handle,
                 chars: Some("exit\n".to_string()),
                 yield_time_ms: Some(2_000),
                 kill_process: Some(false),
@@ -463,7 +488,7 @@ mod tests {
             &app,
             "/v1/write-stdin",
             json!({
-                "session_id": http_sid,
+                "session_handle": http_handle,
                 "chars": "exit\n",
                 "yield_time_ms": 2_000,
                 "kill_process": false

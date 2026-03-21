@@ -11,7 +11,7 @@ pub struct ExecCommandInput {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct WriteStdinInput {
-    pub session_id: u64,
+    pub session_handle: String,
     pub chars: Option<String>,
     pub yield_time_ms: Option<u64>,
     pub kill_process: Option<bool>,
@@ -46,6 +46,8 @@ pub struct ToolOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_handle: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub termination_reason: Option<TerminationReason>,
@@ -55,7 +57,7 @@ pub struct ToolOutput {
 mod tests {
     use serde_json::json;
 
-    use super::ApplyPatchInput;
+    use super::{ApplyPatchInput, WriteStdinInput};
 
     #[test]
     fn apply_patch_requires_workdir() {
@@ -66,6 +68,19 @@ mod tests {
 
         assert!(
             err.to_string().contains("workdir"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn write_stdin_requires_session_handle() {
+        let err = serde_json::from_value::<WriteStdinInput>(json!({
+            "chars": "echo hi\n"
+        }))
+        .expect_err("session_handle should be required");
+
+        assert!(
+            err.to_string().contains("session_handle"),
             "unexpected error: {err}"
         );
     }

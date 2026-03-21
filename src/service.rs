@@ -1,36 +1,44 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use tokio::sync::Mutex;
 
 use crate::apply_patch;
 use crate::config::Config;
 use crate::protocol::{ApplyPatchInput, ExecCommandInput, ToolOutput, WriteStdinInput};
-use crate::session::SessionManager;
+use crate::session::{SessionManager, SessionOrigin};
 
 #[derive(Clone)]
 pub struct ComputerService {
     config: Arc<Config>,
-    sessions: Arc<Mutex<SessionManager>>,
+    sessions: Arc<SessionManager>,
 }
 
 impl ComputerService {
     pub fn new(config: Arc<Config>) -> Self {
-        let sessions = Arc::new(Mutex::new(SessionManager::new(
+        let sessions = Arc::new(SessionManager::new(
             config.max_sessions,
             config.max_output_chars,
-        )));
+        ));
         Self { config, sessions }
     }
 
     pub async fn exec_command(&self, input: ExecCommandInput) -> Result<ToolOutput> {
-        let mut sessions = self.sessions.lock().await;
-        sessions.exec_command(input, &self.config).await
+        self.exec_command_with_origin(input, SessionOrigin::direct())
+            .await
     }
 
     pub async fn write_stdin(&self, input: WriteStdinInput) -> Result<ToolOutput> {
-        let mut sessions = self.sessions.lock().await;
-        sessions.write_stdin(input, &self.config).await
+        self.sessions.write_stdin(input, &self.config).await
+    }
+
+    pub async fn exec_command_with_origin(
+        &self,
+        input: ExecCommandInput,
+        origin: SessionOrigin,
+    ) -> Result<ToolOutput> {
+        self.sessions
+            .exec_command(input, &self.config, origin)
+            .await
     }
 
     pub fn apply_patch(&self, input: ApplyPatchInput) -> Result<String> {
@@ -86,11 +94,13 @@ mod tests {
             })
             .await
             .expect("stateful shell should start");
-        let session_id = started.session_id.expect("expected running session");
+        let session_handle = started
+            .session_handle
+            .expect("expected running session handle");
 
         let echoed = service
             .write_stdin(WriteStdinInput {
-                session_id,
+                session_handle: session_handle.clone(),
                 chars: Some("echo service-session\n".to_string()),
                 yield_time_ms: Some(500),
                 kill_process: Some(false),
@@ -103,7 +113,7 @@ mod tests {
 
         let exited = service
             .write_stdin(WriteStdinInput {
-                session_id,
+                session_handle,
                 chars: Some("exit\n".to_string()),
                 yield_time_ms: Some(2_000),
                 kill_process: Some(false),
@@ -113,7 +123,7 @@ mod tests {
 
         assert_eq!(exited.status, CommandStatus::Exited);
         assert_eq!(exited.exit_code, Some(0));
-        assert!(exited.session_id.is_none());
+        assert!(exited.session_handle.is_none());
     }
 
     #[tokio::test]

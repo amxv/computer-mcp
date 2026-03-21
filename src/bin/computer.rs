@@ -43,7 +43,7 @@ enum Commands {
     },
     WriteStdin {
         #[arg(long)]
-        session_id: u64,
+        session_handle: String,
         #[arg(long)]
         chars: Option<String>,
         #[arg(long)]
@@ -97,7 +97,7 @@ async fn main() -> Result<()> {
             print_json(&output)?;
         }
         Commands::WriteStdin {
-            session_id,
+            session_handle,
             chars,
             yield_time_ms,
             kill_process,
@@ -105,7 +105,7 @@ async fn main() -> Result<()> {
             let client = resolved_client(cli.url, cli.key, profile_path)?;
             let output = client
                 .write_stdin(WriteStdinInput {
-                    session_id,
+                    session_handle,
                     chars,
                     yield_time_ms,
                     kill_process: Some(kill_process),
@@ -216,8 +216,8 @@ mod tests {
         let cli = Cli::try_parse_from([
             "computer",
             "write-stdin",
-            "--session-id",
-            "42",
+            "--session-handle",
+            "handle-42",
             "--chars",
             "echo hi\n",
             "--yield-time-ms",
@@ -228,12 +228,12 @@ mod tests {
 
         match cli.command {
             Commands::WriteStdin {
-                session_id,
+                session_handle,
                 chars,
                 yield_time_ms,
                 kill_process,
             } => {
-                assert_eq!(session_id, 42);
+                assert_eq!(session_handle, "handle-42");
                 assert_eq!(chars.as_deref(), Some("echo hi\n"));
                 assert_eq!(yield_time_ms, Some(200));
                 assert!(kill_process);
