@@ -25,7 +25,7 @@ What this script does:
 
 Examples:
   scripts/upgrade-sprite.sh --sprite computer --org amxv
-  scripts/upgrade-sprite.sh --sprite computer --org amxv --version v0.1.29
+  scripts/upgrade-sprite.sh --sprite computer --org amxv --version v0.1.30
 EOF
 }
 
