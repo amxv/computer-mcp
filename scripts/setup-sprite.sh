@@ -352,12 +352,20 @@ sprite "${SPRITE_SCOPE_ARGS[@]}" exec \
   bash /tmp/setup-computer-mcp-sprite.sh
 
 log "syncing Sprite Services"
-"${REPO_ROOT}/scripts/sprite-services.sh" \
-  sync \
-  --sprite "${SPRITE_NAME}" \
-  "${SPRITE_SERVICE_ARGS[@]}" \
-  --config /etc/computer-mcp/config.toml \
-  --force-recreate
+if [[ -n "${ORG_NAME}" ]]; then
+  "${REPO_ROOT}/scripts/sprite-services.sh" \
+    sync \
+    --sprite "${SPRITE_NAME}" \
+    "${SPRITE_SERVICE_ARGS[@]}" \
+    --config /etc/computer-mcp/config.toml \
+    --force-recreate
+else
+  "${REPO_ROOT}/scripts/sprite-services.sh" \
+    sync \
+    --sprite "${SPRITE_NAME}" \
+    --config /etc/computer-mcp/config.toml \
+    --force-recreate
+fi
 
 log "verifying publisher socket permissions after Sprite service handoff"
 sprite "${SPRITE_SCOPE_ARGS[@]}" exec -- sudo bash -lc '
@@ -373,18 +381,31 @@ sprite "${SPRITE_SCOPE_ARGS[@]}" exec -- sudo bash -lc '
 '
 
 log "verifying Sprite Service logs are readable"
-"${REPO_ROOT}/scripts/sprite-services.sh" \
-  logs \
-  --sprite "${SPRITE_NAME}" \
-  "${SPRITE_SERVICE_ARGS[@]}" \
-  --service computer-mcp-prd \
-  --lines 20 >/dev/null
-"${REPO_ROOT}/scripts/sprite-services.sh" \
-  logs \
-  --sprite "${SPRITE_NAME}" \
-  "${SPRITE_SERVICE_ARGS[@]}" \
-  --service computer-mcpd \
-  --lines 20 >/dev/null
+if [[ -n "${ORG_NAME}" ]]; then
+  "${REPO_ROOT}/scripts/sprite-services.sh" \
+    logs \
+    --sprite "${SPRITE_NAME}" \
+    "${SPRITE_SERVICE_ARGS[@]}" \
+    --service computer-mcp-prd \
+    --lines 20 >/dev/null
+  "${REPO_ROOT}/scripts/sprite-services.sh" \
+    logs \
+    --sprite "${SPRITE_NAME}" \
+    "${SPRITE_SERVICE_ARGS[@]}" \
+    --service computer-mcpd \
+    --lines 20 >/dev/null
+else
+  "${REPO_ROOT}/scripts/sprite-services.sh" \
+    logs \
+    --sprite "${SPRITE_NAME}" \
+    --service computer-mcp-prd \
+    --lines 20 >/dev/null
+  "${REPO_ROOT}/scripts/sprite-services.sh" \
+    logs \
+    --sprite "${SPRITE_NAME}" \
+    --service computer-mcpd \
+    --lines 20 >/dev/null
+fi
 
 log "setting sprite URL auth: ${URL_AUTH}"
 sprite "${SPRITE_SCOPE_ARGS[@]}" url update --auth "${URL_AUTH}" >/dev/null

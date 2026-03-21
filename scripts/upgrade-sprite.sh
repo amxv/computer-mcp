@@ -178,12 +178,20 @@ EOF
 
 sync_sprite_services() {
   log "force-recreating Sprite Services from the control plane"
-  "${REPO_ROOT}/scripts/sprite-services.sh" \
-    sync \
-    --sprite "${SPRITE_NAME}" \
-    "${SPRITE_SERVICE_ARGS[@]}" \
-    --config "${CONFIG_PATH}" \
-    --force-recreate
+  if [[ -n "${ORG_NAME}" ]]; then
+    "${REPO_ROOT}/scripts/sprite-services.sh" \
+      sync \
+      --sprite "${SPRITE_NAME}" \
+      "${SPRITE_SERVICE_ARGS[@]}" \
+      --config "${CONFIG_PATH}" \
+      --force-recreate
+  else
+    "${REPO_ROOT}/scripts/sprite-services.sh" \
+      sync \
+      --sprite "${SPRITE_NAME}" \
+      --config "${CONFIG_PATH}" \
+      --force-recreate
+  fi
 }
 
 verify_local_health() {
@@ -246,18 +254,31 @@ verify_publisher_key_isolation() {
 
 verify_service_logs() {
   log "verifying Sprite Service logs are readable"
-  "${REPO_ROOT}/scripts/sprite-services.sh" \
-    logs \
-    --sprite "${SPRITE_NAME}" \
-    "${SPRITE_SERVICE_ARGS[@]}" \
-    --service computer-mcp-prd \
-    --lines 20 >/dev/null
-  "${REPO_ROOT}/scripts/sprite-services.sh" \
-    logs \
-    --sprite "${SPRITE_NAME}" \
-    "${SPRITE_SERVICE_ARGS[@]}" \
-    --service computer-mcpd \
-    --lines 20 >/dev/null
+  if [[ -n "${ORG_NAME}" ]]; then
+    "${REPO_ROOT}/scripts/sprite-services.sh" \
+      logs \
+      --sprite "${SPRITE_NAME}" \
+      "${SPRITE_SERVICE_ARGS[@]}" \
+      --service computer-mcp-prd \
+      --lines 20 >/dev/null
+    "${REPO_ROOT}/scripts/sprite-services.sh" \
+      logs \
+      --sprite "${SPRITE_NAME}" \
+      "${SPRITE_SERVICE_ARGS[@]}" \
+      --service computer-mcpd \
+      --lines 20 >/dev/null
+  else
+    "${REPO_ROOT}/scripts/sprite-services.sh" \
+      logs \
+      --sprite "${SPRITE_NAME}" \
+      --service computer-mcp-prd \
+      --lines 20 >/dev/null
+    "${REPO_ROOT}/scripts/sprite-services.sh" \
+      logs \
+      --sprite "${SPRITE_NAME}" \
+      --service computer-mcpd \
+      --lines 20 >/dev/null
+  fi
 }
 
 verify_public_health_if_available() {
