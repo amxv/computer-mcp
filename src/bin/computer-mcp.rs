@@ -51,6 +51,8 @@ const PUBLISHER_PROCESS_LOG_FILENAME: &str = "computer-mcp-prd.log";
 const PROCESS_START_STABILIZE_MS: u64 = 300;
 const PROCESS_STOP_TIMEOUT_MS: u64 = 5_000;
 const PROCESS_STOP_POLL_MS: u64 = 100;
+const SPRITE_SERVICE_RESTART_TIMEOUT_MS: u64 = 20_000;
+const SPRITE_SERVICE_RESTART_POLL_MS: u64 = 200;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ServiceManager {
@@ -450,6 +452,67 @@ fn credential_host_is_github(host: &str) -> bool {
     normalized == "github.com" || normalized == "www.github.com"
 }
 
+fn sprite_runtime_detected() -> bool {
+    Path::new("/.sprite").exists()
+}
+
+fn sprite_services_management_hint(config_path: &Path) -> String {
+    format!(
+        "Sprite runtime detected; manage lifecycle from a machine with Sprite CLI access using `scripts/sprite-services.sh sync --sprite <sprite> --config {}`",
+        config_path.display()
+    )
+}
+
+fn sprite_service_supervisor_command_tokens(
+    config_path: &Path,
+) -> BTreeMap<&'static str, Vec<String>> {
+    expected_sprite_service_definitions(config_path)
+        .into_iter()
+        .map(|(service_name, definition)| {
+            let mut tokens = vec![definition.cmd];
+            tokens.extend(definition.args);
+            (service_name, tokens)
+        })
+        .collect()
+}
+
+fn sprite_service_supervisor_pids(config_path: &Path) -> Result<BTreeMap<&'static str, i32>> {
+    let raw = run_command_capture("ps", &["-eo".to_string(), "pid=,args=".to_string()])?;
+    Ok(sprite_service_supervisor_pids_from_ps(&raw, config_path))
+}
+
+fn sprite_service_supervisor_pids_from_ps(
+    raw: &str,
+    config_path: &Path,
+) -> BTreeMap<&'static str, i32> {
+    let expected = sprite_service_supervisor_command_tokens(config_path);
+    let mut found = BTreeMap::new();
+
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let mut fields = trimmed.split_whitespace();
+        let Some(pid_field) = fields.next() else {
+            continue;
+        };
+        let Ok(pid) = pid_field.parse::<i32>() else {
+            continue;
+        };
+        let args: Vec<String> = fields.map(ToString::to_string).collect();
+
+        for (&service_name, expected_tokens) in &expected {
+            if args == *expected_tokens {
+                found.insert(service_name, pid);
+            }
+        }
+    }
+
+    found
+}
+
 fn start_stack(config_path: &Path) -> Result<()> {
     let mut config = Config::load(Some(config_path))?;
     ensure_stack_config_ready(&config)?;
@@ -457,6 +520,19 @@ fn start_stack(config_path: &Path) -> Result<()> {
     if !tls_artifacts_exist(&config) {
         println!("TLS artifacts missing; creating them automatically");
         config = provision_tls_artifacts(config_path, false)?;
+    }
+
+    if sprite_runtime_detected() {
+        let sprite_pids = sprite_service_supervisor_pids(config_path)?;
+        if sprite_pids.contains_key(PUBLISHER_SERVICE_LABEL)
+            && sprite_pids.contains_key(SPRITE_MAIN_SERVICE_LABEL)
+        {
+            println!("Sprite runtime detected; lifecycle is managed by Sprite Services");
+            print_stack_ready_summary(&config);
+            return Ok(());
+        }
+
+        bail!("{}", sprite_services_management_hint(config_path));
     }
 
     start_publisher_process_mode(&config, config_path)?;
@@ -468,6 +544,12 @@ fn start_stack(config_path: &Path) -> Result<()> {
 fn stop_stack(config: &Config) -> Result<()> {
     stop_main_service(config)?;
     stop_publisher_process_mode(config)?;
+    if sprite_runtime_detected() {
+        println!(
+            "note: Sprite runtime detected; this command only stops detached process-mode daemons"
+        );
+        println!("hint: Sprite Services remain the lifecycle owner for the running stack");
+    }
     Ok(())
 }
 
@@ -478,6 +560,12 @@ fn restart_stack(config_path: &Path) -> Result<()> {
     if !tls_artifacts_exist(&config) {
         println!("TLS artifacts missing; creating them automatically");
         config = provision_tls_artifacts(config_path, false)?;
+    }
+
+    if sprite_runtime_detected() {
+        restart_sprite_services_in_guest(config_path)?;
+        print_stack_ready_summary(&config);
+        return Ok(());
     }
 
     stop_main_service(&config)?;
@@ -1451,6 +1539,81 @@ fn stop_publisher_process_mode(config: &Config) -> Result<()> {
     Ok(())
 }
 
+fn restart_sprite_services_in_guest(config_path: &Path) -> Result<()> {
+    let initial_pids = sprite_service_supervisor_pids(config_path)?;
+    let missing_services: Vec<&str> = [PUBLISHER_SERVICE_LABEL, SPRITE_MAIN_SERVICE_LABEL]
+        .into_iter()
+        .filter(|service_name| !initial_pids.contains_key(service_name))
+        .collect();
+
+    if !missing_services.is_empty() {
+        bail!(
+            "Sprite runtime detected but the expected Sprite Services are not running inside the guest: {}.\n{}",
+            missing_services.join(", "),
+            sprite_services_management_hint(config_path)
+        );
+    }
+
+    for service_name in [SPRITE_MAIN_SERVICE_LABEL, PUBLISHER_SERVICE_LABEL] {
+        if let Some(pid) = initial_pids.get(service_name) {
+            send_signal_if_running(*pid, Signal::SIGTERM)?;
+            println!("recycling Sprite Service {service_name} (supervisor pid {pid})");
+        }
+    }
+
+    wait_for_sprite_service_supervisor_restarts(config_path, &initial_pids)
+}
+
+fn wait_for_sprite_service_supervisor_restarts(
+    config_path: &Path,
+    initial_pids: &BTreeMap<&'static str, i32>,
+) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_millis(SPRITE_SERVICE_RESTART_TIMEOUT_MS);
+    loop {
+        let current_pids = sprite_service_supervisor_pids(config_path)?;
+        let all_restarted = [PUBLISHER_SERVICE_LABEL, SPRITE_MAIN_SERVICE_LABEL]
+            .into_iter()
+            .all(|service_name| {
+                let Some(old_pid) = initial_pids.get(service_name) else {
+                    return false;
+                };
+                current_pids
+                    .get(service_name)
+                    .is_some_and(|current_pid| current_pid != old_pid)
+            });
+
+        if all_restarted {
+            for service_name in [PUBLISHER_SERVICE_LABEL, SPRITE_MAIN_SERVICE_LABEL] {
+                if let Some(pid) = current_pids.get(service_name) {
+                    println!("Sprite Service {service_name} restarted with supervisor pid {pid}");
+                }
+            }
+            return Ok(());
+        }
+
+        if Instant::now() >= deadline {
+            let summary = [PUBLISHER_SERVICE_LABEL, SPRITE_MAIN_SERVICE_LABEL]
+                .into_iter()
+                .map(|service_name| {
+                    let old_pid = initial_pids
+                        .get(service_name)
+                        .map(|pid| pid.to_string())
+                        .unwrap_or_else(|| "<missing>".to_string());
+                    let new_pid = current_pids
+                        .get(service_name)
+                        .map(|pid| pid.to_string())
+                        .unwrap_or_else(|| "<missing>".to_string());
+                    format!("{service_name}: {old_pid} -> {new_pid}")
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            bail!("timed out waiting for Sprite Services to restart ({summary})");
+        }
+
+        thread::sleep(Duration::from_millis(SPRITE_SERVICE_RESTART_POLL_MS));
+    }
+}
+
 fn read_publisher_logs(config: &Config, max_lines: usize) -> Result<String> {
     let log_path = publisher_process_log_path(config);
     if !log_path.exists() {
@@ -2375,6 +2538,17 @@ fn set_file_mode(_path: &Path, _mode: u32) -> Result<()> {
 }
 
 fn restart_service_after_tls_setup(config: &Config, config_path: &Path) {
+    if sprite_runtime_detected() {
+        match restart_sprite_services_in_guest(config_path) {
+            Ok(_) => println!("restarted Sprite-managed services to apply TLS changes"),
+            Err(err) => eprintln!(
+                "warning: TLS artifacts were updated but Sprite Service restart failed.\n{}",
+                err
+            ),
+        }
+        return;
+    }
+
     match detect_service_manager() {
         ServiceManager::Systemd => {
             match run_systemctl(&build_systemctl_args(SystemctlAction::Restart)) {
@@ -2428,8 +2602,9 @@ mod tests {
         git_credential_request_targets_github, parse_git_credential_request, parse_systemctl_show,
         process_log_path, process_pid_path, read_tail_lines, render_systemd_unit,
         select_tls_san_ip, service_manager_from_pid1, shell_escape_single_quotes,
-        sprite_service_logs_api_path, state_root_for_config, status_host_hint,
-        strip_sprite_api_prelude, tls_artifacts_exist, write_if_changed,
+        sprite_service_logs_api_path, sprite_service_supervisor_pids_from_ps,
+        state_root_for_config, status_host_hint, strip_sprite_api_prelude, tls_artifacts_exist,
+        write_if_changed,
     };
     use computer_mcp::config::Config;
     use std::fs;
@@ -2899,6 +3074,22 @@ mod tests {
         assert!(joined.contains(
             "hint: inspect logs with `computer-mcp sprite service-logs --sprite computer --service computer-mcpd`"
         ));
+    }
+
+    #[test]
+    fn sprite_service_supervisor_pids_from_ps_matches_sprite_managed_parents() {
+        let raw = "\
+11 sudo -n -u computer-mcp-publisher /usr/local/bin/computer-mcp-prd --config /etc/computer-mcp/config.toml
+12 sudo -n -u computer-mcp-agent /usr/local/bin/computer-mcpd --config /etc/computer-mcp/config.toml
+16 /usr/local/bin/computer-mcp-prd --config /etc/computer-mcp/config.toml
+17 /usr/local/bin/computer-mcpd --config /etc/computer-mcp/config.toml
+178 runuser -u computer-mcp-publisher -- /usr/local/bin/computer-mcp-prd --config /etc/computer-mcp/config.toml
+";
+        let pids =
+            sprite_service_supervisor_pids_from_ps(raw, Path::new("/etc/computer-mcp/config.toml"));
+
+        assert_eq!(pids.get(PUBLISHER_SERVICE_LABEL), Some(&11));
+        assert_eq!(pids.get(SPRITE_MAIN_SERVICE_LABEL), Some(&12));
     }
 
     #[test]

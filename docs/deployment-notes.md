@@ -58,6 +58,7 @@ On Sprite-like hosts:
 - keep the publisher daemon on `computer-mcp-publisher`
 - register Sprite Services with [`scripts/sprite-services.sh`](../scripts/sprite-services.sh) instead of relying on detached process mode
 - treat `sprite api -s <sprite> /services` and `.../logs` as the lifecycle source of truth
+- `computer-mcp upgrade` and `computer-mcp restart` should recycle the existing Sprite-managed service processes in guest instead of trying to start detached process mode
 
 The built-in Sprite user may have passwordless `sudo`, which would effectively hand the coding agent root and break the publisher-key isolation model.
 

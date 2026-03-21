@@ -140,6 +140,7 @@ Useful commands:
 - `scripts/sprite-services.sh logs --sprite <sprite> [--org <org-name>] --service computer-mcp-prd --lines 100`
 - `computer-mcp sprite services-status --sprite <sprite> [--org <org-name>]`
 - `computer-mcp sprite service-logs --sprite <sprite> [--org <org-name>] --service computer-mcpd --lines 100`
+- inside the Sprite guest, `sudo computer-mcp restart` and `sudo computer-mcp upgrade --version <tag>` should recycle the existing Sprite-managed services instead of falling back to detached process mode
 
 ## Verification Checklist
 
