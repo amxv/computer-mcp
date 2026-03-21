@@ -51,6 +51,7 @@ const PUBLISHER_PROCESS_LOG_FILENAME: &str = "computer-mcp-prd.log";
 const PROCESS_START_STABILIZE_MS: u64 = 300;
 const PROCESS_STOP_TIMEOUT_MS: u64 = 5_000;
 const PROCESS_STOP_POLL_MS: u64 = 100;
+const SHARED_PROCESS_DIR_MODE: u32 = 0o750;
 const SPRITE_SERVICE_RESTART_TIMEOUT_MS: u64 = 20_000;
 const SPRITE_SERVICE_RESTART_POLL_MS: u64 = 200;
 
@@ -1225,7 +1226,7 @@ fn prepare_agent_process_ownership(config: &Config) -> Result<()> {
             continue;
         }
         chown_path_to_user(&path, &user)?;
-        set_file_mode(&path, 0o750)?;
+        set_file_mode(&path, SHARED_PROCESS_DIR_MODE)?;
     }
     Ok(())
 }
@@ -1245,8 +1246,15 @@ fn prepare_publisher_process_ownership(config: &Config) -> Result<()> {
     chown_path_to_user(&publisher_process_root(config), &user)?;
     chown_path_to_user(&publisher_process_runtime_dir(config), &user)?;
     chown_path_to_user(&publisher_process_log_dir(config), &user)?;
+    set_file_mode(&publisher_process_root(config), SHARED_PROCESS_DIR_MODE)?;
+    set_file_mode(
+        &publisher_process_runtime_dir(config),
+        SHARED_PROCESS_DIR_MODE,
+    )?;
+    set_file_mode(&publisher_process_log_dir(config), SHARED_PROCESS_DIR_MODE)?;
     if let Some(parent) = Path::new(&config.publisher_socket_path).parent() {
         chown_path_to_user(parent, &user)?;
+        set_file_mode(parent, SHARED_PROCESS_DIR_MODE)?;
     }
     Ok(())
 }

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_VERSION="0.1.13"
+SCRIPT_VERSION="0.1.14"
 
 COMPUTER_MCP_VERSION="${COMPUTER_MCP_VERSION:-latest}"
 COMPUTER_MCP_REPO="${COMPUTER_MCP_REPO:-amxv/computer-mcp}"
@@ -349,7 +349,9 @@ ensure_dirs_and_config() {
 
   install -d -m 0750 -o root -g "${COMPUTER_MCP_SERVICE_GROUP}" "${config_dir}"
   install -d -m 0750 -o root -g "${COMPUTER_MCP_SERVICE_GROUP}" "${COMPUTER_MCP_STATE_DIR}"
-  install -d -m 0750 -o root -g "${COMPUTER_MCP_SERVICE_GROUP}" "${COMPUTER_MCP_STATE_DIR}/publisher"
+  install -d -m 0750 -o "${COMPUTER_MCP_PUBLISHER_USER}" -g "${COMPUTER_MCP_SERVICE_GROUP}" "${COMPUTER_MCP_STATE_DIR}/publisher"
+  install -d -m 0750 -o "${COMPUTER_MCP_PUBLISHER_USER}" -g "${COMPUTER_MCP_SERVICE_GROUP}" "${COMPUTER_MCP_STATE_DIR}/publisher/run"
+  install -d -m 0750 -o "${COMPUTER_MCP_PUBLISHER_USER}" -g "${COMPUTER_MCP_SERVICE_GROUP}" "${COMPUTER_MCP_STATE_DIR}/publisher/logs"
   install -d -m 0750 -o root -g "${COMPUTER_MCP_SERVICE_GROUP}" "${COMPUTER_MCP_TLS_DIR}"
   install -d -m 0750 -o root -g "${COMPUTER_MCP_SERVICE_GROUP}" "${COMPUTER_MCP_READER_KEY_DIR}"
   install -d -m 0750 -o root -g "${COMPUTER_MCP_SERVICE_GROUP}" "${COMPUTER_MCP_PUBLISHER_KEY_DIR}"

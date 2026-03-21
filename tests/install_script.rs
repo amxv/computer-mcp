@@ -46,6 +46,8 @@ fn install_script_has_expected_structure() {
         "configure_agent_git_reader_helper()",
         "git config --global user.name",
         "git config --global user.email",
+        "${COMPUTER_MCP_STATE_DIR}/publisher/run",
+        "${COMPUTER_MCP_STATE_DIR}/publisher/logs",
         "credential.https://github.com.helper",
         "git-credential-helper",
         "print_next_steps()",

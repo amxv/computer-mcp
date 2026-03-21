@@ -20,12 +20,28 @@ use crate::config::{Config, PublishTarget};
 
 const GITHUB_API_BASE: &str = "https://api.github.com";
 const GITHUB_API_VERSION: &str = "2022-11-28";
+const SOCKET_DIR_MODE: u32 = 0o750;
 const SOCKET_MODE: u32 = 0o660;
 const ASKPASS_MODE: u32 = 0o700;
 const MAX_SOCKET_REQUEST_BYTES: usize = 16 * 1024 * 1024;
 const IMPORTED_REF: &str = "refs/heads/__computer_mcp_imported";
 const ASKPASS_SCRIPT_NAME: &str = "git-askpass.sh";
 const DEFAULT_USER_AGENT: &str = "computer-mcp-prd/0.1";
+
+fn ensure_publisher_socket_parent_dir(socket_path: &Path) -> Result<()> {
+    if let Some(parent) = socket_path.parent() {
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "failed to create publisher socket directory {}",
+                parent.display()
+            )
+        })?;
+        fs::set_permissions(parent, fs::Permissions::from_mode(SOCKET_DIR_MODE))
+            .with_context(|| format!("failed to chmod {}", parent.display()))?;
+    }
+
+    Ok(())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PublishPrRequest {
@@ -83,14 +99,7 @@ pub async fn serve_publisher(config: Config) -> Result<()> {
     validate_publisher_config(&config)?;
 
     let socket_path = Path::new(&config.publisher_socket_path);
-    if let Some(parent) = socket_path.parent() {
-        fs::create_dir_all(parent).with_context(|| {
-            format!(
-                "failed to create publisher socket directory {}",
-                parent.display()
-            )
-        })?;
-    }
+    ensure_publisher_socket_parent_dir(socket_path)?;
 
     if socket_path.exists() {
         fs::remove_file(socket_path)
@@ -726,10 +735,11 @@ async fn create_pull_request(
 #[cfg(test)]
 mod tests {
     use base64::Engine as _;
+    use std::os::unix::fs::PermissionsExt;
 
     use super::{
-        PublishPrRequest, build_publish_branch_name, create_head_bundle, ensure_clean_worktree,
-        validate_publish_request,
+        PublishPrRequest, SOCKET_DIR_MODE, build_publish_branch_name, create_head_bundle,
+        ensure_clean_worktree, ensure_publisher_socket_parent_dir, validate_publish_request,
     };
     use crate::config::{Config, PublishTarget};
     use tempfile::tempdir;
@@ -864,5 +874,17 @@ mod tests {
             err.to_string()
                 .contains("publish-pr requires a clean worktree")
         );
+    }
+
+    #[test]
+    fn ensure_publisher_socket_parent_dir_sets_group_traversable_mode() {
+        let tempdir = tempdir().expect("tempdir");
+        let socket_path = tempdir.path().join("publisher/run/computer-mcp-prd.sock");
+
+        ensure_publisher_socket_parent_dir(&socket_path).expect("socket parent dir");
+
+        let metadata = std::fs::metadata(socket_path.parent().expect("socket parent"))
+            .expect("socket parent metadata");
+        assert_eq!(metadata.permissions().mode() & 0o777, SOCKET_DIR_MODE);
     }
 }
