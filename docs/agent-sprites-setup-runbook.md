@@ -15,6 +15,7 @@ When this runbook is complete:
 - reader + publisher GitHub App auth is configured
 - publisher and MCP daemons are registered as Sprite Services
 - the coding agent starts in a writable non-root workspace (`/workspace`)
+- the coding agent can commit immediately with the default global Git identity unless the operator overrides it
 - the coding agent can `git clone` private GitHub repos over HTTPS through the reader app
 - MCP endpoint is reachable through the Sprite URL
 
@@ -96,8 +97,9 @@ What the script does:
 8. stops any detached process-mode daemons left from older installs
 9. creates or updates Sprite Services for `computer-mcp-prd` and `computer-mcpd`
 10. verifies Service inventory, Service logs, and public Sprite health
-11. verifies the agent can mint reader-backed Git credentials for GitHub HTTPS access
-12. prints MCP URL hint based on Sprite URL host
+11. verifies the agent can commit with the default Git identity
+12. verifies the agent can mint reader-backed Git credentials for GitHub HTTPS access
+13. prints MCP URL hint based on Sprite URL host
 
 ## Manual Path (If You Need It)
 
@@ -152,6 +154,7 @@ Useful commands:
 - config file contains expected app IDs and installation IDs
 - reader and publisher PEM permissions are correct
 - `computer-mcp-agent` can write inside `/workspace`
+- `computer-mcp-agent` can create a commit in a fresh repo without extra Git config
 - `computer-mcp-agent` can access private GitHub repos over HTTPS without a manual username/password prompt
 - Sprite URL auth mode is intentional (`sprite` by default; `public` only if required)
 - Service logs are readable under the Sprite Services API

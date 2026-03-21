@@ -26,8 +26,9 @@ What this script does:
   5. Adapts ports for Sprite service-mode runtime:
      - bind_port = 8443 (TLS)
      - http_bind_port = 8080 (Sprite URL routing)
-  6. Verifies reader-backed GitHub HTTPS access for the agent user.
-  7. Registers Sprite Services and validates Sprite-native lifecycle.
+  6. Verifies the agent can commit with the installer-provided Git identity.
+  7. Verifies reader-backed GitHub HTTPS access for the agent user.
+  8. Registers Sprite Services and validates Sprite-native lifecycle.
 EOF
 }
 
@@ -308,6 +309,21 @@ sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent bash -lc '
   pwd
   touch .computer-mcp-write-check
   rm -f .computer-mcp-write-check
+'
+echo
+
+echo "[remote] verify agent git commit identity"
+sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent bash -lc '
+  smoke_dir=/workspace/.git-identity-smoke
+  rm -rf "$smoke_dir"
+  git init -q "$smoke_dir"
+  cd "$smoke_dir"
+  printf "sprite git identity smoke\n" > smoke.txt
+  git add smoke.txt
+  git commit -q -m "Smoke: verify default agent git identity"
+  git log -1 --format="%an <%ae>"
+  cd /workspace
+  rm -rf "$smoke_dir"
 '
 echo
 
