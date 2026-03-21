@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_VERSION="0.1.10"
+SCRIPT_VERSION="0.1.11"
 
 COMPUTER_MCP_VERSION="${COMPUTER_MCP_VERSION:-latest}"
 COMPUTER_MCP_REPO="${COMPUTER_MCP_REPO:-amxv/computer-mcp}"
@@ -194,7 +194,7 @@ install_runtime_prerequisites() {
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -y
     apt-get install -y --no-install-recommends \
-      curl ca-certificates systemd tar gzip
+      curl ca-certificates systemd tar gzip git
 
     if [[ "${COMPUTER_MCP_ENABLE_CERTBOT}" == "1" ]]; then
       apt-get install -y --no-install-recommends certbot || warn "certbot install failed"
@@ -203,7 +203,7 @@ install_runtime_prerequisites() {
   fi
 
   if command_exists dnf; then
-    dnf install -y curl ca-certificates systemd tar gzip
+    dnf install -y curl ca-certificates systemd tar gzip git
     if [[ "${COMPUTER_MCP_ENABLE_CERTBOT}" == "1" ]]; then
       dnf install -y certbot || warn "certbot install failed"
     fi
@@ -211,7 +211,7 @@ install_runtime_prerequisites() {
   fi
 
   if command_exists yum; then
-    yum install -y curl ca-certificates systemd tar gzip
+    yum install -y curl ca-certificates systemd tar gzip git
     if [[ "${COMPUTER_MCP_ENABLE_CERTBOT}" == "1" ]]; then
       yum install -y certbot || warn "certbot install failed"
     fi
@@ -395,6 +395,36 @@ run_cli_install() {
   "${cli}" --config "${COMPUTER_MCP_CONFIG_PATH}" install
 }
 
+run_as_agent_user() {
+  if command_exists runuser; then
+    runuser -u "${COMPUTER_MCP_AGENT_USER}" -- env HOME="${COMPUTER_MCP_AGENT_HOME}" "$@"
+    return
+  fi
+
+  if command_exists sudo; then
+    sudo -u "${COMPUTER_MCP_AGENT_USER}" env HOME="${COMPUTER_MCP_AGENT_HOME}" "$@"
+    return
+  fi
+
+  local command_string=""
+  local arg
+  for arg in "$@"; do
+    command_string+=" $(printf '%q' "${arg}")"
+  done
+
+  su -s /bin/sh "${COMPUTER_MCP_AGENT_USER}" -c \
+    "HOME=$(printf '%q' "${COMPUTER_MCP_AGENT_HOME}")${command_string}"
+}
+
+configure_agent_git_reader_helper() {
+  local helper_cmd="${COMPUTER_MCP_INSTALL_DIR}/computer-mcp --config ${COMPUTER_MCP_CONFIG_PATH} git-credential-helper"
+
+  run_as_agent_user \
+    git config --global --replace-all credential.https://github.com.helper "${helper_cmd}"
+  run_as_agent_user \
+    git config --global credential.https://github.com.useHttpPath false
+}
+
 detect_public_ip() {
   local ip=""
   ip="$(curl -fsS --max-time 5 https://api.ipify.org || true)"
@@ -436,6 +466,7 @@ Verify:
 
 Optional:
   - rotate the installer-generated API key with: computer-mcp set-key "<strong-random-key>"
+  - private GitHub HTTPS clones by ${COMPUTER_MCP_AGENT_USER} will use the built-in reader credential helper once reader_app_id, reader_installation_id, and the reader PEM are in place
 EOF
     return
   fi
@@ -464,6 +495,7 @@ Verify:
 
 Optional:
   - rotate the installer-generated API key with: computer-mcp set-key "<strong-random-key>"
+  - private GitHub HTTPS clones by ${COMPUTER_MCP_AGENT_USER} will use the built-in reader credential helper once reader_app_id, reader_installation_id, and the reader PEM are in place
 EOF
 }
 
@@ -486,6 +518,7 @@ main() {
 
   ensure_dirs_and_config
   run_cli_install
+  configure_agent_git_reader_helper
   print_next_steps
 }
 

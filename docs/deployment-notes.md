@@ -53,7 +53,13 @@ On container-style hosts:
 - pid and log files are stored under the state directory
 - restart persistence depends on the container lifecycle, not `systemd`
 
-On Sprite-like hosts, keep the coding daemon on the dedicated `computer-mcp-agent` user instead of the built-in `sprite` user. The built-in Sprite user may have passwordless `sudo`, which would effectively hand the coding agent root and break the publisher-key isolation model.
+On Sprite-like hosts:
+- keep the coding daemon on the dedicated `computer-mcp-agent` user instead of the built-in `sprite` user
+- keep the publisher daemon on `computer-mcp-publisher`
+- register Sprite Services with [`scripts/sprite-services.sh`](../scripts/sprite-services.sh) instead of relying on detached process mode
+- treat `sprite api -s <sprite> /services` and `.../logs` as the lifecycle source of truth
+
+The built-in Sprite user may have passwordless `sudo`, which would effectively hand the coding agent root and break the publisher-key isolation model.
 
 ## Security Model
 
@@ -70,6 +76,8 @@ Important limits:
 - prefer a dedicated writable workspace such as `/workspace`, owned by `agent_user`
 - keep the publisher key readable only by `publisher_user`
 - keep `publisher_targets` restricted to approved repositories
+
+The installer configures a host-scoped Git credential helper for `https://github.com` under the agent user's home. That helper mints short-lived reader-app installation tokens on demand, so normal HTTPS clone/fetch operations can read private repos without exposing the publisher write credential.
 
 ## Useful Installer Overrides
 

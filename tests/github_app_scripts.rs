@@ -48,6 +48,8 @@ fn github_app_docs_and_scripts_include_expected_permissions_and_flow() {
     assert!(docs.contains("reader app"));
     assert!(docs.contains("reader_installation_id"));
     assert!(docs.contains("publisher daemon holds the GitHub App private key"));
+    assert!(docs.contains("plain `git clone https://github.com/<owner>/<repo>.git` works"));
+    assert!(docs.contains("short-lived reader credential helper"));
     assert!(docs.contains("git bundle"));
     assert!(docs.contains("computer-mcp start"));
     assert!(docs.contains("GitHub Pro"));
