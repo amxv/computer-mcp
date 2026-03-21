@@ -459,7 +459,8 @@ fn sprite_runtime_detected() -> bool {
 
 fn sprite_services_management_hint(config_path: &Path) -> String {
     format!(
-        "Sprite runtime detected; manage lifecycle from a machine with Sprite CLI access using `scripts/sprite-services.sh sync --sprite <sprite> --config {}`",
+        "Sprite runtime detected; manage lifecycle from a machine with Sprite CLI access. Prefer `scripts/upgrade-sprite.sh --sprite <sprite> --config {}` for upgrades, or `scripts/sprite-services.sh sync --sprite <sprite> --config {} --force-recreate` for control-plane recovery.",
+        config_path.display(),
         config_path.display()
     )
 }

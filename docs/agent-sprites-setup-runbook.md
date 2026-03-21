@@ -101,6 +101,20 @@ What the script does:
 12. verifies the agent can mint reader-backed Git credentials for GitHub HTTPS access
 13. prints MCP URL hint based on Sprite URL host
 
+## Routine Upgrades
+
+For an already-configured Sprite, prefer the control-plane upgrade helper:
+
+[`scripts/upgrade-sprite.sh`](../scripts/upgrade-sprite.sh)
+
+Example:
+
+```bash
+scripts/upgrade-sprite.sh --sprite computer --org amxv
+```
+
+That command installs the requested build inside the Sprite, force-recreates the Sprite Services from the control plane, verifies local health, verifies the agent can still commit, verifies reader-backed GitHub HTTPS access, verifies publisher socket permissions, and confirms the agent still cannot read the publisher PEM.
+
 ## Manual Path (If You Need It)
 
 If you cannot use the script, follow the same sequence manually:
@@ -138,13 +152,14 @@ For Sprite deployments, the authoritative runtime view is the Sprite Services AP
 
 Useful commands:
 
+- `scripts/upgrade-sprite.sh --sprite <sprite> [--org <org-name>] [--version <tag|latest>]`
 - `scripts/sprite-services.sh status --sprite <sprite> [--org <org-name>]`
 - `scripts/sprite-services.sh sync --sprite <sprite> [--org <org-name>] --force-recreate`
 - `scripts/sprite-services.sh logs --sprite <sprite> [--org <org-name>] --service computer-mcpd --lines 100`
 - `scripts/sprite-services.sh logs --sprite <sprite> [--org <org-name>] --service computer-mcp-prd --lines 100`
 - `computer-mcp sprite services-status --sprite <sprite> [--org <org-name>]`
 - `computer-mcp sprite service-logs --sprite <sprite> [--org <org-name>] --service computer-mcpd --lines 100`
-- inside the Sprite guest, `sudo computer-mcp restart` and `sudo computer-mcp upgrade --version <tag>` should recycle the existing Sprite-managed services instead of falling back to detached process mode
+- inside the Sprite guest, `sudo computer-mcp restart` and `sudo computer-mcp upgrade --version <tag>` only manage already-healthy Sprite Service processes; for routine operator upgrades, prefer `scripts/upgrade-sprite.sh`
 
 If `scripts/sprite-services.sh status` shows a service as running but guest-side `ps` or `/health` disagrees, prefer `--force-recreate` from a machine with Sprite CLI access. That clears stale control-plane state without widening agent-user access or exposing the publisher key.
 
