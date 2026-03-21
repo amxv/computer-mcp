@@ -13,7 +13,11 @@ COMPUTER_MCP_CONFIG_PATH="${COMPUTER_MCP_CONFIG_PATH:-/etc/computer-mcp/config.t
 COMPUTER_MCP_STATE_DIR="${COMPUTER_MCP_STATE_DIR:-/var/lib/computer-mcp}"
 COMPUTER_MCP_TLS_DIR="${COMPUTER_MCP_TLS_DIR:-${COMPUTER_MCP_STATE_DIR}/tls}"
 COMPUTER_MCP_AGENT_USER="${COMPUTER_MCP_AGENT_USER:-computer-mcp-agent}"
+COMPUTER_MCP_AGENT_HOME="${COMPUTER_MCP_AGENT_HOME:-/home/${COMPUTER_MCP_AGENT_USER}}"
+COMPUTER_MCP_AGENT_SHELL="${COMPUTER_MCP_AGENT_SHELL:-/bin/bash}"
+COMPUTER_MCP_DEFAULT_WORKDIR="${COMPUTER_MCP_DEFAULT_WORKDIR:-/workspace}"
 COMPUTER_MCP_PUBLISHER_USER="${COMPUTER_MCP_PUBLISHER_USER:-computer-mcp-publisher}"
+COMPUTER_MCP_PUBLISHER_HOME="${COMPUTER_MCP_PUBLISHER_HOME:-/nonexistent}"
 COMPUTER_MCP_SERVICE_GROUP="${COMPUTER_MCP_SERVICE_GROUP:-computer-mcp}"
 COMPUTER_MCP_READER_KEY_DIR="${COMPUTER_MCP_READER_KEY_DIR:-/etc/computer-mcp/reader}"
 COMPUTER_MCP_PUBLISHER_KEY_DIR="${COMPUTER_MCP_PUBLISHER_KEY_DIR:-/etc/computer-mcp/publisher}"
@@ -68,9 +72,23 @@ resolve_nologin_shell() {
   printf '/bin/false\n'
 }
 
+resolve_login_shell() {
+  if [[ -x "${COMPUTER_MCP_AGENT_SHELL}" ]]; then
+    printf '%s\n' "${COMPUTER_MCP_AGENT_SHELL}"
+    return
+  fi
+  if [[ -x /bin/bash ]]; then
+    printf '/bin/bash\n'
+    return
+  fi
+  printf '/bin/sh\n'
+}
+
 ensure_service_accounts() {
   local nologin
+  local login_shell
   nologin="$(resolve_nologin_shell)"
+  login_shell="$(resolve_login_shell)"
 
   if ! getent group "${COMPUTER_MCP_SERVICE_GROUP}" >/dev/null; then
     groupadd --system "${COMPUTER_MCP_SERVICE_GROUP}"
@@ -80,20 +98,26 @@ ensure_service_accounts() {
     useradd \
       --system \
       --gid "${COMPUTER_MCP_SERVICE_GROUP}" \
-      --home-dir "${COMPUTER_MCP_STATE_DIR}/agent-home" \
+      --home-dir "${COMPUTER_MCP_AGENT_HOME}" \
       --create-home \
-      --shell "${nologin}" \
+      --shell "${login_shell}" \
       "${COMPUTER_MCP_AGENT_USER}"
+  else
+    usermod --home "${COMPUTER_MCP_AGENT_HOME}" "${COMPUTER_MCP_AGENT_USER}" || true
+    usermod --shell "${login_shell}" "${COMPUTER_MCP_AGENT_USER}" || true
   fi
 
   if ! id -u "${COMPUTER_MCP_PUBLISHER_USER}" >/dev/null 2>&1; then
     useradd \
       --system \
       --gid "${COMPUTER_MCP_SERVICE_GROUP}" \
-      --home-dir "${COMPUTER_MCP_STATE_DIR}/publisher-home" \
-      --create-home \
+      --home-dir "${COMPUTER_MCP_PUBLISHER_HOME}" \
+      --no-create-home \
       --shell "${nologin}" \
       "${COMPUTER_MCP_PUBLISHER_USER}"
+  else
+    usermod --home "${COMPUTER_MCP_PUBLISHER_HOME}" "${COMPUTER_MCP_PUBLISHER_USER}" || true
+    usermod --shell "${nologin}" "${COMPUTER_MCP_PUBLISHER_USER}" || true
   fi
 }
 
@@ -319,6 +343,8 @@ ensure_dirs_and_config() {
   install -d -m 0750 -o root -g "${COMPUTER_MCP_SERVICE_GROUP}" "${COMPUTER_MCP_TLS_DIR}"
   install -d -m 0750 -o root -g "${COMPUTER_MCP_SERVICE_GROUP}" "${COMPUTER_MCP_READER_KEY_DIR}"
   install -d -m 0750 -o root -g "${COMPUTER_MCP_SERVICE_GROUP}" "${COMPUTER_MCP_PUBLISHER_KEY_DIR}"
+  install -d -m 0750 -o "${COMPUTER_MCP_AGENT_USER}" -g "${COMPUTER_MCP_SERVICE_GROUP}" "${COMPUTER_MCP_AGENT_HOME}"
+  install -d -m 0750 -o "${COMPUTER_MCP_AGENT_USER}" -g "${COMPUTER_MCP_SERVICE_GROUP}" "${COMPUTER_MCP_DEFAULT_WORKDIR}"
 
   if [[ ! -f "${COMPUTER_MCP_CONFIG_PATH}" ]]; then
     local api_key
@@ -337,6 +363,10 @@ ensure_dirs_and_config() {
     cat >"${COMPUTER_MCP_CONFIG_PATH}" <<EOF
 api_key = "${api_key}"
 ${runpod_http_port_line}
+agent_user = "${COMPUTER_MCP_AGENT_USER}"
+agent_home = "${COMPUTER_MCP_AGENT_HOME}"
+default_workdir = "${COMPUTER_MCP_DEFAULT_WORKDIR}"
+publisher_user = "${COMPUTER_MCP_PUBLISHER_USER}"
 
 # Most installs can keep the built-in defaults.
 # Add only the settings you actually need to override.

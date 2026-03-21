@@ -11,6 +11,8 @@ These are the main defaults:
 - publisher key: `/etc/computer-mcp/publisher/private-key.pem`
 - bind address: `0.0.0.0:443`
 - agent user: `computer-mcp-agent`
+- agent home: `/home/computer-mcp-agent`
+- default workdir: `/workspace`
 - publisher user: `computer-mcp-publisher`
 - publisher socket: `/var/lib/computer-mcp/publisher/run/computer-mcp-prd.sock`
 
@@ -51,6 +53,8 @@ On container-style hosts:
 - pid and log files are stored under the state directory
 - restart persistence depends on the container lifecycle, not `systemd`
 
+On Sprite-like hosts, keep the coding daemon on the dedicated `computer-mcp-agent` user instead of the built-in `sprite` user. The built-in Sprite user may have passwordless `sudo`, which would effectively hand the coding agent root and break the publisher-key isolation model.
+
 ## Security Model
 
 The deployment is split into two local services:
@@ -63,6 +67,7 @@ The deployment is split into two local services:
 Important limits:
 - do not run the coding agent as `root` if you want publisher-key isolation
 - do not give the coding agent unrestricted `sudo`
+- prefer a dedicated writable workspace such as `/workspace`, owned by `agent_user`
 - keep the publisher key readable only by `publisher_user`
 - keep `publisher_targets` restricted to approved repositories
 
@@ -80,7 +85,11 @@ Important limits:
 - `COMPUTER_MCP_STATE_DIR`
 - `COMPUTER_MCP_TLS_DIR`
 - `COMPUTER_MCP_AGENT_USER`
+- `COMPUTER_MCP_AGENT_HOME`
+- `COMPUTER_MCP_AGENT_SHELL`
+- `COMPUTER_MCP_DEFAULT_WORKDIR`
 - `COMPUTER_MCP_PUBLISHER_USER`
+- `COMPUTER_MCP_PUBLISHER_HOME`
 - `COMPUTER_MCP_SERVICE_GROUP`
 - `COMPUTER_MCP_READER_KEY_DIR`
 - `COMPUTER_MCP_PUBLISHER_KEY_DIR`

@@ -362,6 +362,8 @@ fn install(config_path: &Path) -> Result<()> {
             ensure_process_mode_accounts(&config)?;
             ensure_process_mode_dirs(&config)?;
             ensure_publisher_process_dirs(&config)?;
+            ensure_agent_workspace_dirs(&config)?;
+            prepare_agent_process_ownership(&config)?;
             println!(
                 "systemd not detected; configured process mode for container-style environments"
             );
@@ -376,6 +378,8 @@ fn install(config_path: &Path) -> Result<()> {
                 publisher_process_log_path(&config).display(),
                 config.publisher_socket_path
             );
+            println!("agent home: {}", config.agent_home);
+            println!("default workdir: {}", config.default_workdir);
         }
     }
     Ok(())
@@ -507,6 +511,15 @@ fn command_exists(program: &str) -> bool {
 }
 
 #[cfg(unix)]
+fn resolve_login_shell() -> &'static str {
+    if Path::new("/bin/bash").exists() {
+        "/bin/bash"
+    } else {
+        "/bin/sh"
+    }
+}
+
+#[cfg(unix)]
 fn current_euid_is_root() -> bool {
     Uid::effective().is_root()
 }
@@ -564,8 +577,8 @@ fn ensure_process_mode_accounts(config: &Config) -> Result<()> {
         )?;
     }
 
-    ensure_process_mode_user(&config.agent_user, &config.service_group)?;
-    ensure_process_mode_user(&config.publisher_user, &config.service_group)?;
+    ensure_process_mode_agent_user(config)?;
+    ensure_process_mode_publisher_user(config)?;
     Ok(())
 }
 
@@ -575,8 +588,51 @@ fn ensure_process_mode_accounts(_config: &Config) -> Result<()> {
 }
 
 #[cfg(unix)]
-fn ensure_process_mode_user(name: &str, group: &str) -> Result<()> {
-    if lookup_user(name).is_ok() {
+fn ensure_process_mode_agent_user(config: &Config) -> Result<()> {
+    if lookup_user(&config.agent_user).is_ok() {
+        run_command_capture(
+            "usermod",
+            &[
+                "--home".to_string(),
+                config.agent_home.clone(),
+                "--shell".to_string(),
+                resolve_login_shell().to_string(),
+                config.agent_user.clone(),
+            ],
+        )?;
+        return Ok(());
+    }
+
+    run_command_capture(
+        "useradd",
+        &[
+            "--system".to_string(),
+            "--create-home".to_string(),
+            "--home-dir".to_string(),
+            config.agent_home.clone(),
+            "--shell".to_string(),
+            resolve_login_shell().to_string(),
+            "--gid".to_string(),
+            config.service_group.clone(),
+            config.agent_user.clone(),
+        ],
+    )?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn ensure_process_mode_publisher_user(config: &Config) -> Result<()> {
+    if lookup_user(&config.publisher_user).is_ok() {
+        run_command_capture(
+            "usermod",
+            &[
+                "--home".to_string(),
+                "/nonexistent".to_string(),
+                "--shell".to_string(),
+                "/usr/sbin/nologin".to_string(),
+                config.publisher_user.clone(),
+            ],
+        )?;
         return Ok(());
     }
 
@@ -590,8 +646,8 @@ fn ensure_process_mode_user(name: &str, group: &str) -> Result<()> {
             "--shell".to_string(),
             "/usr/sbin/nologin".to_string(),
             "--gid".to_string(),
-            group.to_string(),
-            name.to_string(),
+            config.service_group.clone(),
+            config.publisher_user.clone(),
         ],
     )?;
     Ok(())
@@ -816,6 +872,14 @@ fn process_log_path(config: &Config) -> PathBuf {
     process_log_dir(config).join(PROCESS_LOG_FILENAME)
 }
 
+fn agent_home_dir(config: &Config) -> PathBuf {
+    PathBuf::from(&config.agent_home)
+}
+
+fn default_workdir_path(config: &Config) -> PathBuf {
+    PathBuf::from(&config.default_workdir)
+}
+
 fn publisher_process_root(config: &Config) -> PathBuf {
     state_root_for_config(config).join(PUBLISHER_PROCESS_SUBDIR)
 }
@@ -841,6 +905,17 @@ fn ensure_process_mode_dirs(config: &Config) -> Result<()> {
         .with_context(|| format!("failed to create {}", process_runtime_dir(config).display()))?;
     fs::create_dir_all(process_log_dir(config))
         .with_context(|| format!("failed to create {}", process_log_dir(config).display()))?;
+    Ok(())
+}
+
+fn ensure_agent_workspace_dirs(config: &Config) -> Result<()> {
+    for path in [agent_home_dir(config), default_workdir_path(config)] {
+        if path.as_os_str().is_empty() {
+            continue;
+        }
+        fs::create_dir_all(&path)
+            .with_context(|| format!("failed to create {}", path.display()))?;
+    }
     Ok(())
 }
 
@@ -873,6 +948,13 @@ fn prepare_agent_process_ownership(config: &Config) -> Result<()> {
     let user = lookup_user(&config.agent_user)?;
     chown_path_to_user(&process_runtime_dir(config), &user)?;
     chown_path_to_user(&process_log_dir(config), &user)?;
+    for path in [agent_home_dir(config), default_workdir_path(config)] {
+        if path.as_os_str().is_empty() || !path.exists() {
+            continue;
+        }
+        chown_path_to_user(&path, &user)?;
+        set_file_mode(&path, 0o750)?;
+    }
     Ok(())
 }
 
@@ -981,6 +1063,7 @@ fn remove_publisher_pid_file_if_present(config: &Config) -> Result<()> {
 fn start_process_mode(config: &Config, config_path: &Path) -> Result<()> {
     ensure_process_mode_accounts(config)?;
     ensure_process_mode_dirs(config)?;
+    ensure_agent_workspace_dirs(config)?;
     prepare_agent_process_ownership(config)?;
 
     if let Some(pid) = read_process_pid(config)? {
@@ -1008,7 +1091,7 @@ fn start_process_mode(config: &Config, config_path: &Path) -> Result<()> {
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr))
-        .current_dir("/");
+        .current_dir(default_workdir_path(config));
 
     #[cfg(unix)]
     unsafe {
@@ -1342,6 +1425,8 @@ fn build_process_status_lines(
         format!("pid-file: {}", process_pid_path(config).display()),
         format!("log-file: {}", process_log_path(config).display()),
         format!("run-user: {}", config.agent_user),
+        format!("agent-home: {}", config.agent_home),
+        format!("default-workdir: {}", config.default_workdir),
         format!("listen: {}:{}", config.bind_host, config.bind_port),
         format!("tls-mode: {}", config.tls_mode),
         format!("tls-cert: {}", config.tls_cert_path),
@@ -2141,6 +2226,8 @@ mod tests {
         assert!(joined.contains("service-mode: process"));
         assert!(joined.contains("active: active (running)"));
         assert!(joined.contains("exec-main-status: running pid 4242"));
+        assert!(joined.contains("agent-home: /home/computer-mcp-agent"));
+        assert!(joined.contains("default-workdir: /workspace"));
         assert!(joined.contains("url-hint: https://198.51.100.88/mcp?key=<redacted>"));
         assert!(joined.contains("health-hint: https://198.51.100.88/health"));
         assert!(joined.contains("http-proxy-listen: 0.0.0.0:8080"));

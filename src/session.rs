@@ -25,6 +25,8 @@ use crate::protocol::{
 const POLL_INTERVAL_MS: u64 = 30;
 const TIMEOUT_NOTICE: &str = "\n[computer-mcpd] process timed out and was terminated\n";
 const TERMINATE_GRACE_PERIOD_MS: u64 = 5_000;
+const EXIT_OUTPUT_DRAIN_RETRIES: usize = 4;
+const EXIT_OUTPUT_DRAIN_DELAY_MS: u64 = 10;
 
 #[derive(Debug)]
 struct OutputState {
@@ -136,10 +138,7 @@ impl SessionManager {
         let yield_time_ms = cfg.clamp_exec_yield_ms(input.yield_time_ms);
         let now = Instant::now();
 
-        let command_cwd = match input.workdir.as_deref() {
-            Some(workdir) => PathBuf::from(workdir),
-            None => std::env::current_dir().context("failed to resolve current directory")?,
-        };
+        let command_cwd = resolve_command_cwd(input.workdir.as_deref(), cfg)?;
         let command_cwd_display = command_cwd.display().to_string();
 
         #[cfg(unix)]
@@ -178,6 +177,11 @@ impl SessionManager {
         }
 
         command.current_dir(&command_cwd);
+        if !cfg.agent_home.trim().is_empty() {
+            command.env("HOME", &cfg.agent_home);
+        }
+        command.env("USER", &cfg.agent_user);
+        command.env("LOGNAME", &cfg.agent_user);
         command.env("PAGER", "cat");
         command.env("GIT_PAGER", "cat");
         command.env("LESS", "FRX");
@@ -391,7 +395,7 @@ impl SessionManager {
             }
 
             if let Some((output, exit_code, cwd, termination_reason)) = finished {
-                let text = output.snapshot().await;
+                let text = snapshot_output_after_exit(&output).await;
                 self.sessions.remove(&session_id);
                 return Ok(ToolOutput {
                     output: text,
@@ -420,6 +424,28 @@ impl SessionManager {
     }
 }
 
+fn resolve_command_cwd(requested_workdir: Option<&str>, cfg: &Config) -> Result<PathBuf> {
+    if let Some(workdir) = requested_workdir {
+        return Ok(PathBuf::from(workdir));
+    }
+
+    if !cfg.default_workdir.trim().is_empty() {
+        let path = PathBuf::from(&cfg.default_workdir);
+        if path.is_dir() {
+            return Ok(path);
+        }
+    }
+
+    if !cfg.agent_home.trim().is_empty() {
+        let path = PathBuf::from(&cfg.agent_home);
+        if path.is_dir() {
+            return Ok(path);
+        }
+    }
+
+    std::env::current_dir().context("failed to resolve current directory")
+}
+
 fn request_termination(session: &mut Session) {
     if session.terminate_started_at.is_some() {
         return;
@@ -434,6 +460,19 @@ fn request_termination(session: &mut Session) {
     {
         let _ = session.child.start_kill();
     }
+}
+
+async fn snapshot_output_after_exit(output: &Arc<OutputBuffer>) -> String {
+    let mut snapshot = output.snapshot().await;
+    for _ in 0..EXIT_OUTPUT_DRAIN_RETRIES {
+        tokio::time::sleep(Duration::from_millis(EXIT_OUTPUT_DRAIN_DELAY_MS)).await;
+        let refreshed = output.snapshot().await;
+        if refreshed == snapshot {
+            break;
+        }
+        snapshot = refreshed;
+    }
+    snapshot
 }
 
 fn maybe_force_kill(session: &mut Session) {
@@ -711,6 +750,65 @@ mod tests {
 
         assert_eq!(finished.status, CommandStatus::Exited);
         assert_eq!(finished.cwd, workdir);
+        assert!(
+            finished
+                .output
+                .contains(dir.path().to_string_lossy().as_ref())
+        );
+    }
+
+    #[tokio::test]
+    async fn defaults_to_config_default_workdir_when_input_workdir_missing() {
+        let mut mgr = SessionManager::new(64, 20_000);
+        let mut cfg = Config::default();
+        let dir = tempdir().expect("tempdir");
+        cfg.default_workdir = dir.path().display().to_string();
+
+        let finished = mgr
+            .exec_command(
+                ExecCommandInput {
+                    cmd: "pwd".to_string(),
+                    yield_time_ms: Some(2_000),
+                    workdir: None,
+                    timeout_ms: None,
+                },
+                &cfg,
+            )
+            .await
+            .expect("pwd should complete");
+
+        assert_eq!(finished.status, CommandStatus::Exited);
+        assert_eq!(finished.cwd, cfg.default_workdir);
+        assert!(
+            finished
+                .output
+                .contains(dir.path().to_string_lossy().as_ref())
+        );
+    }
+
+    #[tokio::test]
+    async fn falls_back_when_default_workdir_is_missing() {
+        let mut mgr = SessionManager::new(64, 20_000);
+        let mut cfg = Config::default();
+        let dir = tempdir().expect("tempdir");
+        cfg.agent_home = dir.path().display().to_string();
+        cfg.default_workdir = dir.path().join("missing-workspace").display().to_string();
+
+        let finished = mgr
+            .exec_command(
+                ExecCommandInput {
+                    cmd: "pwd".to_string(),
+                    yield_time_ms: Some(2_000),
+                    workdir: None,
+                    timeout_ms: None,
+                },
+                &cfg,
+            )
+            .await
+            .expect("pwd should complete");
+
+        assert_eq!(finished.status, CommandStatus::Exited);
+        assert_eq!(finished.cwd, cfg.agent_home);
         assert!(
             finished
                 .output

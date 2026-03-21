@@ -12,6 +12,11 @@ The publisher side uses a split local model:
 - `computer-mcp publish-pr` sends a local `git bundle` to the publisher daemon
 - the publisher daemon mints a short-lived installation token internally, pushes a generated branch, opens the PR, and returns the PR URL
 
+By default the coding daemon runs as `computer-mcp-agent`, with:
+
+- home: `/home/computer-mcp-agent`
+- default workdir: `/workspace`
+
 The goal is simple:
 
 - the agent gets read-only GitHub access through the reader app
@@ -30,6 +35,13 @@ Most installs only need to add:
 - `reader_installation_id`
 - `publisher_app_id`
 - one or more `publisher_targets`
+
+The built-in defaults already cover:
+
+- `agent_user = "computer-mcp-agent"`
+- `agent_home = "/home/computer-mcp-agent"`
+- `default_workdir = "/workspace"`
+- `publisher_user = "computer-mcp-publisher"`
 
 ## Required App Permissions
 
@@ -122,11 +134,13 @@ Good:
 - `computer-mcpd` runs as `computer-mcp-agent`
 - `computer-mcp-prd` runs as `computer-mcp-publisher`
 - the publisher key is readable only by `computer-mcp-publisher`
+- the agent gets a writable non-root workspace such as `/workspace`
 
 Bad:
 - the coding agent runs as `root`
 - the coding agent has unrestricted `sudo`
 - the coding agent can read the publisher user's files or processes
+- on Sprites, the coding agent runs as the built-in `sprite` user
 
 ## Private Repo Branch Protection Note
 
