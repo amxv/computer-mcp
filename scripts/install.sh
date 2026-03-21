@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_VERSION="0.1.11"
+SCRIPT_VERSION="0.1.12"
 
 COMPUTER_MCP_VERSION="${COMPUTER_MCP_VERSION:-latest}"
 COMPUTER_MCP_REPO="${COMPUTER_MCP_REPO:-amxv/computer-mcp}"
