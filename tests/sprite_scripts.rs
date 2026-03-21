@@ -29,27 +29,35 @@ fn sprite_scripts_have_valid_bash_syntax() {
 
 #[test]
 fn sprite_docs_and_scripts_include_upgrade_and_recovery_flow() {
-    let upgrade_script = std::fs::read_to_string(script_path("upgrade-sprite.sh"))
-        .expect("read upgrade script");
+    let upgrade_script =
+        std::fs::read_to_string(script_path("upgrade-sprite.sh")).expect("read upgrade script");
     let setup_script =
         std::fs::read_to_string(script_path("setup-sprite.sh")).expect("read setup script");
     let service_script = std::fs::read_to_string(script_path("sprite-services.sh"))
         .expect("read sprite services script");
-    let runbook =
-        std::fs::read_to_string(repo_root().join("docs").join("agent-sprites-setup-runbook.md"))
-            .expect("read Sprite runbook");
+    let runbook = std::fs::read_to_string(
+        repo_root()
+            .join("docs")
+            .join("agent-sprites-setup-runbook.md"),
+    )
+    .expect("read Sprite runbook");
     let deployment_notes =
         std::fs::read_to_string(repo_root().join("docs").join("deployment-notes.md"))
             .expect("read deployment notes");
 
     assert!(upgrade_script.contains("scripts/sprite-services.sh"));
     assert!(upgrade_script.contains("--force-recreate"));
-    assert!(upgrade_script.contains("verifying local Sprite health via http://127.0.0.1:8080/health"));
+    assert!(
+        upgrade_script.contains("verifying local Sprite health via http://127.0.0.1:8080/health")
+    );
     assert!(upgrade_script.contains("computer-mcp-agent unexpectedly gained read access"));
     assert!(upgrade_script.contains("verifying publisher socket permissions"));
     assert!(setup_script.contains("--force-recreate"));
     assert!(setup_script.contains("verify agent still cannot read publisher private key"));
-    assert!(setup_script.contains("verifying publisher socket permissions after Sprite service handoff"));
+    assert!(
+        setup_script
+            .contains("verifying publisher socket permissions after Sprite service handoff")
+    );
     assert!(service_script.contains("--force-recreate"));
     assert!(runbook.contains("scripts/upgrade-sprite.sh"));
     assert!(runbook.contains("Routine Upgrades"));
