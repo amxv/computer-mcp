@@ -19,6 +19,8 @@ Sync options:
   --config <path>         Service config path inside the Sprite.
                           Default: /etc/computer-mcp/config.toml
   --skip-stop-detached    Skip the pre-sync `computer-mcp stop` attempt.
+  --force-recreate        Delete both services first, then recreate them.
+                          Useful when Sprite reports stale running state.
 
 Logs options:
   --service <name>        Required for logs. Service name.
@@ -27,6 +29,7 @@ Logs options:
 
 Examples:
   scripts/sprite-services.sh sync --sprite computer --org amxv
+  scripts/sprite-services.sh sync --sprite computer --org amxv --force-recreate
   scripts/sprite-services.sh status --sprite computer --org amxv
   scripts/sprite-services.sh logs --sprite computer --org amxv --service computer-mcpd --lines 100
 EOF
@@ -59,6 +62,7 @@ SERVICE_NAME=""
 LINES=""
 DURATION=""
 STOP_DETACHED=1
+FORCE_RECREATE=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -88,6 +92,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-stop-detached)
       STOP_DETACHED=0
+      shift
+      ;;
+    --force-recreate)
+      FORCE_RECREATE=1
       shift
       ;;
     -h|--help)
@@ -135,11 +143,38 @@ sprite_api_json() {
   fi
 }
 
+sprite_api_status_code() {
+  local path="$1"
+  shift
+
+  local raw
+  raw="$(sprite api "${SPRITE_SCOPE_ARGS[@]}" "${path}" -- -sS -o /dev/null -w "%{http_code}\n" "$@")"
+  printf '%s\n' "${raw}" | tail -n 1
+}
+
 stop_detached_process_mode() {
   log "stopping detached process-mode daemons if present"
   if ! sprite exec "${SPRITE_SCOPE_ARGS[@]}" -- sudo computer-mcp stop; then
     log "warning: failed to stop detached daemons cleanly; continuing with Sprite Service sync"
   fi
+}
+
+delete_service_if_present() {
+  local service_name="$1"
+  local status_code
+
+  status_code="$(sprite_api_status_code "/services/${service_name}" -X DELETE)"
+  case "${status_code}" in
+    204)
+      log "deleted existing service ${service_name}"
+      ;;
+    404)
+      log "service ${service_name} was already absent"
+      ;;
+    *)
+      die "failed to delete service ${service_name} (HTTP ${status_code})"
+      ;;
+  esac
 }
 
 publisher_service_payload() {
@@ -196,6 +231,12 @@ print_logs() {
 sync_services() {
   if [[ "${STOP_DETACHED}" == "1" ]]; then
     stop_detached_process_mode
+  fi
+
+  if [[ "${FORCE_RECREATE}" == "1" ]]; then
+    log "force-recreate requested; deleting Sprite Services before upsert"
+    delete_service_if_present "computer-mcpd"
+    delete_service_if_present "computer-mcp-prd"
   fi
 
   log "upserting service computer-mcp-prd"
