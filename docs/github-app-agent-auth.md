@@ -109,6 +109,13 @@ computer-mcp start
 
 The installer also configures the agent user's Git config with a host-scoped helper for `https://github.com`. Once `reader_app_id`, `reader_installation_id`, and the reader PEM are present, normal HTTPS `git clone`, `git fetch`, and `git ls-remote` use short-lived reader tokens automatically.
 
+The installer also ensures the agent can make commits without per-repo setup. By default it sets:
+
+- `user.name = "Computer MCP Agent"`
+- `user.email = "computer-mcp-agent@local.invalid"`
+
+If you want a different commit identity, override `COMPUTER_MCP_GIT_USER_NAME` and `COMPUTER_MCP_GIT_USER_EMAIL` when running `scripts/install.sh`. Existing custom values are preserved on reinstall unless you explicitly override them.
+
 ## How `publish-pr` Works
 
 Run `publish-pr` from inside the repo checkout after the change has already been committed:

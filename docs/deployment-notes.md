@@ -80,6 +80,13 @@ Important limits:
 
 The installer configures a host-scoped Git credential helper for `https://github.com` under the agent user's home. That helper mints short-lived reader-app installation tokens on demand, so normal HTTPS clone/fetch operations can read private repos without exposing the publisher write credential.
 
+The installer also sets a default global commit identity for the agent user so fresh repos can commit immediately:
+
+- `Computer MCP Agent`
+- `computer-mcp-agent@local.invalid`
+
+If you want a different identity, pass `COMPUTER_MCP_GIT_USER_NAME` and `COMPUTER_MCP_GIT_USER_EMAIL` during install or upgrade. Reinstalls preserve an existing custom identity unless you explicitly override it.
+
 ## Useful Installer Overrides
 
 `scripts/install.sh` supports these environment overrides:
@@ -100,6 +107,8 @@ The installer configures a host-scoped Git credential helper for `https://github
 - `COMPUTER_MCP_PUBLISHER_USER`
 - `COMPUTER_MCP_PUBLISHER_HOME`
 - `COMPUTER_MCP_SERVICE_GROUP`
+- `COMPUTER_MCP_GIT_USER_NAME`
+- `COMPUTER_MCP_GIT_USER_EMAIL`
 - `COMPUTER_MCP_READER_KEY_DIR`
 - `COMPUTER_MCP_PUBLISHER_KEY_DIR`
 - `COMPUTER_MCP_HTTP_BIND_PORT`

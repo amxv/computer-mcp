@@ -26,6 +26,7 @@ When this runbook is complete:
 - the VPS has both GitHub apps configured
 - the reader app is stored for read-only repo access
 - the publisher app is stored for local `publish-pr`
+- the agent user can commit immediately with the default global Git identity unless the operator overrides it
 
 ## Important Constraints
 

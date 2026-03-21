@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_VERSION="0.1.12"
+SCRIPT_VERSION="0.1.13"
 
 COMPUTER_MCP_VERSION="${COMPUTER_MCP_VERSION:-latest}"
 COMPUTER_MCP_REPO="${COMPUTER_MCP_REPO:-amxv/computer-mcp}"
@@ -19,6 +19,16 @@ COMPUTER_MCP_DEFAULT_WORKDIR="${COMPUTER_MCP_DEFAULT_WORKDIR:-/workspace}"
 COMPUTER_MCP_PUBLISHER_USER="${COMPUTER_MCP_PUBLISHER_USER:-computer-mcp-publisher}"
 COMPUTER_MCP_PUBLISHER_HOME="${COMPUTER_MCP_PUBLISHER_HOME:-/nonexistent}"
 COMPUTER_MCP_SERVICE_GROUP="${COMPUTER_MCP_SERVICE_GROUP:-computer-mcp}"
+COMPUTER_MCP_GIT_USER_NAME_WAS_SET=0
+if [[ "${COMPUTER_MCP_GIT_USER_NAME+x}" == "x" ]]; then
+  COMPUTER_MCP_GIT_USER_NAME_WAS_SET=1
+fi
+COMPUTER_MCP_GIT_USER_EMAIL_WAS_SET=0
+if [[ "${COMPUTER_MCP_GIT_USER_EMAIL+x}" == "x" ]]; then
+  COMPUTER_MCP_GIT_USER_EMAIL_WAS_SET=1
+fi
+COMPUTER_MCP_GIT_USER_NAME="${COMPUTER_MCP_GIT_USER_NAME:-Computer MCP Agent}"
+COMPUTER_MCP_GIT_USER_EMAIL="${COMPUTER_MCP_GIT_USER_EMAIL:-computer-mcp-agent@local.invalid}"
 COMPUTER_MCP_READER_KEY_DIR="${COMPUTER_MCP_READER_KEY_DIR:-/etc/computer-mcp/reader}"
 COMPUTER_MCP_PUBLISHER_KEY_DIR="${COMPUTER_MCP_PUBLISHER_KEY_DIR:-/etc/computer-mcp/publisher}"
 COMPUTER_MCP_HTTP_BIND_PORT="${COMPUTER_MCP_HTTP_BIND_PORT:-}"
@@ -425,6 +435,23 @@ configure_agent_git_reader_helper() {
     git config --global credential.https://github.com.useHttpPath false
 }
 
+configure_agent_git_identity() {
+  local current_name=""
+  local current_email=""
+
+  current_name="$(run_as_agent_user git config --global --get user.name || true)"
+  current_email="$(run_as_agent_user git config --global --get user.email || true)"
+
+  if [[ "${COMPUTER_MCP_GIT_USER_NAME_WAS_SET}" == "1" || -z "${current_name}" ]]; then
+    run_as_agent_user \
+      git config --global user.name "${COMPUTER_MCP_GIT_USER_NAME}"
+  fi
+  if [[ "${COMPUTER_MCP_GIT_USER_EMAIL_WAS_SET}" == "1" || -z "${current_email}" ]]; then
+    run_as_agent_user \
+      git config --global user.email "${COMPUTER_MCP_GIT_USER_EMAIL}"
+  fi
+}
+
 detect_public_ip() {
   local ip=""
   ip="$(curl -fsS --max-time 5 https://api.ipify.org || true)"
@@ -467,6 +494,7 @@ Verify:
 Optional:
   - rotate the installer-generated API key with: computer-mcp set-key "<strong-random-key>"
   - private GitHub HTTPS clones by ${COMPUTER_MCP_AGENT_USER} will use the built-in reader credential helper once reader_app_id, reader_installation_id, and the reader PEM are in place
+  - agent commits default to ${COMPUTER_MCP_GIT_USER_NAME} <${COMPUTER_MCP_GIT_USER_EMAIL}> unless you override COMPUTER_MCP_GIT_USER_NAME / COMPUTER_MCP_GIT_USER_EMAIL during install
 EOF
     return
   fi
@@ -496,6 +524,7 @@ Verify:
 Optional:
   - rotate the installer-generated API key with: computer-mcp set-key "<strong-random-key>"
   - private GitHub HTTPS clones by ${COMPUTER_MCP_AGENT_USER} will use the built-in reader credential helper once reader_app_id, reader_installation_id, and the reader PEM are in place
+  - agent commits default to ${COMPUTER_MCP_GIT_USER_NAME} <${COMPUTER_MCP_GIT_USER_EMAIL}> unless you override COMPUTER_MCP_GIT_USER_NAME / COMPUTER_MCP_GIT_USER_EMAIL during install
 EOF
 }
 
@@ -518,6 +547,7 @@ main() {
 
   ensure_dirs_and_config
   run_cli_install
+  configure_agent_git_identity
   configure_agent_git_reader_helper
   print_next_steps
 }
