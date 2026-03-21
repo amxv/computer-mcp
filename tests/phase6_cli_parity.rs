@@ -228,10 +228,12 @@ async fn phase6_write_stdin_parity_service_http_and_cli() {
         })
         .await
         .expect("direct shell should start");
-    let direct_sid = direct_started.session_id.expect("direct session id");
+    let direct_handle = direct_started
+        .session_handle
+        .expect("direct session handle");
     let direct_written = direct_service
         .write_stdin(WriteStdinInput {
-            session_id: direct_sid,
+            session_handle: direct_handle.clone(),
             chars: Some(format!("echo {marker}\n")),
             yield_time_ms: Some(500),
             kill_process: Some(false),
@@ -240,7 +242,7 @@ async fn phase6_write_stdin_parity_service_http_and_cli() {
         .expect("direct write should succeed");
     let direct_done = direct_service
         .write_stdin(WriteStdinInput {
-            session_id: direct_sid,
+            session_handle: direct_handle,
             chars: Some("exit\n".to_string()),
             yield_time_ms: Some(2_000),
             kill_process: Some(false),
@@ -259,13 +261,13 @@ async fn phase6_write_stdin_parity_service_http_and_cli() {
         }),
     )
     .await;
-    let http_sid = http_started.session_id.expect("http session id");
+    let http_handle = http_started.session_handle.expect("http session handle");
     let http_written: ToolOutput = post_http_json(
         &base_url,
         api_key,
         "/v1/write-stdin",
         json!({
-            "session_id": http_sid,
+            "session_handle": http_handle,
             "chars": format!("echo {marker}\n"),
             "yield_time_ms": 500,
             "kill_process": false
@@ -277,7 +279,7 @@ async fn phase6_write_stdin_parity_service_http_and_cli() {
         api_key,
         "/v1/write-stdin",
         json!({
-            "session_id": http_sid,
+            "session_handle": http_handle,
             "chars": "exit\n",
             "yield_time_ms": 2_000,
             "kill_process": false
@@ -298,15 +300,15 @@ async fn phase6_write_stdin_parity_service_http_and_cli() {
         "60000".to_string(),
     ])
     .await;
-    let cli_sid = cli_started.session_id.expect("cli session id");
+    let cli_handle = cli_started.session_handle.expect("cli session handle");
     let cli_written: ToolOutput = run_computer_cli_json(vec![
         "--url".to_string(),
         base_url.clone(),
         "--key".to_string(),
         api_key.to_string(),
         "write-stdin".to_string(),
-        "--session-id".to_string(),
-        cli_sid.to_string(),
+        "--session-handle".to_string(),
+        cli_handle.clone(),
         "--chars".to_string(),
         format!("echo {marker}\n"),
         "--yield-time-ms".to_string(),
@@ -319,8 +321,8 @@ async fn phase6_write_stdin_parity_service_http_and_cli() {
         "--key".to_string(),
         api_key.to_string(),
         "write-stdin".to_string(),
-        "--session-id".to_string(),
-        cli_sid.to_string(),
+        "--session-handle".to_string(),
+        cli_handle,
         "--chars".to_string(),
         "exit\n".to_string(),
         "--yield-time-ms".to_string(),
@@ -340,8 +342,8 @@ async fn phase6_write_stdin_parity_service_http_and_cli() {
     assert_eq!(cli_done.status, CommandStatus::Exited);
     assert_eq!(http_done.exit_code, direct_done.exit_code);
     assert_eq!(cli_done.exit_code, direct_done.exit_code);
-    assert!(http_done.session_id.is_none());
-    assert!(cli_done.session_id.is_none());
+    assert!(http_done.session_handle.is_none());
+    assert!(cli_done.session_handle.is_none());
 
     stop_http_api(shutdown_tx, server).await;
 }

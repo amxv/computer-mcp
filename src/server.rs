@@ -27,6 +27,7 @@ use crate::config::Config;
 use crate::http_api;
 use crate::protocol::{ApplyPatchInput, ExecCommandInput, ToolOutput, WriteStdinInput};
 use crate::service::ComputerService;
+use crate::session::SessionOrigin;
 
 type McpHttpService = StreamableHttpService<ComputerMcpService, LocalSessionManager>;
 
@@ -61,7 +62,7 @@ impl ComputerMcpService {
         Parameters(input): Parameters<ExecCommandInput>,
     ) -> Result<McpJson<ToolOutput>, String> {
         self.computer_service
-            .exec_command(input)
+            .exec_command_with_origin(input, SessionOrigin::mcp(None))
             .await
             .map(McpJson)
             .map_err(|e| e.to_string())
@@ -328,9 +329,9 @@ mod tests {
 
             output = service
                 .write_stdin(WriteStdinInput {
-                    session_id: output
-                        .session_id
-                        .expect("running output should have a session id"),
+                    session_handle: output
+                        .session_handle
+                        .expect("running output should have a session handle"),
                     chars: None,
                     yield_time_ms: Some(250),
                     kill_process: Some(false),
@@ -350,9 +351,9 @@ mod tests {
 
             output = mcp
                 .write_stdin(Parameters(WriteStdinInput {
-                    session_id: output
-                        .session_id
-                        .expect("running output should have a session id"),
+                    session_handle: output
+                        .session_handle
+                        .expect("running output should have a session handle"),
                     chars: None,
                     yield_time_ms: Some(250),
                     kill_process: Some(false),
@@ -479,16 +480,16 @@ mod tests {
             .expect("mcp shell should start")
             .0;
 
-        let direct_session_id = direct_started
-            .session_id
-            .expect("direct shell should have a session id");
-        let mcp_session_id = mcp_started
-            .session_id
-            .expect("mcp shell should have a session id");
+        let direct_session_handle = direct_started
+            .session_handle
+            .expect("direct shell should have a session handle");
+        let mcp_session_handle = mcp_started
+            .session_handle
+            .expect("mcp shell should have a session handle");
 
         let direct_write = direct
             .write_stdin(WriteStdinInput {
-                session_id: direct_session_id,
+                session_handle: direct_session_handle.clone(),
                 chars: Some("echo phase2-write\n".to_string()),
                 yield_time_ms: Some(500),
                 kill_process: Some(false),
@@ -497,7 +498,7 @@ mod tests {
             .expect("direct write should succeed");
         let mcp_write = mcp
             .write_stdin(Parameters(WriteStdinInput {
-                session_id: mcp_session_id,
+                session_handle: mcp_session_handle.clone(),
                 chars: Some("echo phase2-write\n".to_string()),
                 yield_time_ms: Some(500),
                 kill_process: Some(false),
@@ -517,7 +518,7 @@ mod tests {
 
         let _ = direct
             .write_stdin(WriteStdinInput {
-                session_id: direct_session_id,
+                session_handle: direct_session_handle,
                 chars: Some("exit\n".to_string()),
                 yield_time_ms: Some(2_000),
                 kill_process: Some(false),
@@ -526,7 +527,7 @@ mod tests {
             .expect("direct shell should exit");
         let _ = mcp
             .write_stdin(Parameters(WriteStdinInput {
-                session_id: mcp_session_id,
+                session_handle: mcp_session_handle,
                 chars: Some("exit\n".to_string()),
                 yield_time_ms: Some(2_000),
                 kill_process: Some(false),

@@ -125,7 +125,7 @@ Example:
 
 ### `write-stdin`
 
-Use this when a previous `exec-command` is still running and returned a `session_id`.
+Use this when a previous `exec-command` is still running and returned a `session_handle`.
 
 Mental model:
 
@@ -134,7 +134,7 @@ Mental model:
 
 Useful arguments:
 
-- `--session-id`
+- `--session-handle`
 - `--chars` to send input
 - `--yield-time-ms` to wait for more output
 - `--kill-process` if you want to terminate it
@@ -142,7 +142,7 @@ Useful arguments:
 Example:
 
 ```bash
-/tmp/computer write-stdin --session-id 42 --chars $'hello\n'
+/tmp/computer write-stdin --session-handle "<session_handle>" --chars $'hello\n'
 ```
 
 ### `apply-patch`
