@@ -33,6 +33,8 @@ pub struct Config {
     pub publisher_private_key_path: String,
     pub publisher_app_id: Option<u64>,
     pub agent_user: String,
+    pub agent_home: String,
+    pub default_workdir: String,
     pub publisher_user: String,
     pub service_group: String,
     pub publisher_branch_prefix: String,
@@ -86,6 +88,8 @@ impl Default for Config {
             publisher_private_key_path: "/etc/computer-mcp/publisher/private-key.pem".to_string(),
             publisher_app_id: None,
             agent_user: "computer-mcp-agent".to_string(),
+            agent_home: "/home/computer-mcp-agent".to_string(),
+            default_workdir: "/workspace".to_string(),
             publisher_user: "computer-mcp-publisher".to_string(),
             service_group: "computer-mcp".to_string(),
             publisher_branch_prefix: "agent".to_string(),
@@ -171,6 +175,8 @@ mod tests {
         assert!(cfg.publisher_socket_path.ends_with("computer-mcp-prd.sock"));
         assert!(cfg.publisher_private_key_path.ends_with("private-key.pem"));
         assert_eq!(cfg.agent_user, "computer-mcp-agent");
+        assert_eq!(cfg.agent_home, "/home/computer-mcp-agent");
+        assert_eq!(cfg.default_workdir, "/workspace");
         assert_eq!(cfg.publisher_user, "computer-mcp-publisher");
         assert_eq!(cfg.service_group, "computer-mcp");
         assert_eq!(cfg.publisher_branch_prefix, "agent");
@@ -208,6 +214,8 @@ max_output_chars = 200000
         );
         assert_eq!(parsed.publisher_app_id, None);
         assert_eq!(parsed.agent_user, "computer-mcp-agent");
+        assert_eq!(parsed.agent_home, "/home/computer-mcp-agent");
+        assert_eq!(parsed.default_workdir, "/workspace");
         assert_eq!(parsed.publisher_user, "computer-mcp-publisher");
         assert_eq!(parsed.service_group, "computer-mcp");
         assert_eq!(parsed.publisher_branch_prefix, "agent");

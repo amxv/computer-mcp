@@ -199,7 +199,12 @@ DEFAULT_BASE="${DEFAULT_BASE}"
 CFG="/etc/computer-mcp/config.toml"
 
 echo "[remote] install latest computer-mcp"
-curl -fsSL https://raw.githubusercontent.com/amxv/computer-mcp/main/scripts/install.sh | sudo env COMPUTER_MCP_HTTP_BIND_PORT=8080 bash
+curl -fsSL https://raw.githubusercontent.com/amxv/computer-mcp/main/scripts/install.sh | \
+  sudo env \
+    COMPUTER_MCP_HTTP_BIND_PORT=8080 \
+    COMPUTER_MCP_AGENT_HOME=/home/computer-mcp-agent \
+    COMPUTER_MCP_DEFAULT_WORKDIR=/workspace \
+    bash
 
 echo "[remote] install key files"
 sudo install -d -m 0750 -o root -g computer-mcp /etc/computer-mcp/reader /etc/computer-mcp/publisher
@@ -226,6 +231,33 @@ sudo awk '
       if (!inserted_http) {
         print "http_bind_port = 8080"
       }
+    }
+  }
+' "\$CFG" | sudo tee "\$CFG" >/dev/null
+
+echo "[remote] enforce agent workspace defaults"
+sudo awk '
+  BEGIN {
+    seen_agent_home=0
+    seen_default_workdir=0
+  }
+  /^agent_home = / {
+    print "agent_home = \"/home/computer-mcp-agent\""
+    seen_agent_home=1
+    next
+  }
+  /^default_workdir = / {
+    print "default_workdir = \"/workspace\""
+    seen_default_workdir=1
+    next
+  }
+  {print}
+  END {
+    if (!seen_agent_home) {
+      print "agent_home = \"/home/computer-mcp-agent\""
+    }
+    if (!seen_default_workdir) {
+      print "default_workdir = \"/workspace\""
     }
   }
 ' "\$CFG" | sudo tee "\$CFG" >/dev/null
@@ -268,6 +300,14 @@ sudo computer-mcp status
 sudo curl -kfsS https://127.0.0.1:8443/health
 echo
 sudo curl -fsS http://127.0.0.1:8080/health
+echo
+sudo -u computer-mcp-agent env HOME=/home/computer-mcp-agent bash -lc '
+  cd /workspace
+  test -w /workspace
+  pwd
+  touch .computer-mcp-write-check
+  rm -f .computer-mcp-write-check
+'
 echo
 
 echo "[remote] done"
