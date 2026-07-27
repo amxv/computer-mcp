@@ -10,6 +10,7 @@ on:
       - "bun.lock"
       - "tsconfig.json"
       - "public/**"
+      - "scripts/install.sh"
       - "src/**"
       - "wrangler.docs.jsonc"
       - ".github/workflows/docs-worker.yml"
