@@ -1,34 +1,148 @@
 ---
 import BaseLayout from "zuedocs/layouts/BaseLayout.astro";
-import { getCollection } from "astro:content";
 import { primaryNav, siteConfig } from "../data/docs";
+import "../styles/landing.css";
 
-const docs = (await getCollection("docs")).sort((a, b) => a.data.order - b.data.order);
-
-const proofPoints = [
+const setupSteps = [
   {
-    title: "Built for ChatGPT",
-    body: "zodex is designed around ChatGPT MCP sessions. The tool shape is intentionally familiar to GPT models: run commands, keep sessions alive, and apply patches."
+    number: "01",
+    eyebrow: "Operator machine",
+    title: "Install zodex",
+    body: "Install the privileged operator CLI on your Mac or Linux machine. This binary never needs to exist inside the agent workspace.",
+    code: `curl -fsSL https://zodex.ashray.xyz/install.sh | sh
+zodex --version`
   },
   {
-    title: "Real Sprite workspaces",
-    body: "Give ChatGPT an actual Linux machine for clone-edit-test-commit loops without keeping a full VPS warm when no agent is working."
+    number: "02",
+    eyebrow: "Remote machine",
+    title: "Create a Sprite",
+    body: "Authenticate Sprites, create the Linux workspace, and expose its public URL so ChatGPT can reach the MCP front door.",
+    code: `curl -fsSL https://sprites.dev/install.sh | sh
+sprite org auth
+sprite create zodex-dev
+sprite use zodex-dev
+sprite url update --auth public`
   },
   {
-    title: "Write autonomy by policy",
-    body: "Choose PR-only, push-on-request, operator-granted push, timed YOLO, repo-scoped YOLO, or no-TTL YOLO for trusted sessions."
+    number: "03",
+    eyebrow: "Runtime install",
+    title: "Wire the workspace",
+    body: "After creating the reader and writer GitHub Apps, one command installs the runtime, configures Git, starts the services, and smoke-tests the boundary.",
+    code: `zodex sprite setup \\
+  --sprite zodex-dev \\
+  --repo owner/repo \\
+  --reader-app-id <reader-app-id> \\
+  --reader-pem /path/to/reader.pem \\
+  --publisher-app-id <writer-app-id> \\
+  --publisher-pem /path/to/writer.pem \\
+  --default-base main \\
+  --url-auth sprite`
   },
   {
-    title: "Normal Git when trusted",
-    body: "Agents can publish PRs without direct shell write tokens, or use plain git push when the operator opens the right write window."
+    number: "04",
+    eyebrow: "ChatGPT",
+    title: "Connect the MCP URL",
+    body: "Add the public HTTPS endpoint as a ChatGPT connector with no additional authentication. The API key already lives in the URL.",
+    code: `https://<sprite-host>/mcp?key=<zodex-api-key>`
   }
 ];
 
-const autonomyModes = [
-  "Start safe with read-only clone/fetch, local commits, and PR publishing through the publisher daemon.",
-  "Approve a one-off push from ChatGPT with a repo-scoped request-push grant and the default 30 minute TTL.",
-  "Grant write access remotely from the operator machine when the browser/device-flow approval should stay with the human.",
-  "Enable YOLO mode for a trusted session, scoped to selected repos or all installed repos, with a TTL or intentionally no TTL."
+const tools = [
+  {
+    index: "01",
+    name: "exec_command",
+    label: "Run",
+    body: "Start a shell command in a PTY-backed session. Builds, tests, dev servers, REPLs, and ordinary Git all behave like they should on a real Linux machine.",
+    sample: "$ cargo test --quiet"
+  },
+  {
+    index: "02",
+    name: "write_stdin",
+    label: "Continue",
+    body: "Poll a live process, send input, or stop it cleanly. Long-running work keeps a stable session handle instead of collapsing into fire-and-forget subprocesses.",
+    sample: "session_42 → still running"
+  },
+  {
+    index: "03",
+    name: "apply_patch",
+    label: "Edit",
+    body: "Apply the original Codex-style patch format GPT models already know. The model does not have to relearn a clever abstraction before it can change a file.",
+    sample: "*** Update File: src/lib.rs"
+  }
+];
+
+const modes = [
+  {
+    number: "01",
+    state: "Review first",
+    title: "Publish a PR",
+    body: "ChatGPT commits locally, then asks the isolated publisher daemon to push a generated branch and open a pull request. The shell never sees the writer token.",
+    command: "zodex-agent github publish-pr --repo owner/repo --title \"Ship it\""
+  },
+  {
+    number: "02",
+    state: "Approve once",
+    title: "Open a push window",
+    body: "Grant one repository a temporary direct-push window. The agent still runs normal Git; zodex enforces the policy underneath the familiar workflow.",
+    command: "zodex-agent github request-push --repo owner/repo"
+  },
+  {
+    number: "03",
+    state: "Trusted session",
+    title: "Go scoped YOLO",
+    body: "For repos and tasks you trust, grant bounded autonomy to one repo, several repos, or every installed repo. Grants carry scopes and independent expiry times.",
+    command: "zodex github mode yolo --sprite dev --repo owner/repo --ttl 4h"
+  }
+];
+
+const capabilities = [
+  {
+    marker: "PTY",
+    title: "A terminal, not a subprocess wrapper",
+    body: "Interactive sessions survive across tool calls, nested processes are cleaned up as a group, and recent error output wins when buffers fill."
+  },
+  {
+    marker: "GIT",
+    title: "Normal history, normal handoff",
+    body: "Clone, branch, diff, test, and commit exactly as you would locally. Return work through a PR, a temporary grant, or a trusted push window."
+  },
+  {
+    marker: "BIN",
+    title: "Privilege split by construction",
+    body: "The operator CLI and agent helper are different binaries. The command that can escalate access simply is not installed on the machine ChatGPT controls."
+  },
+  {
+    marker: "API",
+    title: "One runtime, two front doors",
+    body: "Use the same command, stdin, and patch service through ChatGPT MCP or the direct HTTP API without maintaining two implementations."
+  }
+];
+
+const guideLinks = [
+  {
+    index: "01",
+    href: "/docs/quickstart",
+    title: "Quickstart",
+    body: "Install the operator CLI, create the Sprite, configure GitHub Apps, and connect ChatGPT."
+  },
+  {
+    index: "02",
+    href: "/docs/write-modes",
+    title: "Write modes",
+    body: "Choose the right point on the ladder from review-first PRs to scoped YOLO."
+  },
+  {
+    index: "03",
+    href: "/docs/architecture",
+    title: "Architecture",
+    body: "See how ChatGPT, the proxy, the Sprite services, and the two GitHub Apps fit together."
+  },
+  {
+    index: "04",
+    href: "/docs/tools",
+    title: "The three tools",
+    body: "Read the exact inputs, outputs, session contract, and annotations exposed over MCP."
+  }
 ];
 ---
 
@@ -38,135 +152,353 @@ const autonomyModes = [
   siteConfig={siteConfig}
   primaryNav={primaryNav}
 >
-  <section class="hero shell">
-    <div class="hero__copy">
-      <p class="section-label">ChatGPT-native remote coding workspace</p>
-      <h1>
-        Give ChatGPT a real Linux coding machine, then choose exactly how much it can push.
-      </h1>
-      <p class="hero__lede">
-        zodex runs a Sprite-backed MCP runtime built for ChatGPT coding sessions. GPT models get
-        a familiar command, stdin, and patch surface, while operators keep control over GitHub
-        writes: PR-only, push-on-approval, or scoped YOLO for trusted work.
-      </p>
-      <p class="hero__annotation">
-        The default path is safe. ChatGPT can clone, edit, test, and commit on the Sprite before
-        any GitHub write window exists. When speed matters, the operator can open direct push for
-        one repo, several repos, or all installed repos for a bounded duration or indefinitely.
-      </p>
-      <div class="hero__actions">
-        <a class="button button--solid" href="/docs/quickstart">Connect ChatGPT</a>
-        <a class="button button--ghost" href="/docs/write-modes">Compare write modes</a>
+  <div class="zodex-home">
+    <section class="z-hero shell">
+      <div class="z-hero__eyebrow reveal reveal--1">
+        <span class="live-dot" aria-hidden="true"></span>
+        Remote coding control plane
+        <span class="z-hero__eyebrow-rule" aria-hidden="true"></span>
+        ChatGPT × Sprites
       </div>
-    </div>
-    <aside class="hero__panel">
-      <p class="hero__panel-label">Operator control</p>
-      <ul class="hero__signal-list">
-        <li>Expose `/mcp?key=...` to ChatGPT.</li>
-        <li>Run GPT-friendly command/stdin/patch tools.</li>
-        <li>Pick PR-only, approved push, or YOLO mode.</li>
-      </ul>
-      <div class="hero__terminal">
-        <span>$ zodex sprite setup --sprite dev --repo amxv/zodex</span>
-        <span>$ zodex-agent github publish-pr --repo amxv/zodex</span>
-        <span>$ zodex-agent github request-push --repo amxv/zodex</span>
-        <span>$ zodex github mode yolo --sprite dev --repo amxv/zodex --ttl 4h</span>
-      </div>
-    </aside>
-  </section>
 
-  <section class="shell section-grid">
-    <div class="section-heading">
-      <p class="section-label">Why it exists</p>
-      <h2>ChatGPT is better at coding when it gets the kind of tools it already knows.</h2>
-      <p>
-        zodex gives ChatGPT the same basic primitives GPT coding workflows rely on: run a shell
-        command, continue an interactive process, and apply a targeted patch. The difference is that
-        those tools operate on a real Sprite workspace with real Git history, real tests, and real
-        service processes.
-      </p>
-    </div>
-    <div class="proof-grid">
-      {proofPoints.map((item) => (
-        <article class="proof-card">
-          <h3>{item.title}</h3>
-          <p>{item.body}</p>
-        </article>
-      ))}
-    </div>
-  </section>
+      <div class="z-hero__grid">
+        <div class="z-hero__copy">
+          <p class="z-overline reveal reveal--2">A real machine behind three familiar tools</p>
+          <h1 class="reveal reveal--3">
+            Put ChatGPT on a
+            <em>real machine.</em>
+          </h1>
+          <p class="z-hero__lede reveal reveal--4">
+            zodex gives ChatGPT a Sprite-backed Linux workspace with the exact command,
+            stdin, and patch primitives GPT models already know—then gives you a precise
+            control surface for what can return to GitHub.
+          </p>
+          <div class="z-hero__actions reveal reveal--5">
+            <a class="z-button z-button--signal" href="/docs/quickstart">
+              Set up zodex <span aria-hidden="true">↗</span>
+            </a>
+            <a class="z-button z-button--quiet" href="/docs/architecture">
+              See the architecture <span aria-hidden="true">→</span>
+            </a>
+          </div>
+          <div class="z-hero__proof reveal reveal--6" aria-label="Core product facts">
+            <div><strong>03</strong><span>MCP tools</span></div>
+            <div><strong>05</strong><span>Rust binaries</span></div>
+            <div><strong>∞</strong><span>real shell workflows</span></div>
+          </div>
+        </div>
 
-  <section class="shell split-section">
-    <div>
-      <p class="section-label">Autonomy ladder</p>
-      <h2>Start with review. Open direct push only when the session deserves it.</h2>
-    </div>
-    <div class="stack-list">
-      {autonomyModes.map((item) => (
-        <article class="stack-list__item">
-          <p>{item}</p>
-        </article>
-      ))}
-    </div>
-  </section>
+        <div class="control-rig reveal reveal--4" aria-label="Example zodex session topology">
+          <div class="control-rig__chrome">
+            <span>ZDX / REMOTE-01</span>
+            <span class="control-rig__online"><i aria-hidden="true"></i> link online</span>
+          </div>
 
-  <section class="shell capability-band">
-    <div class="capability-band__intro">
-      <p class="section-label">Runtime pieces</p>
-      <h2>ChatGPT front door, Sprite workspace, MCP daemon, GitHub apps, and operator CLI.</h2>
-    </div>
-    <div class="capability-band__grid">
-      <div>
-        <p class="capability-title">ChatGPT MCP</p>
-        <p>Connect ChatGPT to a stable `/mcp?key=...` URL and give it the three-tool coding surface it handles well.</p>
-      </div>
-      <div>
-        <p class="capability-title">Sprites.dev</p>
-        <p>Spin up a remote Linux environment for agent work instead of paying for always-idle VPS capacity.</p>
-      </div>
-      <div>
-        <p class="capability-title">zodexd</p>
-        <p>Sprite-side MCP daemon for command execution, interactive stdin writes, patch application, health, and HTTP routes.</p>
-      </div>
-      <div>
-        <p class="capability-title">zodex-agent</p>
-        <p>Guest-side helper for PR publishing, request-push grants, grant listing, revocation, and MCP URL hints.</p>
-      </div>
-      <div>
-        <p class="capability-title">zodex</p>
-        <p>Operator CLI for Sprite setup, upgrades, logs, proxy checks, remote grants, and scoped YOLO mode.</p>
-      </div>
-      <div>
-        <p class="capability-title">GitHub Apps</p>
-        <p>Reader and writer apps separate always-on read access from PR publishing and direct-push policy.</p>
-      </div>
-    </div>
-  </section>
+          <div class="control-rig__canvas">
+            <div class="rig-node rig-node--chatgpt">
+              <span class="rig-node__index">A</span>
+              <div><strong>ChatGPT</strong><small>MCP client</small></div>
+            </div>
 
-  <section class="shell docs-teaser">
-    <div class="section-heading">
-      <p class="section-label">Docs map</p>
-      <h2>Connect ChatGPT first, then choose the right write mode for each repo.</h2>
-      <p>
-        The docs follow the real operating path: install zodex, connect ChatGPT to the Sprite MCP
-        front door, understand the write modes, configure GitHub Apps, operate the Sprite services,
-        and troubleshoot grants, YOLO mode, proxy routing, and command execution.
-      </p>
+            <div class="rig-wire rig-wire--one" aria-hidden="true">
+              <span>/mcp?key=••••</span><i></i>
+            </div>
+
+            <div class="rig-node rig-node--daemon">
+              <span class="rig-node__index">B</span>
+              <div><strong>zodexd</strong><small>Sprite runtime</small></div>
+            </div>
+
+            <div class="rig-tools" aria-label="MCP tools">
+              <span>exec_command</span>
+              <span>write_stdin</span>
+              <span>apply_patch</span>
+            </div>
+
+            <div class="rig-wire rig-wire--two" aria-hidden="true">
+              <span>commit / publish policy</span><i></i>
+            </div>
+
+            <div class="rig-node rig-node--github">
+              <span class="rig-node__index">C</span>
+              <div><strong>GitHub</strong><small>PR / grant / YOLO</small></div>
+            </div>
+          </div>
+
+          <div class="control-rig__terminal" aria-label="Illustrative terminal session">
+            <div class="terminal-bar">
+              <span>session / zodex</span>
+              <span>PTY 02:14:31</span>
+            </div>
+            <div class="terminal-line"><i>$</i><code>cargo test --quiet</code></div>
+            <div class="terminal-output"><span>✓</span> checks passed / workspace clean</div>
+            <div class="terminal-line"><i>$</i><code>zodex-agent github publish-pr --repo amxv/zodex</code></div>
+            <div class="terminal-output terminal-output--signal"><span>↗</span> committed history handed to publisher</div>
+          </div>
+
+          <div class="control-rig__foot">
+            <span>POWERFUL SHELL</span>
+            <span>EXPLICIT NETWORK WRITES</span>
+            <span>STRUCTURAL BOUNDARY</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="signal-strip" aria-hidden="true">
+      <div>
+        <span>EXEC_COMMAND</span><i>◆</i><span>WRITE_STDIN</span><i>◆</i><span>APPLY_PATCH</span><i>◆</i>
+        <span>REAL PTY</span><i>◆</i><span>NORMAL GIT</span><i>◆</i><span>SCOPED AUTONOMY</span><i>◆</i>
+        <span>EXEC_COMMAND</span><i>◆</i><span>WRITE_STDIN</span><i>◆</i><span>APPLY_PATCH</span><i>◆</i>
+        <span>REAL PTY</span><i>◆</i><span>NORMAL GIT</span><i>◆</i><span>SCOPED AUTONOMY</span><i>◆</i>
+      </div>
     </div>
-    <div class="docs-teaser__grid">
-      {docs.map((entry) => (
-        <a class="docs-teaser__card" href={`/docs/${entry.id}`}>
-          <span>{entry.data.category}</span>
-          <h3>{entry.data.title}</h3>
-          <p>{entry.data.summary ?? entry.data.description}</p>
+
+    <section class="z-section z-setup shell" id="setup">
+      <header class="z-section__head">
+        <div>
+          <p class="z-overline">01 / Bring the machine online</p>
+          <h2>The whole setup,<br /><em>in one screen.</em></h2>
+        </div>
+        <div class="z-section__intro">
+          <p>
+            The landing page gives you the main path. The full guide covers the two GitHub Apps,
+            every required permission, verification commands, and troubleshooting.
+          </p>
+          <a class="text-link" href="/docs/quickstart">Open the complete setup guide <span aria-hidden="true">↗</span></a>
+        </div>
+      </header>
+
+      <div class="setup-ledger">
+        {setupSteps.map((step) => (
+          <article class="setup-step">
+            <div class="setup-step__meta">
+              <span class="setup-step__number">{step.number}</span>
+              <span>{step.eyebrow}</span>
+            </div>
+            <div class="setup-step__copy">
+              <h3>{step.title}</h3>
+              <p>{step.body}</p>
+            </div>
+            <div class="code-window">
+              <div class="code-window__bar">
+                <span>shell</span>
+                <button class="copy-button" type="button" data-copy-code aria-label={`Copy ${step.title} commands`}>
+                  <span data-copy-label>copy</span>
+                </button>
+              </div>
+              <pre><code>{step.code}</code></pre>
+            </div>
+          </article>
+        ))}
+      </div>
+
+      <div class="setup-note">
+        <span class="setup-note__mark" aria-hidden="true">!</span>
+        <p>
+          GitHub Apps are the one deliberate non-command step: a read-only app for clone/fetch and a writer app
+          whose credentials stay behind the publisher boundary. The <a href="/docs/quickstart#3-create-the-required-github-apps">Quickstart lists the exact settings</a>.
+        </p>
+      </div>
+    </section>
+
+    <section class="z-section z-tools shell">
+      <header class="z-section__head z-section__head--wide">
+        <div>
+          <p class="z-overline">02 / GPT-native by design</p>
+          <h2>Three tools.<br /><em>Nothing clever in the way.</em></h2>
+        </div>
+        <p class="z-section__measure">
+          Frontier GPT models already learned how to code inside a command / stdin / patch harness.
+          zodex preserves that shape and upgrades the environment underneath it.
+        </p>
+      </header>
+
+      <div class="tool-grid">
+        {tools.map((tool) => (
+          <article class="tool-card">
+            <div class="tool-card__top">
+              <span>{tool.index}</span>
+              <span>{tool.label}</span>
+            </div>
+            <h3>{tool.name}</h3>
+            <p>{tool.body}</p>
+            <div class="tool-card__sample"><span aria-hidden="true">›</span><code>{tool.sample}</code></div>
+          </article>
+        ))}
+      </div>
+
+      <div class="runtime-statement">
+        <p class="runtime-statement__index">THE BET</p>
+        <p>
+          A small API does not mean a small capability surface. It means the model spends its intelligence
+          <em>doing the work</em>, not translating your agent framework.
+        </p>
+      </div>
+    </section>
+
+    <section class="z-section z-autonomy shell">
+      <header class="z-section__head">
+        <div>
+          <p class="z-overline">03 / Autonomy is a ladder</p>
+          <h2>Start safe.<br /><em>Move fast when earned.</em></h2>
+        </div>
+        <div class="z-section__intro">
+          <p>
+            ChatGPT can clone, edit, test, and commit before any GitHub write window exists.
+            When the work is ready, choose exactly how it leaves the machine.
+          </p>
+          <a class="text-link" href="/docs/write-modes">Compare every write mode <span aria-hidden="true">→</span></a>
+        </div>
+      </header>
+
+      <div class="mode-ladder">
+        {modes.map((mode) => (
+          <article class="mode-card">
+            <div class="mode-card__rail" aria-hidden="true">
+              <span>{mode.number}</span><i></i>
+            </div>
+            <p class="mode-card__state">{mode.state}</p>
+            <h3>{mode.title}</h3>
+            <p class="mode-card__body">{mode.body}</p>
+            <code>{mode.command}</code>
+          </article>
+        ))}
+      </div>
+    </section>
+
+    <section class="z-section z-boundary shell">
+      <div class="boundary-copy">
+        <p class="z-overline">04 / The trust boundary</p>
+        <h2>The agent cannot flip the switch because <em>the switch is not there.</em></h2>
+        <p>
+          zodex does not rely on one binary politely checking whether a command is allowed. The privileged
+          operator CLI lives on your machine. The Sprite gets a restricted agent helper. Different binaries,
+          different command surfaces, different credentials.
+        </p>
+        <a class="z-button z-button--quiet" href="/docs/access-model">
+          Read the access model <span aria-hidden="true">→</span>
         </a>
-      ))}
-    </div>
-  </section>
-  <section class="shell closing-note">
-    <p>
-      zodex is for ChatGPT coding sessions that need a real machine, normal Git, and an operator-controlled
-      path from careful PR review to trusted YOLO pushes.
-    </p>
-  </section>
+      </div>
+
+      <div class="boundary-diagram" aria-label="Operator and agent binary permission split">
+        <div class="boundary-zone boundary-zone--operator">
+          <div class="boundary-zone__label"><span>TRUSTED</span><small>your machine</small></div>
+          <div class="boundary-binary">
+            <span class="binary-icon" aria-hidden="true">Z</span>
+            <div><strong>zodex</strong><small>setup / upgrades / grants / YOLO</small></div>
+          </div>
+          <ul>
+            <li>holds operator authority</li>
+            <li>opens and closes write windows</li>
+            <li>never installed in the agent shell</li>
+          </ul>
+        </div>
+
+        <div class="boundary-wall" aria-hidden="true">
+          <span>BINARY BOUNDARY</span>
+          <i></i>
+        </div>
+
+        <div class="boundary-zone boundary-zone--agent">
+          <div class="boundary-zone__label"><span>RESTRICTED</span><small>Sprite workspace</small></div>
+          <div class="boundary-binary">
+            <span class="binary-icon" aria-hidden="true">A</span>
+            <div><strong>zodex-agent</strong><small>status / request / publish / revoke</small></div>
+          </div>
+          <ul>
+            <li>can request, never self-grant</li>
+            <li>cannot inspect operator credentials</li>
+            <li>publishes through an isolated daemon</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="z-section z-capabilities shell">
+      <header class="z-section__head z-section__head--wide">
+        <div>
+          <p class="z-overline">05 / Built for actual work</p>
+          <h2>Everything underneath<br /><em>the tiny tool surface.</em></h2>
+        </div>
+        <p class="z-section__measure">
+          The model sees three simple actions. The runtime handles the operational edges that make those actions
+          trustworthy over hours of real coding.
+        </p>
+      </header>
+
+      <div class="capability-grid">
+        {capabilities.map((capability) => (
+          <article class="capability-card">
+            <span class="capability-card__marker">{capability.marker}</span>
+            <div>
+              <h3>{capability.title}</h3>
+              <p>{capability.body}</p>
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
+
+    <section class="z-section z-guides shell">
+      <header class="z-section__head">
+        <div>
+          <p class="z-overline">06 / Go deeper</p>
+          <h2>The docs follow<br /><em>the real operating path.</em></h2>
+        </div>
+        <div class="z-section__intro">
+          <p>
+            Start with the machine, understand the access model, then operate it like infrastructure—not magic.
+          </p>
+          <a class="text-link" href="/docs">Browse every guide <span aria-hidden="true">↗</span></a>
+        </div>
+      </header>
+
+      <div class="guide-list">
+        {guideLinks.map((guide) => (
+          <a class="guide-row" href={guide.href}>
+            <span class="guide-row__index">{guide.index}</span>
+            <h3>{guide.title}</h3>
+            <p>{guide.body}</p>
+            <span class="guide-row__arrow" aria-hidden="true">↗</span>
+          </a>
+        ))}
+      </div>
+    </section>
+
+    <section class="z-final shell">
+      <div class="z-final__signal" aria-hidden="true">
+        <span></span><span></span><span></span><span></span><span></span>
+      </div>
+      <p class="z-overline">READY / REMOTE / CONTROLLED</p>
+      <h2>Give ChatGPT a machine<br />worthy of the model.</h2>
+      <p>
+        Real Linux. Familiar tools. Normal Git. A permissions boundary you can reason about.
+      </p>
+      <div class="z-final__actions">
+        <a class="z-button z-button--signal" href="/docs/quickstart">Build the workspace <span aria-hidden="true">↗</span></a>
+        <a class="z-button z-button--inverse" href="https://github.com/amxv/zodex" target="_blank" rel="noreferrer">View source <span aria-hidden="true">↗</span></a>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const copyButtons = document.querySelectorAll<HTMLButtonElement>("[data-copy-code]");
+
+    for (const button of copyButtons) {
+      button.addEventListener("click", async () => {
+        const code = button.closest(".code-window")?.querySelector("code")?.textContent;
+        const label = button.querySelector<HTMLElement>("[data-copy-label]");
+        if (!code || !label) return;
+
+        try {
+          await navigator.clipboard.writeText(code);
+          label.textContent = "copied";
+          window.setTimeout(() => { label.textContent = "copy"; }, 1600);
+        } catch {
+          label.textContent = "select";
+        }
+      });
+    }
+  </script>
 </BaseLayout>
