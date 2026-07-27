@@ -228,8 +228,9 @@ install_operator_binaries_from_dir() {
   local src_dir="$1"
   local install_dir="${ZODEX_INSTALL_DIR}"
 
-  if [[ "${install_dir}" == "/usr/local/bin" && ! is_root ]]; then
+  if [[ "${install_dir}" == "/usr/local/bin" ]] && ! is_root; then
     install_dir="${HOME}/.local/bin"
+    log "no root privileges; installing operator CLI to ${install_dir}"
   fi
 
   [[ -x "${src_dir}/zodex" ]] || die "missing executable ${src_dir}/zodex"

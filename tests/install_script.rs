@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 fn install_script_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -116,4 +117,65 @@ fn install_script_is_valid_bash_syntax() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         panic!("bash -n failed: {stderr}");
     }
+}
+
+#[test]
+fn operator_install_falls_back_to_user_local_bin_without_root() {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock before Unix epoch")
+        .as_nanos();
+    let test_dir = std::env::temp_dir().join(format!(
+        "zodex-install-test-{}-{unique}",
+        std::process::id()
+    ));
+    let source_dir = test_dir.join("source");
+    let home_dir = test_dir.join("home");
+    std::fs::create_dir_all(&source_dir).expect("create source directory");
+    std::fs::create_dir_all(&home_dir).expect("create home directory");
+
+    let source_binary = source_dir.join("zodex");
+    std::fs::write(&source_binary, "#!/bin/sh\nexit 0\n").expect("write source binary");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = std::fs::metadata(&source_binary)
+            .expect("read source binary metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&source_binary, permissions)
+            .expect("make source binary executable");
+    }
+
+    let script_path = install_script_path();
+    let command = r#"
+eval "$(sed -n '/^install_operator_binaries_from_dir()/,/^}/p' "${INSTALL_SCRIPT}")"
+is_root() { return 1; }
+log() { printf '%s\n' "$*"; }
+die() { printf '%s\n' "$*" >&2; exit 1; }
+install_operator_binaries_from_dir "${SOURCE_DIR}"
+"#;
+    let output = Command::new("bash")
+        .arg("-c")
+        .arg(command)
+        .env("INSTALL_SCRIPT", &script_path)
+        .env("SOURCE_DIR", &source_dir)
+        .env("HOME", &home_dir)
+        .env("ZODEX_INSTALL_DIR", "/usr/local/bin")
+        .output()
+        .expect("run operator install");
+
+    let installed_binary = home_dir.join(".local/bin/zodex");
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        panic!("operator install failed: {stderr}");
+    }
+    assert!(
+        installed_binary.is_file(),
+        "operator install should fall back to {}",
+        installed_binary.display()
+    );
+
+    std::fs::remove_dir_all(&test_dir).expect("remove test directory");
 }
