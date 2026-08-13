@@ -72,6 +72,67 @@ fn apple_machine_create_help_args() -> Vec<String> {
     vec!["machine".into(), "create".into(), "--help".into()]
 }
 
+fn local_machine_build_args(containerfile: &Path, context: &Path) -> Vec<String> {
+    vec![
+        "build".into(),
+        "--tag".into(),
+        LOCAL_MACHINE_IMAGE.into(),
+        "--file".into(),
+        containerfile.display().to_string(),
+        context.display().to_string(),
+    ]
+}
+
+fn local_machine_create_args(cpus: Option<u32>, memory: Option<&str>) -> Vec<String> {
+    let mut args = vec![
+        "machine".into(),
+        "create".into(),
+        "--no-boot".into(),
+        "--name".into(),
+        LOCAL_MACHINE_NAME.into(),
+        "--home-mount".into(),
+        "none".into(),
+    ];
+    if let Some(cpus) = cpus {
+        args.extend(["--cpus".into(), cpus.to_string()]);
+    }
+    if let Some(memory) = memory {
+        args.extend(["--memory".into(), memory.to_string()]);
+    }
+    args.push(LOCAL_MACHINE_IMAGE.into());
+    args
+}
+
+fn local_machine_set_args(cpus: Option<u32>, memory: Option<&str>) -> Vec<String> {
+    let mut args = vec![
+        "machine".into(),
+        "set".into(),
+        "--name".into(),
+        LOCAL_MACHINE_NAME.into(),
+        "home-mount=none".into(),
+    ];
+    if let Some(cpus) = cpus {
+        args.push(format!("cpus={cpus}"));
+    }
+    if let Some(memory) = memory {
+        args.push(format!("memory={memory}"));
+    }
+    args
+}
+
+fn local_machine_run_args(command: &[String]) -> Vec<String> {
+    let mut args = vec![
+        "machine".into(),
+        "run".into(),
+        "--root".into(),
+        "--name".into(),
+        LOCAL_MACHINE_NAME.into(),
+        "--".into(),
+    ];
+    args.extend(command.iter().cloned());
+    args
+}
+
 fn parse_apple_system_version(raw: &str) -> Result<String> {
     let versions: Vec<AppleSystemVersionInfo> = serde_json::from_str(raw)
         .context("failed to parse `container system version --format json` output")?;
@@ -114,6 +175,104 @@ fn command_output(program: &str, args: &[String]) -> io::Result<ProviderCommandO
         stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
         stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
     })
+}
+
+fn provider_output_result(program: &str, args: &[String], output: ProviderCommandOutput) -> Result<String> {
+    if output.success {
+        return Ok(output.stdout);
+    }
+    let details = if output.stderr.trim().is_empty() {
+        output.stdout.trim()
+    } else {
+        output.stderr.trim()
+    };
+    bail!("{program} {} failed: {details}", args.join(" "))
+}
+
+fn run_container_capture(args: &[String]) -> Result<String> {
+    let output = command_output("container", args).context("failed to run Apple Container CLI")?;
+    provider_output_result("container", args, output)
+}
+
+fn ensure_apple_container_system_started() -> Result<()> {
+    let status = Command::new("container")
+        .args(["system", "start"])
+        .status()
+        .context("failed to start Apple Container services")?;
+    if status.success() {
+        return Ok(());
+    }
+    bail!("`container system start` failed with status {status}")
+}
+
+fn build_local_machine_image() -> Result<()> {
+    let context = tempfile::tempdir().context("failed to create Local machine image build context")?;
+    let containerfile = context.path().join("Containerfile");
+    fs::write(&containerfile, LOCAL_MACHINE_CONTAINERFILE)
+        .context("failed to write embedded Local machine Containerfile")?;
+    run_container_capture(&local_machine_build_args(&containerfile, context.path()))?;
+    Ok(())
+}
+
+fn create_local_machine(cpus: Option<u32>, memory: Option<&str>) -> Result<()> {
+    run_container_capture(&local_machine_create_args(cpus, memory))?;
+    Ok(())
+}
+
+fn reconcile_local_machine_resources(cpus: Option<u32>, memory: Option<&str>) -> Result<()> {
+    run_container_capture(&local_machine_set_args(cpus, memory))?;
+    Ok(())
+}
+
+fn run_local_machine_exec(command: &[String]) -> Result<String> {
+    if command.is_empty() {
+        bail!("Local operator exec command must not be empty");
+    }
+    run_container_capture(&local_machine_run_args(command))
+}
+
+fn run_local_machine_exec_with_input(command: &[String], input: &[u8]) -> Result<String> {
+    if command.is_empty() {
+        bail!("Local operator exec command must not be empty");
+    }
+    let args = local_machine_run_args(command);
+    let mut child = Command::new("container")
+        .args(&args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to start Apple Container machine command")?;
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| anyhow!("failed to open Apple Container machine stdin"))?
+        .write_all(input)
+        .context("failed to stream data into Local machine")?;
+    let output = child
+        .wait_with_output()
+        .context("failed waiting for Apple Container machine command")?;
+    provider_output_result(
+        "container",
+        &args,
+        ProviderCommandOutput {
+            success: output.status.success(),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        },
+    )
+}
+
+fn write_local_machine_file(remote_path: &str, contents: &[u8]) -> Result<()> {
+    let command = vec![
+        "/bin/sh".into(),
+        "-c".into(),
+        "umask 077; cat > \"$1\"".into(),
+        "zodex-write".into(),
+        remote_path.into(),
+    ];
+    run_local_machine_exec_with_input(&command, contents)?;
+    Ok(())
 }
 
 fn probe_apple_provider_with<F>(platform: LocalPlatformSupport, mut run: F) -> LocalProviderAvailability
@@ -255,3 +414,5 @@ fn print_local_status() -> Result<()> {
     }
     Ok(())
 }
+const LOCAL_MACHINE_IMAGE: &str = "local/zodex-machine:1";
+const LOCAL_MACHINE_CONTAINERFILE: &str = include_str!("local_machine.Containerfile");

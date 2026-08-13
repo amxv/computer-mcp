@@ -1,0 +1,15 @@
+[Unit]
+Description=Zodex Local publisher daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=zodex-publisher
+Group=zodex
+ExecStart=/usr/local/bin/zodex-prd --config /etc/zodex/config.toml
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target

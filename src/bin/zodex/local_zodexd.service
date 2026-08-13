@@ -1,0 +1,16 @@
+[Unit]
+Description=Zodex Local agent daemon
+After=network-online.target zodex-prd.service
+Wants=network-online.target
+Requires=zodex-prd.service
+
+[Service]
+Type=simple
+User=zodex-agent
+Group=zodex
+ExecStart=/usr/local/bin/zodexd --config /etc/zodex/config.toml
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target

@@ -1,7 +1,8 @@
     use super::{
         DEFAULT_LOG_LINES, GithubYoloAgentGitStatus, LOCAL_MACHINE_NAME,
         LocalAccessLease, LocalHomeMountStatus, LocalPlatformSupport, LocalProviderAvailability,
-        LocalSetupState, LocalTargetRecord, OperatorSpriteRecord, OperatorSpriteRegistry,
+        LocalSetupSources, LocalSetupState, LocalTargetRecord, OperatorSpriteRecord,
+        OperatorSpriteRegistry,
         PUBLISHER_SERVICE_LABEL, ProviderCommandOutput,
         ProcessModeState, PushGrantRecord, SERVICE_NAME,
         SPRITE_MAIN_SERVICE_LABEL, ServiceManager, SpriteServiceState, SpriteServiceStatus,
@@ -20,8 +21,9 @@
         git_credential_request_targets_github, github_mode_expired,
         github_yolo_agent_git_inspect_script, github_yolo_agent_git_repair_script,
         format_bytes, load_local_access_lease, load_local_target_record, load_matching_push_grant,
-        load_push_grant_from_dir, local_access_lease_path_from_home,
-        local_target_state_path_from_home, machine_status_is_running,
+        load_push_grant_from_dir, local_access_lease_path_from_home, local_machine_create_args,
+        local_machine_run_args, local_machine_set_args, local_target_state_path_from_home,
+        machine_status_is_running,
         merge_github_yolo_mode_records,
         normalize_github_repo, normalize_github_repos, normalize_proxy_origin,
         operator_sprites_registry_path_from_home, parse_git_credential_request,
@@ -36,6 +38,10 @@
         sprite_service_supervisor_pids_from_ps, state_root_for_config, status_host_hint,
         strip_sprite_api_prelude, tls_artifacts_exist, upsert_operator_sprite_record,
         write_if_changed,
+    };
+    use super::local_setup::{
+        LocalSetupAction, build_local_guest_setup_script, classify_local_setup_action,
+        local_host_network_isolation_gate, validate_local_default_base, validate_local_repo,
     };
     use crate::operator_cli::Cli;
     use clap::{CommandFactory, Parser};
