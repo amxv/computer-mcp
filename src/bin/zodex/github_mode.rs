@@ -169,6 +169,8 @@ struct GithubYoloAgentGitStatus {
     helper: String,
     use_http_path: String,
     push_rewrite: String,
+    owner: String,
+    mode: String,
 }
 
 impl GithubYoloAgentGitStatus {
@@ -186,8 +188,15 @@ impl GithubYoloAgentGitStatus {
             .any(|value| value == GITHUB_PUSH_REWRITE_SOURCE)
     }
 
+    fn config_access_ok(&self) -> bool {
+        self.owner == ZODEX_AGENT_USER && self.mode == "600"
+    }
+
     fn direct_push_ready(&self) -> bool {
-        self.helper_ok() && self.use_http_path_ok() && self.push_rewrite_ok()
+        self.helper_ok()
+            && self.use_http_path_ok()
+            && self.push_rewrite_ok()
+            && self.config_access_ok()
     }
 }
 
@@ -198,14 +207,17 @@ fn expected_zodex_agent_git_helper() -> String {
 fn github_yolo_agent_git_repair_script() -> String {
     let helper = expected_zodex_agent_git_helper();
     format!(
-        r#"helper_cmd={helper:?}
+        r#"set -e
+helper_cmd={helper:?}
+agent_user={user:?}
 agent_home={home:?}
 agent_gitconfig="$agent_home/.gitconfig"
-sudo install -d -m 0750 -o {user} -g {user} "$agent_home"
+agent_group="$(id -gn "$agent_user")"
+sudo install -d -m 0750 -o "$agent_user" -g "$agent_group" "$agent_home"
 sudo git config --file "$agent_gitconfig" --replace-all credential.https://github.com.helper "$helper_cmd"
 sudo git config --file "$agent_gitconfig" credential.https://github.com.useHttpPath true
 sudo git config --file "$agent_gitconfig" --replace-all url.{rewrite_target:?}.pushInsteadOf {rewrite_source:?}
-sudo chown {user}:{user} "$agent_gitconfig"
+sudo chown "$agent_user:$agent_group" "$agent_gitconfig"
 sudo chmod 0600 "$agent_gitconfig"
 "#,
         user = ZODEX_AGENT_USER,
@@ -221,9 +233,13 @@ fn github_yolo_agent_git_inspect_script() -> String {
 helper="$(sudo git config --file "$agent_gitconfig" --get credential.https://github.com.helper || true)"
 use_http_path="$(sudo git config --file "$agent_gitconfig" --get credential.https://github.com.useHttpPath || true)"
 push_rewrite="$(sudo git config --file "$agent_gitconfig" --get-all url.{rewrite_target:?}.pushInsteadOf || true)"
+owner="$(sudo stat -c '%U' "$agent_gitconfig" 2>/dev/null || true)"
+mode="$(sudo stat -c '%a' "$agent_gitconfig" 2>/dev/null || true)"
 printf 'helper=%s\n' "$helper"
 printf 'use_http_path=%s\n' "$use_http_path"
 printf 'push_rewrite=%s\n' "$push_rewrite"
+printf 'owner=%s\n' "$owner"
+printf 'mode=%s\n' "$mode"
 "#,
         home = ZODEX_AGENT_HOME,
         rewrite_target = GITHUB_PUSH_REWRITE_TARGET,
@@ -255,6 +271,14 @@ fn parse_github_yolo_agent_git_status(raw: &str) -> GithubYoloAgentGitStatus {
             "push_rewrite" => {
                 status.push_rewrite = value.to_string();
                 current_key = Some("push_rewrite");
+            }
+            "owner" => {
+                status.owner = value.to_string();
+                current_key = Some("owner");
+            }
+            "mode" => {
+                status.mode = value.to_string();
+                current_key = Some("mode");
             }
             _ => {}
         }
@@ -298,6 +322,14 @@ fn build_github_yolo_agent_git_status_lines(status: &GithubYoloAgentGitStatus) -
                 "ok"
             } else {
                 "missing"
+            }
+        ),
+        format!(
+            "agent-git-config-access: {}",
+            if status.config_access_ok() {
+                "ok"
+            } else {
+                "wrong-owner-or-mode"
             }
         ),
     ]
@@ -400,6 +432,11 @@ fn enable_github_yolo_mode<T: operator_guest::OperatorGuestTransport>(
     target.exec_privileged(&exec_args)?;
 
     let agent_git_status = inspect_github_yolo_agent_git_status(target)?;
+    if !agent_git_status.direct_push_ready() {
+        bail!(
+            "GitHub YOLO state was installed, but the agent Git configuration repair did not produce a readable direct-push configuration"
+        );
+    }
 
     println!("github-mode: yolo");
     print_github_mode_target(target);

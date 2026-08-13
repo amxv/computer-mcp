@@ -16,7 +16,7 @@
             version: 1,
             machine_id: LOCAL_MACHINE_NAME.to_string(),
             setup_state: LocalSetupState::Ready,
-            image_reference: Some("local/zodex-machine:1".to_string()),
+            image_reference: Some("local/zodex-machine:4".to_string()),
             requested_cpus: None,
             requested_memory: None,
             network: Some(expected_local_network()),
@@ -137,6 +137,8 @@
         assert!(fragment.contains(LOCAL_TUNNEL_ARCHIVE_SHA256));
         assert!(fragment.contains("/etc/zodex/tunnel/version"));
         assert!(fragment.contains("api_key: file:/etc/zodex/tunnel/runtime-key"));
+        assert!(fragment.contains(r#"Authorization: \"file:/etc/zodex/tunnel/mcp-bearer\""#));
+        assert!(fragment.contains("Bearer \" + api_key"));
         assert!(fragment.contains("listen_addr: 127.0.0.1:18080"));
         assert!(fragment.contains("http://127.0.0.1:8080/mcp?key="));
         assert!(fragment.contains("systemctl disable zodex-tunnel.service"));
@@ -225,6 +227,15 @@
             ["stop_tunnel", "stop_machine", "disarm", "prepare"]
         );
         assert_eq!(runtime.events[4], "start_tunnel");
+    }
+
+    #[test]
+    fn local_tunnel_stop_is_idempotent_before_the_unit_is_installed() {
+        let command = local_tunnel_stop_command();
+        assert_eq!(&command[..2], ["/bin/bash", "-lc"]);
+        assert!(command[2].contains("LoadState"));
+        assert!(command[2].contains("!= not-found"));
+        assert!(command[2].contains("systemctl stop zodex-tunnel.service"));
     }
 
     #[test]
@@ -385,6 +396,7 @@
         assert!(
             revoke_local_access_with_runtime(&mut failing, &lease_path, Some("new"), false).is_err()
         );
+        assert_eq!(failing.events, ["stop_tunnel", "stop_machine"]);
         let persisted = load_local_access_lease(&lease_path).unwrap().unwrap();
         assert!(persisted.active);
         assert!(persisted.revocation_pending);
@@ -433,6 +445,9 @@
         assert!(plist.contains("<key>RunAtLoad</key>"));
         assert!(plist.contains("<key>KeepAlive</key>"));
         assert!(plist.contains("<key>SuccessfulExit</key>"));
+        assert!(plist.contains(
+            "<string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>"
+        ));
         assert!(!plist.contains("runtime-key"));
         assert!(!plist.contains(TEST_TUNNEL_ID));
     }

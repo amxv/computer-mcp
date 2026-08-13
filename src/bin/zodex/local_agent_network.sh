@@ -27,10 +27,21 @@ require_root() {
 
 require_tools() {
   local tool
-  for tool in ip nft sysctl python3; do
+  for tool in ip nft sysctl python3 mount; do
     command -v "$tool" >/dev/null 2>&1 || fail "required tool is missing: ${tool}"
   done
 }
+
+configure_network_sysctls() (
+  mount -o remount,rw /proc/sys || fail "cannot temporarily make /proc/sys writable"
+  trap 'mount -o remount,ro /proc/sys' EXIT
+  sysctl -q -w net.ipv4.ip_forward=1
+  sysctl -q -w "net.ipv6.conf.${ROOT_IF}.disable_ipv6=1"
+  ip netns exec "$NS" sysctl -q -w net.ipv4.ip_forward=0
+  ip netns exec "$NS" sysctl -q -w net.ipv6.conf.all.disable_ipv6=1
+  ip netns exec "$NS" sysctl -q -w net.ipv6.conf.default.disable_ipv6=1
+  ip netns exec "$NS" sysctl -q -w "net.ipv6.conf.${AGENT_IF}.disable_ipv6=1"
+)
 
 provider_interface() {
   local iface
@@ -85,8 +96,12 @@ PY
 }
 
 remove_owned_policy() {
-  nft list table inet "$FILTER_TABLE" >/dev/null 2>&1 && nft delete table inet "$FILTER_TABLE"
-  nft list table ip "$NAT_TABLE" >/dev/null 2>&1 && nft delete table ip "$NAT_TABLE"
+  if nft list table inet "$FILTER_TABLE" >/dev/null 2>&1; then
+    nft delete table inet "$FILTER_TABLE"
+  fi
+  if nft list table ip "$NAT_TABLE" >/dev/null 2>&1; then
+    nft delete table ip "$NAT_TABLE"
+  fi
 }
 
 remove_owned_topology() {
@@ -111,12 +126,7 @@ install_topology() {
   ip -n "$NS" link set "$AGENT_IF" up
   ip -n "$NS" route add default via "$ROOT_GATEWAY" dev "$AGENT_IF"
 
-  sysctl -q -w net.ipv4.ip_forward=1
-  sysctl -q -w "net.ipv6.conf.${ROOT_IF}.disable_ipv6=1"
-  ip netns exec "$NS" sysctl -q -w net.ipv4.ip_forward=0
-  ip netns exec "$NS" sysctl -q -w net.ipv6.conf.all.disable_ipv6=1
-  ip netns exec "$NS" sysctl -q -w net.ipv6.conf.default.disable_ipv6=1
-  ip netns exec "$NS" sysctl -q -w "net.ipv6.conf.${AGENT_IF}.disable_ipv6=1"
+  configure_network_sysctls
 }
 
 install_policy() {
@@ -154,7 +164,7 @@ verify_topology() {
   ! ip -n "$NS" link show eth0 >/dev/null 2>&1 || fail "provider interface leaked into agent namespace"
   ip -4 -o addr show dev "$ROOT_IF" | awk '{print $4}' | grep -Fxq "$ROOT_ADDR" || fail "root veth address drifted"
   ip -n "$NS" -4 -o addr show dev "$AGENT_IF" | awk '{print $4}' | grep -Fxq "$AGENT_ADDR" || fail "agent veth address drifted"
-  ip -n "$NS" route show default | grep -Fxq "default via ${ROOT_GATEWAY} dev ${AGENT_IF}" || fail "agent default route drifted"
+  ip -n "$NS" route show default | awk '{$1=$1; print}' | grep -Fxq "default via ${ROOT_GATEWAY} dev ${AGENT_IF}" || fail "agent default route drifted"
   [[ -z "$(ip -n "$NS" -6 addr show scope global)" ]] || fail "global IPv6 is enabled in agent namespace"
   [[ "$(ip netns exec "$NS" sysctl -n net.ipv6.conf.all.disable_ipv6)" == "1" ]] || fail "IPv6 disablement drifted"
   [[ "$(ip netns exec "$NS" sysctl -n net.ipv4.ip_forward)" == "0" ]] || fail "agent namespace forwarding unexpectedly enabled"

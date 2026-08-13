@@ -167,9 +167,22 @@ DEFAULT_BASE={default_base}
 CFG=/etc/zodex/config.toml
 
 if command -v apt-get >/dev/null 2>&1 && \
-   (! command -v git >/dev/null 2>&1 || ! command -v unzip >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1); then
+   (! command -v git >/dev/null 2>&1 || ! command -v unzip >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1 || \
+    ! (python3 -c 'import tomllib' >/dev/null 2>&1 || python3 -c 'import tomli' >/dev/null 2>&1)); then
   apt-get update -y
-  apt-get install -y --no-install-recommends git curl ca-certificates sudo unzip python3-minimal
+  apt-get install -y --no-install-recommends git curl ca-certificates sudo unzip python3-minimal python3-tomli
+fi
+
+if [[ -f "$CFG" ]]; then
+  tmp_cfg="$(mktemp)"
+  awk '
+    BEGIN {{ skip=0 }}
+    /^# BEGIN ZODEX_GH_APPS_MANAGED$/ {{ skip=1; next }}
+    /^# END ZODEX_GH_APPS_MANAGED$/ {{ skip=0; next }}
+    skip==0 {{ print }}
+  ' "$CFG" > "$tmp_cfg"
+  cat "$tmp_cfg" > "$CFG"
+  rm -f "$tmp_cfg"
 fi
 
 TMP_INSTALLER="$(mktemp)"
@@ -183,6 +196,12 @@ env \
   ZODEX_DEFAULT_WORKDIR=/workspace \
   bash "$TMP_INSTALLER"
 rm -f "$TMP_INSTALLER"
+
+chown root:zodex /var/lib/zodex/tls/cert.pem /var/lib/zodex/tls/key.pem
+chmod 0644 /var/lib/zodex/tls/cert.pem
+chmod 0640 /var/lib/zodex/tls/key.pem
+chown root:root /etc/zodex
+chmod 0711 /etc/zodex
 
 install -d -m 0750 -o root -g zodex /etc/zodex/reader /etc/zodex/publisher
 install -m 0640 -o root -g zodex {reader_tmp} /etc/zodex/reader/private-key.pem
@@ -228,6 +247,8 @@ awk '
   BEGIN {{ skip=0 }}
   /^# BEGIN ZODEX_GH_APPS_MANAGED$/ {{ skip=1; next }}
   /^# END ZODEX_GH_APPS_MANAGED$/ {{ skip=0; next }}
+  /^publisher_targets = \[\]$/ {{ next }}
+  /^publisher_installations = \[\]$/ {{ next }}
   skip==0 {{ print }}
 ' "$CFG" > "$tmp_cfg"
 
@@ -496,6 +517,7 @@ pub(super) fn apply_local_provisioning(
         }
     }
 
+    ensure_local_machine_systemd_ready()?;
     provision_local_guest(
         &record,
         files.reader_pem,
@@ -610,6 +632,7 @@ pub(super) fn local_exec(command: &[String]) -> Result<()> {
     if classify_local_home_mount(&machine.home_mount) != LocalHomeMountStatus::Isolated {
         bail!("Local machine host-home isolation has drifted; refusing operator exec");
     }
+    ensure_local_machine_systemd_ready()?;
     run_local_machine_exec(&[
         "/usr/bin/systemctl".into(),
         "start".into(),

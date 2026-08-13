@@ -29,9 +29,15 @@
         assert!(script.contains("forward iifname \"${ROOT_IF}\" drop"));
         assert!(script.contains("ct state established,related accept"));
         assert!(script.contains("net.ipv6.conf.all.disable_ipv6=1"));
+        assert!(script.contains("mount -o remount,rw /proc/sys"));
+        assert!(script.contains("trap 'mount -o remount,ro /proc/sys' EXIT"));
+        assert!(script.contains("sysctl -q -w net.ipv4.ip_forward=1"));
+        assert!(script.contains("route show default | awk '{$1=$1; print}'"));
         assert!(script.contains("DNS_DIR=\"/etc/netns/${NS}\""));
         assert!(script.contains("DNS_FILE=\"${DNS_DIR}/resolv.conf\""));
         assert!(script.contains("nft delete table inet \"$FILTER_TABLE\""));
+        assert!(script.contains("if nft list table inet \"$FILTER_TABLE\""));
+        assert!(script.contains("if nft list table ip \"$NAT_TABLE\""));
         assert!(!script.contains("flush ruleset"));
         assert!(script.contains("cmp -s <(nft list table inet \"$FILTER_TABLE\")"));
         assert!(script.contains("cmp -s <(nft list table ip \"$NAT_TABLE\")"));
@@ -75,6 +81,9 @@
             tunnel_runtime_key_path: Some("/tmp/tunnel-runtime-key".to_string()),
         };
         let script = build_local_guest_setup_script(&sources).expect("setup script");
+        let preinstall_repair = script.find("if [[ -f \"$CFG\" ]]").unwrap();
+        let installer = script.find("TMP_INSTALLER=\"$(mktemp)\"").unwrap();
+        assert!(preinstall_repair < installer);
         let stop = script
             .find("systemctl stop zodex-tunnel.service zodexd.service zodex-prd.service")
             .unwrap();
@@ -133,4 +142,18 @@
             .expect_err("ready target without network identity must fail closed")
             .to_string();
         assert!(error.contains("missing network policy identity"));
+    }
+
+    #[test]
+    fn browser_open_attempts_include_platform_fallback() {
+        let attempts = browser_open_attempts("https://github.com/login/device");
+        assert!(!attempts.is_empty());
+
+        if cfg!(target_os = "macos") {
+            assert_eq!(attempts[0].0, "open");
+        } else if cfg!(target_os = "windows") {
+            assert_eq!(attempts[0].0, "cmd");
+        } else {
+            assert!(attempts.iter().any(|(program, _)| *program == "xdg-open"));
+        }
     }

@@ -5,7 +5,9 @@
             .expect("materialize embedded Containerfile");
         let materialized = fs::read_to_string(&containerfile).expect("read materialized Containerfile");
         assert_eq!(materialized, super::LOCAL_MACHINE_CONTAINERFILE);
-        assert!(materialized.contains("FROM ubuntu:24.04"));
+        assert!(materialized.contains("FROM debian:bookworm-slim"));
+        assert!(materialized.contains("systemd-sysv"));
+        assert!(materialized.contains("CMD [\"/sbin/init\"]"));
 
         let network_script = super::local_network::build_local_network_reconcile_script();
         let network_unit = super::local_network::local_network_unit();

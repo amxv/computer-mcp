@@ -204,7 +204,9 @@
         assert!(script.contains(r#"sudo git config --file "$agent_gitconfig" --replace-all credential.https://github.com.helper "$helper_cmd""#));
         assert!(script.contains(r#"sudo git config --file "$agent_gitconfig" credential.https://github.com.useHttpPath true"#));
         assert!(script.contains(r#"sudo git config --file "$agent_gitconfig" --replace-all url."zodex::https://github.com/".pushInsteadOf "https://github.com/""#));
-        assert!(script.contains(r#"sudo chown zodex-agent:zodex-agent "$agent_gitconfig""#));
+        assert!(script.starts_with("set -e\n"));
+        assert!(script.contains(r#"agent_group="$(id -gn "$agent_user")""#));
+        assert!(script.contains(r#"sudo chown "$agent_user:$agent_group" "$agent_gitconfig""#));
         assert!(!script.contains("sudo -u zodex-agent"));
         assert!(!script.contains(".insteadOf https://github.com/"));
     }
@@ -224,12 +226,14 @@
         assert!(script.contains(r#"printf 'helper=%s\n' "$helper""#));
         assert!(script.contains(r#"printf 'use_http_path=%s\n' "$use_http_path""#));
         assert!(script.contains(r#"printf 'push_rewrite=%s\n' "$push_rewrite""#));
+        assert!(script.contains(r#"owner="$(sudo stat -c '%U' "$agent_gitconfig" 2>/dev/null || true)""#));
+        assert!(script.contains(r#"mode="$(sudo stat -c '%a' "$agent_gitconfig" 2>/dev/null || true)""#));
     }
 
     #[test]
     fn parse_yolo_agent_git_status_accepts_repaired_config() {
         let raw = format!(
-            "helper={}\nuse_http_path=TRUE\npush_rewrite=https://example.com/\nhttps://github.com/\n",
+            "helper={}\nuse_http_path=TRUE\npush_rewrite=https://example.com/\nhttps://github.com/\nowner=zodex-agent\nmode=600\n",
             expected_zodex_agent_git_helper()
         );
 
@@ -241,6 +245,8 @@
                 helper: expected_zodex_agent_git_helper(),
                 use_http_path: "TRUE".to_string(),
                 push_rewrite: "https://example.com/\nhttps://github.com/".to_string(),
+                owner: "zodex-agent".to_string(),
+                mode: "600".to_string(),
             }
         );
         assert!(status.helper_ok());
@@ -253,6 +259,7 @@
                 "agent-git-helper: ok".to_string(),
                 "agent-git-use-http-path: ok".to_string(),
                 "agent-git-push-rewrite: ok".to_string(),
+                "agent-git-config-access: ok".to_string(),
             ]
         );
     }
@@ -260,7 +267,7 @@
     #[test]
     fn parse_yolo_agent_git_status_reports_broken_config() {
         let status = parse_github_yolo_agent_git_status(
-            "helper=/usr/bin/git-credential-store\nuse_http_path=false\npush_rewrite=https://example.com/\n",
+            "helper=/usr/bin/git-credential-store\nuse_http_path=false\npush_rewrite=https://example.com/\nowner=root\nmode=600\n",
         );
 
         assert_eq!(
@@ -269,6 +276,8 @@
                 helper: "/usr/bin/git-credential-store".to_string(),
                 use_http_path: "false".to_string(),
                 push_rewrite: "https://example.com/".to_string(),
+                owner: "root".to_string(),
+                mode: "600".to_string(),
             }
         );
         assert!(!status.helper_ok());
@@ -281,6 +290,7 @@
                 "agent-git-helper: missing-or-mismatched".to_string(),
                 "agent-git-use-http-path: missing-or-mismatched".to_string(),
                 "agent-git-push-rewrite: missing".to_string(),
+                "agent-git-config-access: wrong-owner-or-mode".to_string(),
             ]
         );
     }
@@ -576,7 +586,7 @@
                 "12",
                 "--memory",
                 "32G",
-                "local/zodex-machine:1",
+                "local/zodex-machine:4",
             ]
         );
         assert!(!args.iter().any(|arg| matches!(arg.as_str(), "--mount" | "--volume" | "-v")));
@@ -609,7 +619,76 @@
             &args[..6],
             ["machine", "run", "--root", "--name", "zodex-local", "--"]
         );
-        assert_eq!(&args[6..], command.as_slice());
+        assert_eq!(
+            args[6],
+            "'sudo' 'printf' '%s\\n' 'a b' '$(not-a-shell)'"
+        );
+        assert_eq!(args.len(), 7);
+
+        let input_args = local_machine_run_with_input_args(&command);
+        assert_eq!(
+            &input_args[..7],
+            [
+                "machine",
+                "run",
+                "--root",
+                "--name",
+                "zodex-local",
+                "--interactive",
+                "--",
+            ]
+        );
+        assert_eq!(
+            input_args[7],
+            "'sudo' 'printf' '%s\\n' 'a b' '$(not-a-shell)'"
+        );
+        assert_eq!(input_args.len(), 8);
+
+        let full_pty_args = local_machine_full_pty_args(&command);
+        assert_eq!(&full_pty_args[..3], ["-q", "/dev/null", "container"]);
+        assert_eq!(&full_pty_args[3..], args);
+    }
+
+    #[test]
+    fn local_operator_upload_waits_for_guest_ready_and_done_markers() {
+        let mut reader = std::io::Cursor::new(b"boot prelude\n__ZODEX_UPLOAD_READY__\n");
+        let mut output = Vec::new();
+        assert!(
+            read_local_upload_marker(&mut reader, LOCAL_UPLOAD_READY_MARKER, &mut output).unwrap()
+        );
+        assert!(String::from_utf8(output).unwrap().contains("boot prelude"));
+
+        let mut done_reader = std::io::Cursor::new(b"__ZODEX_UPLOAD_DONE__\n");
+        assert!(
+            read_local_upload_marker(
+                &mut done_reader,
+                LOCAL_UPLOAD_DONE_MARKER,
+                &mut Vec::new(),
+            )
+            .unwrap()
+        );
+
+        let source = include_str!("../local_provider.rs");
+        assert!(source.contains("read_local_upload_marker("));
+        assert!(source.contains("LOCAL_UPLOAD_DONE_MARKER"));
+    }
+
+    #[test]
+    fn local_systemd_readiness_wait_is_bounded_and_accepts_degraded_boots() {
+        let command = local_systemd_ready_command();
+        assert_eq!(&command[..2], ["/bin/bash", "-lc"]);
+        assert!(command[2].contains("seq 1 120"));
+        assert!(command[2].contains("running|degraded"));
+        assert!(command[2].contains("sleep 0.25"));
+        assert!(command[2].contains("systemd did not become ready"));
+    }
+
+    #[test]
+    fn local_setup_completes_first_boot_before_interactive_uploads() {
+        let source = include_str!("../local_setup.rs");
+        assert!(source.contains(
+            "ensure_local_machine_systemd_ready()?;\n    provision_local_guest("
+        ));
     }
 
     #[test]
@@ -622,7 +701,7 @@
             version: 1,
             machine_id: LOCAL_MACHINE_NAME.to_string(),
             setup_state: LocalSetupState::Provisioning,
-            image_reference: Some("local/zodex-machine:1".to_string()),
+            image_reference: Some("local/zodex-machine:4".to_string()),
             requested_cpus: None,
             requested_memory: None,
             network: Some(expected_local_network()),
@@ -662,6 +741,14 @@
 
         assert!(script.contains("ZODEX_INSTALL_MODE=runtime"));
         assert!(script.contains("ZODEX_INSTALL_OPERATOR_CLI=0"));
+        assert!(script.contains("python3-tomli"));
+        assert!(script.contains("import tomli as tomllib"));
+        assert!(script.contains("chown root:zodex /var/lib/zodex/tls/cert.pem /var/lib/zodex/tls/key.pem"));
+        assert!(script.contains("chmod 0640 /var/lib/zodex/tls/key.pem"));
+        assert!(script.contains("chown root:root /etc/zodex"));
+        assert!(script.contains("chmod 0711 /etc/zodex"));
+        assert!(script.contains("/^publisher_targets = \\[\\]$/ { next }"));
+        assert!(script.contains("/^publisher_installations = \\[\\]$/ { next }"));
         assert!(script.contains("bind_host = \\\"127.0.0.1\\\""));
         assert!(script.contains("User=zodex-agent"));
         assert!(script.contains("User=zodex-publisher"));
@@ -898,18 +985,4 @@
             resolve_publisher_client_id(&config, None),
             Some("Iv1.from-config".to_string())
         );
-    }
-
-    #[test]
-    fn browser_open_attempts_include_platform_fallback() {
-        let attempts = browser_open_attempts("https://github.com/login/device");
-        assert!(!attempts.is_empty());
-
-        if cfg!(target_os = "macos") {
-            assert_eq!(attempts[0].0, "open");
-        } else if cfg!(target_os = "windows") {
-            assert_eq!(attempts[0].0, "cmd");
-        } else {
-            assert!(attempts.iter().any(|(program, _)| *program == "xdg-open"));
-        }
     }

@@ -129,7 +129,29 @@ fn local_machine_run_args(command: &[String]) -> Vec<String> {
         LOCAL_MACHINE_NAME.into(),
         "--".into(),
     ];
-    args.extend(command.iter().cloned());
+    args.push(
+        command
+            .iter()
+            .map(|arg| shell_escape_single_quotes(arg))
+            .collect::<Vec<_>>()
+            .join(" "),
+    );
+    args
+}
+
+fn local_machine_run_with_input_args(command: &[String]) -> Vec<String> {
+    let mut args = local_machine_run_args(command);
+    let separator = args
+        .iter()
+        .position(|arg| arg == "--")
+        .expect("Local machine run arguments include a separator");
+    args.insert(separator, "--interactive".into());
+    args
+}
+
+fn local_machine_full_pty_args(command: &[String]) -> Vec<String> {
+    let mut args = vec!["-q".into(), "/dev/null".into(), "container".into()];
+    args.extend(local_machine_run_args(command));
     args
 }
 
@@ -247,7 +269,23 @@ fn run_local_machine_exec(command: &[String]) -> Result<String> {
     if command.is_empty() {
         bail!("Local operator exec command must not be empty");
     }
-    run_container_capture(&local_machine_run_args(command))
+    run_local_machine_command(command)
+}
+
+fn local_systemd_ready_command() -> Vec<String> {
+    vec![
+        "/bin/bash".into(),
+        "-lc".into(),
+        "set -euo pipefail; for _ in $(seq 1 120); do state=\"$(systemctl is-system-running 2>/dev/null || true)\"; case \"$state\" in running|degraded) exit 0 ;; esac; sleep 0.25; done; echo 'systemd did not become ready' >&2; exit 1".into(),
+    ]
+}
+
+fn ensure_local_machine_systemd_ready() -> Result<()> {
+    let args = local_machine_full_pty_args(&local_systemd_ready_command());
+    let output = command_output("/usr/bin/script", &args)
+        .context("failed to start Apple Container first-boot PTY")?;
+    provider_output_result("/usr/bin/script", &args, output)?;
+    Ok(())
 }
 
 fn stop_local_machine() -> Result<()> {
@@ -359,23 +397,124 @@ fn run_local_machine_exec_with_input(command: &[String], input: &[u8]) -> Result
     if command.is_empty() {
         bail!("Local operator exec command must not be empty");
     }
-    let args = local_machine_run_args(command);
+    let args = local_machine_run_with_input_args(command);
+    let pty = openpty(None, None).context("failed to allocate Apple Container upload PTY")?;
+    let mut terminal = tcgetattr(&pty.slave).context("failed to inspect Apple Container upload PTY")?;
+    cfmakeraw(&mut terminal);
+    tcsetattr(&pty.slave, SetArg::TCSANOW, &terminal)
+        .context("failed to configure Apple Container upload PTY")?;
+    let mut pty_master = fs::File::from(pty.master);
+    let pty_slave = fs::File::from(pty.slave);
     let mut child = Command::new("container")
         .args(&args)
-        .stdin(Stdio::piped())
+        .stdin(Stdio::from(pty_slave))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to start Apple Container upload command")?;
+    let mut stdout = BufReader::new(
+        child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow!("failed to capture Apple Container upload stdout"))?,
+    );
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| anyhow!("failed to capture Apple Container upload stderr"))?;
+    let stderr_reader = thread::spawn(move || {
+        let mut output = Vec::new();
+        stderr.read_to_end(&mut output).map(|_| output)
+    });
+    let mut stdout_output = Vec::new();
+    let ready = read_local_upload_marker(
+        &mut stdout,
+        LOCAL_UPLOAD_READY_MARKER,
+        &mut stdout_output,
+    )?;
+    if ready {
+        pty_master
+            .write_all(input)
+            .context("failed to stream data into Local machine")?;
+        pty_master
+            .flush()
+            .context("failed to flush data into Local machine")?;
+    }
+    let done = ready
+        && read_local_upload_marker(
+            &mut stdout,
+            LOCAL_UPLOAD_DONE_MARKER,
+            &mut stdout_output,
+        )?;
+    drop(pty_master);
+    stdout
+        .read_to_end(&mut stdout_output)
+        .context("failed to finish reading Apple Container upload stdout")?;
+    let status = child
+        .wait()
+        .context("failed waiting for Apple Container upload command")?;
+    let stderr_output = stderr_reader
+        .join()
+        .map_err(|_| anyhow!("Apple Container upload stderr reader panicked"))?
+        .context("failed reading Apple Container upload stderr")?;
+    if !ready || !done {
+        bail!(
+            "Apple Container upload ended before the guest acknowledged the transfer (stderr: {})",
+            String::from_utf8_lossy(&stderr_output).trim()
+        );
+    }
+    provider_output_result(
+        "container",
+        &args,
+        ProviderCommandOutput {
+            success: status.success(),
+            stdout: String::from_utf8_lossy(&stdout_output).into_owned(),
+            stderr: String::from_utf8_lossy(&stderr_output).into_owned(),
+        },
+    )
+}
+
+fn read_local_upload_marker<R: BufRead>(
+    reader: &mut R,
+    marker: &str,
+    output: &mut Vec<u8>,
+) -> Result<bool> {
+    loop {
+        let mut line = Vec::new();
+        if reader
+            .read_until(b'\n', &mut line)
+            .context("failed reading Apple Container upload handshake")?
+            == 0
+        {
+            return Ok(false);
+        }
+        output.extend_from_slice(&line);
+        if String::from_utf8_lossy(&line).trim() == marker {
+            return Ok(true);
+        }
+    }
+}
+
+fn run_local_machine_command(command: &[String]) -> Result<String> {
+    let args = local_machine_run_args(command);
+    let pty = openpty(None, None).context("failed to allocate Apple Container command PTY")?;
+    let mut terminal = tcgetattr(&pty.slave).context("failed to inspect Apple Container command PTY")?;
+    cfmakeraw(&mut terminal);
+    tcsetattr(&pty.slave, SetArg::TCSANOW, &terminal)
+        .context("failed to configure Apple Container command PTY")?;
+    let pty_master = fs::File::from(pty.master);
+    let pty_slave = fs::File::from(pty.slave);
+    let child = Command::new("container")
+        .args(&args)
+        .stdin(Stdio::from(pty_slave))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .context("failed to start Apple Container machine command")?;
-    child
-        .stdin
-        .take()
-        .ok_or_else(|| anyhow!("failed to open Apple Container machine stdin"))?
-        .write_all(input)
-        .context("failed to stream data into Local machine")?;
     let output = child
         .wait_with_output()
         .context("failed waiting for Apple Container machine command")?;
+    drop(pty_master);
     provider_output_result(
         "container",
         &args,
@@ -391,26 +530,36 @@ fn write_local_machine_file(remote_path: &str, contents: &[u8]) -> Result<()> {
     let command = vec![
         "/bin/sh".into(),
         "-c".into(),
-        "umask 077; cat > \"$1\"".into(),
+        format!(
+            "umask 077; printf '%s\\n' {ready}; head -c \"$2\" > \"$1\"; printf '%s\\n' {done}",
+            ready = shell_escape_single_quotes(LOCAL_UPLOAD_READY_MARKER),
+            done = shell_escape_single_quotes(LOCAL_UPLOAD_DONE_MARKER),
+        ),
         "zodex-write".into(),
         remote_path.into(),
+        contents.len().to_string(),
     ];
     run_local_machine_exec_with_input(&command, contents)?;
     Ok(())
 }
 
-fn local_machine_atomic_write_command(remote_path: &str) -> Vec<String> {
+fn local_machine_atomic_write_command(remote_path: &str, byte_count: usize) -> Vec<String> {
     vec![
         "/bin/sh".into(),
         "-c".into(),
-        "set -eu; umask 077; staging=\"$1.zodex-upload.$$\"; trap 'rm -f -- \"$staging\"' EXIT HUP INT TERM; cat > \"$staging\"; mv -f -- \"$staging\" \"$1\"; trap - EXIT HUP INT TERM".into(),
+        format!(
+            "set -eu; umask 077; staging=\"$1.zodex-upload.$$\"; trap 'rm -f -- \"$staging\"' EXIT HUP INT TERM; printf '%s\\n' {ready}; head -c \"$2\" > \"$staging\"; mv -f -- \"$staging\" \"$1\"; printf '%s\\n' {done}; trap - EXIT HUP INT TERM",
+            ready = shell_escape_single_quotes(LOCAL_UPLOAD_READY_MARKER),
+            done = shell_escape_single_quotes(LOCAL_UPLOAD_DONE_MARKER),
+        ),
         "zodex-write-atomic".into(),
         remote_path.into(),
+        byte_count.to_string(),
     ]
 }
 
 fn write_local_machine_file_atomic(remote_path: &str, contents: &[u8]) -> Result<()> {
-    let command = local_machine_atomic_write_command(remote_path);
+    let command = local_machine_atomic_write_command(remote_path, contents.len());
     run_local_machine_exec_with_input(&command, contents)?;
     Ok(())
 }
@@ -705,5 +854,7 @@ fn print_local_status() -> Result<()> {
     }
     Ok(())
 }
-const LOCAL_MACHINE_IMAGE: &str = "local/zodex-machine:1";
+const LOCAL_MACHINE_IMAGE: &str = "local/zodex-machine:4";
 const LOCAL_MACHINE_CONTAINERFILE: &str = include_str!("local_machine.Containerfile");
+const LOCAL_UPLOAD_READY_MARKER: &str = "__ZODEX_UPLOAD_READY__";
+const LOCAL_UPLOAD_DONE_MARKER: &str = "__ZODEX_UPLOAD_DONE__";
