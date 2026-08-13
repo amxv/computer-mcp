@@ -6,7 +6,9 @@ category: Start
 summary: A no-clone path for installing zodex end to end and connecting ChatGPT to a real Sprite-backed coding workspace.
 ---
 
-This is the canonical setup document for a local operator or agent helping a user connect ChatGPT to zodex. The goal is to install the local `zodex` operator CLI, create or select a Sprite, install the zodex guest runtime, expose the MCP URL, add it to ChatGPT, and verify GitHub reads plus the selected write mode.
+This is the canonical **Zodex Sprite** setup document for a local operator or agent helping a user connect ChatGPT to a remote Sprite. The goal is to install the local `zodex` operator CLI, create or select a Sprite, install the zodex guest runtime, expose the MCP URL, add it to ChatGPT, and verify GitHub reads plus the selected write mode.
+
+If you want the persistent Linux machine to run on an Apple Silicon Mac instead, use [Zodex Local on Apple Silicon](/docs/local-apple-silicon). Sprite and Local can remain configured side by side as separate ChatGPT MCP identities.
 
 For this project's own deployment and release paths, the canonical repository slug is `amxv/zodex`. The public Git URL is `https://github.com/amxv/zodex.git`; substitute `--repo amxv/zodex` into setup, PR, grant, and YOLO examples when operating this repository itself.
 

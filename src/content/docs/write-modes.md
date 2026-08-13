@@ -6,7 +6,7 @@ category: Start
 summary: The decision guide for PR-only workflows, push grants, and scoped YOLO mode.
 ---
 
-zodex is safe by default, but it is not approval-only by design. The operator chooses how much GitHub autonomy ChatGPT gets for the current session, repo, and risk level.
+zodex is safe by default, but it is not approval-only by design. The operator chooses how much GitHub autonomy ChatGPT gets for the current session, repo, target, and risk level.
 
 The core idea is:
 
@@ -14,7 +14,7 @@ The core idea is:
 read by default -> local work -> PR or push policy -> revoke or expire
 ```
 
-ChatGPT can clone, inspect, edit, test, and commit on the Sprite before any GitHub write path is open. When it is time to send work back to GitHub, choose one of the modes below.
+ChatGPT can clone, inspect, edit, test, and commit inside either Zodex Sprite or Zodex Local before any direct GitHub write path is open. When it is time to send work back to GitHub, choose one of the modes below.
 
 ## Mode map
 
@@ -22,9 +22,9 @@ ChatGPT can clone, inspect, edit, test, and commit on the Sprite before any GitH
 | --- | --- | --- |
 | PR-only | `zodex-agent github publish-pr` | Review-first work, risky repos, new agents, protected branches |
 | Agent-requested push | `zodex-agent github request-push --repo owner/repo` | One-off approval from inside the ChatGPT session |
-| Operator-granted push | `zodex github grant-push --sprite dev --repo owner/repo` | Human-controlled approval from the operator machine |
-| Timed YOLO | `zodex github mode yolo --sprite dev --ttl 2h` | Trusted work sessions where repeated approvals would slow the loop |
-| Repo-scoped YOLO | `zodex github mode yolo --sprite dev --repo owner/repo --ttl 4h` | Trusted work on specific repos only |
+| Operator-granted push | `zodex github grant-push --sprite dev --repo owner/repo` | Human-controlled approval for a Sprite from the operator machine |
+| Timed YOLO | `zodex github mode yolo --sprite dev --ttl 2h` or `--local` | Trusted work sessions where repeated approvals would slow the loop |
+| Repo-scoped YOLO | `zodex github mode yolo --local --repo owner/repo --ttl 4h` | Trusted work on specific repos only |
 | No-TTL YOLO | `zodex github mode yolo --sprite dev --no-ttl` | Fully trusted personal or development environments |
 
 ## PR-only
@@ -54,7 +54,7 @@ Use `request-push` when ChatGPT has a commit ready and direct push should be all
 
 ```bash
 zodex-agent github request-push --repo owner/repo
-# then normal Git works inside the Sprite
+# then normal Git works inside the selected Zodex target
 git push origin main
 ```
 
@@ -84,7 +84,7 @@ Use this mode when:
 
 ## Operator-granted push
 
-Use the operator-side grant when the human should open the write window from their own machine.
+Use the operator-side grant when the human should open a **Sprite** write window from their own machine.
 
 ```bash
 zodex github grant-push --sprite dev --repo owner/repo
@@ -116,6 +116,16 @@ Use YOLO mode when repeated push approvals are just friction and you trust the C
 zodex github mode yolo --sprite dev
 ```
 
+Target Local explicitly with `--local`:
+
+```bash
+zodex github mode yolo --local --repo owner/repo --ttl 4h
+zodex github mode status --local
+zodex github mode default --local
+```
+
+Local MCP access and Local GitHub policy are independent. `zodex local start --ttl ...` does not grant push access, and `github mode yolo --local` does not boot or expose the Local MCP tunnel. Use `zodex local stop` separately when you want to revoke Local machine access.
+
 By default, YOLO mode uses a `2h` TTL and applies to all repositories installed for the writer app. Scope it to one or more repos when you want narrower autonomy. Repo-scoped YOLO commands merge with active repo grants instead of replacing them, and each repo keeps the TTL from its own grant command:
 
 ```bash
@@ -140,6 +150,8 @@ Return to the default policy:
 ```bash
 zodex github mode default --sprite dev
 ```
+
+When both a Local target and one or more Sprites are available, use `--local` or `--sprite <name>` explicitly. Ambiguous mode commands fail closed rather than changing more than one target.
 
 Use YOLO mode when:
 

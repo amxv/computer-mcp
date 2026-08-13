@@ -61,11 +61,26 @@ Avoid organization-wide installation unless every repository in the organization
 
 ## Use the values in setup
 
-Run setup with both app IDs and PEM paths:
+For Zodex Sprite, run setup with both app IDs and PEM paths:
 
 ```bash
 zodex sprite setup   --sprite dev-sprite   --repo amxv/zodex   --reader-app-id 123456   --reader-pem /secure/zodex/reader.pem   --publisher-app-id 987654   --publisher-pem /secure/zodex/writer.pem   --default-base main   --url-auth sprite
 ```
+
+Zodex Local uses the same app roles and adds its dedicated Secure MCP Tunnel inputs:
+
+```bash
+zodex local setup \
+  --repo amxv/zodex \
+  --reader-app-id 123456 \
+  --reader-pem /secure/zodex/reader.pem \
+  --publisher-app-id 987654 \
+  --publisher-pem /secure/zodex/writer.pem \
+  --tunnel-id tunnel_<32-lowercase-hex> \
+  --tunnel-runtime-key /secure/zodex/local-tunnel-runtime-key
+```
+
+Local setup records the operator-side **paths** needed for later repair/reset preflight. It does not copy the host PEM contents into Local operator state.
 
 Then configure the push-grant client ID for day-to-day grants:
 

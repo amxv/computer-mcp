@@ -157,10 +157,12 @@ enum Commands {
         #[command(subcommand)]
         command: PublisherCommand,
     },
+    /// Operate a remote Sprites.dev Zodex target.
     Sprite {
         #[command(subcommand)]
         command: SpriteCommand,
     },
+    /// Operate the persistent isolated Apple Silicon Linux target for ChatGPT.
     Local {
         #[command(subcommand)]
         command: LocalCommand,
@@ -274,16 +276,22 @@ enum SpriteCommand {
 enum LocalCommand {
     /// Create or reconcile the persistent isolated Local Zodex machine.
     Setup {
+        /// GitHub repository in `owner/repo` form used for reader and publisher setup.
         #[arg(long)]
         repo: String,
+        /// Reader GitHub App ID with read-only repository contents access.
         #[arg(long)]
         reader_app_id: u64,
+        /// Path to the reader GitHub App private-key PEM on the operator Mac.
         #[arg(long)]
         reader_pem: PathBuf,
+        /// Publisher GitHub App ID used for PR publishing and approved direct pushes.
         #[arg(long)]
         publisher_app_id: u64,
+        /// Path to the publisher GitHub App private-key PEM on the operator Mac.
         #[arg(long)]
         publisher_pem: PathBuf,
+        /// Default base branch for publisher operations.
         #[arg(long, default_value = "main")]
         default_base: String,
         /// Pre-created OpenAI Secure MCP Tunnel ID.
@@ -402,6 +410,7 @@ enum GithubCommand {
 
 #[derive(Debug, Subcommand)]
 enum GithubModeCommand {
+    /// Enable operator-controlled direct GitHub push policy on one Sprite or Local target.
     Yolo {
         /// Target the configured persistent Local Apple Silicon guest.
         #[arg(long, default_value_t = false, conflicts_with_all = ["sprite", "org"])]
@@ -410,13 +419,17 @@ enum GithubModeCommand {
         sprite: Option<String>,
         #[arg(long)]
         org: Option<String>,
+        /// Limit YOLO mode to one or more repositories instead of all writer-app installations.
         #[arg(long = "repo")]
         repos: Vec<String>,
+        /// Duration for the new YOLO grant window.
         #[arg(long, default_value = "2h")]
         ttl: String,
+        /// Keep the new YOLO grant active until the operator explicitly returns to default mode.
         #[arg(long, default_value_t = false)]
         no_ttl: bool,
     },
+    /// Disable YOLO mode on one Sprite or Local target without changing explicit push grants.
     Default {
         /// Target the configured persistent Local Apple Silicon guest.
         #[arg(long, default_value_t = false, conflicts_with_all = ["sprite", "org"])]
@@ -426,6 +439,7 @@ enum GithubModeCommand {
         #[arg(long)]
         org: Option<String>,
     },
+    /// Inspect YOLO policy on one Sprite or Local target.
     Status {
         /// Target the configured persistent Local Apple Silicon guest.
         #[arg(long, default_value_t = false, conflicts_with_all = ["sprite", "org"])]

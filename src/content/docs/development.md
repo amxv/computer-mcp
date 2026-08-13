@@ -19,13 +19,16 @@ For CLI behavior changes, also inspect help output:
 ```bash
 cargo run --quiet --bin zodex -- --help
 cargo run --quiet --bin zodex -- sprite --help
+cargo run --quiet --bin zodex -- local --help
+cargo run --quiet --bin zodex -- local setup --help
+cargo run --quiet --bin zodex -- github mode yolo --help
 cargo run --quiet --bin zodex -- proxy --help
 cargo run --quiet --bin zodex -- github --help
 cargo run --quiet --bin zodex-agent -- --help
 cargo run --quiet --bin zodex-agent -- github publish-pr --help
 ```
 
-The tests cover binary manifests, CLI parity, GitHub App scripts, install script behavior, Sprite scripts, zodex-agent CLI forwarding, MCP tool registration, HTTP API parity, session handling, redaction, and patch application.
+The tests cover binary/release manifests, Local compile-time asset reconstruction, CLI parity, GitHub App scripts, install script behavior, Sprite scripts, zodex-agent CLI forwarding, MCP tool registration, HTTP API parity, session handling, redaction, and patch application.
 
 ## Docs site checks
 
@@ -53,6 +56,9 @@ Keep docs tied to actual zodex behavior:
 
 - mention the real binaries: `zodex`, `zodex-agent`, `zodex-client`, `zodexd`, `zodex-prd`
 - distinguish operator-machine commands from Sprite-side commands
+- distinguish Sprite-only proxy/service operations from Local machine/tunnel lifecycle
+- keep Local's unprivileged-agent versus trusted-guest-root isolation boundary explicit
+- never document Local start as granting GitHub permission, or Local YOLO as opening MCP access
 - keep the read/write access model explicit
 - explain when a command needs an active grant
 - document both MCP and direct HTTP routes when changing server behavior
@@ -73,6 +79,7 @@ Run script-specific tests when changing them:
 
 ```bash
 cargo test --quiet --test install_script
+cargo test --quiet --test binary_manifest
 cargo test --quiet --test github_app_scripts
 cargo test --quiet --test sprite_scripts
 ```

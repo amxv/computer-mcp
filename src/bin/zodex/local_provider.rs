@@ -213,11 +213,22 @@ fn ensure_apple_container_system_started() -> Result<()> {
     bail!("`container system start` failed with status {status}")
 }
 
-fn build_local_machine_image() -> Result<()> {
-    let context = tempfile::tempdir().context("failed to create Local machine image build context")?;
-    let containerfile = context.path().join("Containerfile");
+fn materialize_local_machine_build_context(context: &Path) -> Result<PathBuf> {
+    fs::create_dir_all(context).with_context(|| {
+        format!(
+            "failed to create Local machine image build context at {}",
+            context.display()
+        )
+    })?;
+    let containerfile = context.join("Containerfile");
     fs::write(&containerfile, LOCAL_MACHINE_CONTAINERFILE)
         .context("failed to write embedded Local machine Containerfile")?;
+    Ok(containerfile)
+}
+
+fn build_local_machine_image() -> Result<()> {
+    let context = tempfile::tempdir().context("failed to create Local machine image build context")?;
+    let containerfile = materialize_local_machine_build_context(context.path())?;
     run_container_capture(&local_machine_build_args(&containerfile, context.path()))?;
     Ok(())
 }

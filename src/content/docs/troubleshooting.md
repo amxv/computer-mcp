@@ -1,12 +1,12 @@
 ---
 title: Troubleshooting
-description: Diagnose ChatGPT connection issues, setup failures, push-grant problems, YOLO mode mismatches, stale credentials, Sprite service failures, TLS errors, and proxy routing issues.
+description: Diagnose ChatGPT connection issues, Local lifecycle/isolation drift, setup failures, push-grant problems, YOLO mismatches, Sprite service failures, TLS errors, and proxy routing issues.
 order: 14
 category: Reference
 summary: Practical failure modes and the commands that usually identify the cause.
 ---
 
-## ChatGPT cannot connect
+## ChatGPT cannot connect to a Sprite
 
 Check the public route first:
 
@@ -28,6 +28,34 @@ Common causes:
 - proxy origin is pointed at the wrong Sprite URL
 - TLS files are missing on the Sprite
 - `zodexd` is not running or cannot bind its port
+
+## ChatGPT cannot connect to Zodex Local
+
+Start with the operator-side truth:
+
+```bash
+zodex local status
+```
+
+Do not infer active access from a saved lease alone. Local status requires the machine, daemon, Secure MCP Tunnel, and isolation checks to agree before it reports MCP access as active.
+
+Common Local causes:
+
+- no finite access window is open; run `zodex local start --ttl 2d`
+- the previous TTL expired and the host supervisor revoked/stopped the machine
+- the machine was stopped outside Zodex
+- the tunnel service is inactive or not ready
+- the saved Local network-policy identity no longer matches the installed Zodex build
+- `zodexd`/`zodex-prd` are unhealthy or not in the required restricted network namespace
+
+For fail-closed cleanup followed by a fresh window:
+
+```bash
+zodex local stop
+zodex local start --ttl 2d
+```
+
+If status reports setup/network drift, re-run the original `zodex local setup ...` command before opening access again.
 
 ## `/health` works but `/mcp` is unauthorized
 
@@ -65,7 +93,7 @@ Check reader app setup:
 - `reader_private_key_path` points to the installed PEM
 - the agent is using the zodex credential helper path
 
-Then test clone from the Sprite workspace:
+Then test clone from the selected Zodex workspace:
 
 ```bash
 cd /workspace
@@ -114,6 +142,12 @@ Check YOLO mode state from the operator machine:
 zodex github mode status --sprite dev-sprite
 ```
 
+For Local:
+
+```bash
+zodex github mode status --local
+```
+
 Then check:
 
 - the mode has not expired
@@ -128,6 +162,8 @@ If the session should no longer be trusted, return to default mode:
 ```bash
 zodex github mode default --sprite dev-sprite
 ```
+
+Use `--local` for the Local GitHub policy. This does not stop Local MCP access; use `zodex local stop` separately.
 
 ## Runtime service cannot start
 
@@ -150,6 +186,22 @@ Check:
 ## Setup from macOS produces unusable guest binaries
 
 `zodex sprite setup` uploads operator-built runtime binaries. If setup is run from a non-Linux machine, confirm the binaries are compatible with the Sprite target. Use Linux-compatible release artifacts or a Linux build path when needed.
+
+## Local setup was interrupted
+
+Re-run the same `zodex local setup ...` command. Setup is a reconciliation path and preserves the existing Local persistent disk. A previously verified setup also has a separate last-ready recreation intent so an interrupted later attempt does not require direct edits to `~/.config/zodex`.
+
+## Local reset refuses to run
+
+This is often a safety preflight rather than a provider failure. `zodex local reset` will not delete the machine unless it can validate the last known-good recreation intent, required PEM/tunnel source files, GitHub App authority, network/image identity, and machine-image build prerequisites.
+
+Restore the missing source file or run setup intentionally with replacement inputs. Do not manually delete the Apple Container machine just to bypass the reset checks.
+
+Remember that reset is the destructive operation: a successful reset erases `/workspace`, caches, installed packages, and other persistent Local data, recreates the machine, and leaves MCP access off until a new `local start --ttl ...`.
+
+## Local resources do not match setup
+
+`zodex local status` reports requested-versus-observed CPU or memory drift. Re-run setup with the intended `--cpus` / `--memory` values. Machine resource changes can require a stop before the updated allocation appears on the next start; Zodex handles that reconciliation without using reset.
 
 ## Stop conditions
 
