@@ -40,6 +40,10 @@ struct LocalSetupSources {
     publisher_pem_path: String,
     publisher_installation_id: u64,
     default_base: String,
+    #[serde(default)]
+    tunnel_id: Option<String>,
+    #[serde(default)]
+    tunnel_runtime_key_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -49,6 +53,8 @@ struct LocalAccessLease {
     created_at_epoch_seconds: u64,
     expires_at_epoch_seconds: u64,
     active: bool,
+    #[serde(default)]
+    revocation_pending: bool,
 }
 
 fn local_target_state_path_from_home(home: &Path) -> PathBuf {

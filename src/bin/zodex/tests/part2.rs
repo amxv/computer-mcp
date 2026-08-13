@@ -653,8 +653,10 @@
             publisher_pem_path: "/Users/operator/publisher.pem".to_string(),
             publisher_installation_id: 22,
             default_base: "main".to_string(),
+            tunnel_id: Some("tunnel_0123456789abcdef0123456789abcdef".to_string()),
+            tunnel_runtime_key_path: Some("/Users/operator/tunnel-runtime-key".to_string()),
         };
-        let script = build_local_guest_setup_script(&sources);
+        let script = build_local_guest_setup_script(&sources).expect("setup script");
 
         assert!(script.contains("ZODEX_INSTALL_MODE=runtime"));
         assert!(script.contains("ZODEX_INSTALL_OPERATOR_CLI=0"));
@@ -704,6 +706,8 @@
                 publisher_pem_path: "/tmp/publisher.pem".to_string(),
                 publisher_installation_id: 4,
                 default_base: "main".to_string(),
+                tunnel_id: Some("tunnel_0123456789abcdef0123456789abcdef".to_string()),
+                tunnel_runtime_key_path: Some("/tmp/tunnel-runtime-key".to_string()),
             }),
         };
         save_local_target_record(&target_path, &target).expect("save target");
@@ -728,6 +732,7 @@
             created_at_epoch_seconds: 100,
             expires_at_epoch_seconds: 200,
             active: true,
+            revocation_pending: false,
         };
         save_local_access_lease(&lease_path, &lease).expect("save lease");
         assert_eq!(

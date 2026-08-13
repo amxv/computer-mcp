@@ -220,6 +220,8 @@ pub(crate) async fn run() -> Result<()> {
                 publisher_app_id,
                 publisher_pem,
                 default_base,
+                tunnel_id,
+                tunnel_runtime_key,
                 cpus,
                 memory,
             } => {
@@ -230,13 +232,20 @@ pub(crate) async fn run() -> Result<()> {
                     publisher_app_id,
                     publisher_pem: &publisher_pem,
                     default_base: &default_base,
+                    tunnel_id: &tunnel_id,
+                    tunnel_runtime_key: &tunnel_runtime_key,
                     cpus,
                     memory: memory.as_deref(),
                 })
                 .await?;
             }
             LocalCommand::Exec { command } => local_setup::local_exec(&command)?,
+            LocalCommand::Start { ttl } => local_lifecycle::local_start(&ttl)?,
+            LocalCommand::Stop => local_lifecycle::local_stop()?,
             LocalCommand::Status => print_local_status()?,
+            LocalCommand::LeaseWorker { generation } => {
+                local_lifecycle::local_lease_worker(&generation)?;
+            }
         },
         Commands::Proxy { command } => match command {
             ProxyCommand::Inspect {

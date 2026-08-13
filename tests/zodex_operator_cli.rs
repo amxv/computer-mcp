@@ -50,7 +50,7 @@ fn zodex_github_mode_yolo_help_exposes_expected_flags() {
 }
 
 #[test]
-fn zodex_local_help_exposes_phase_two_commands_only() {
+fn zodex_local_help_exposes_phase_three_commands_only() {
     let output = Command::new(env!("CARGO_BIN_EXE_zodex"))
         .args(["local", "--help"])
         .output()
@@ -60,10 +60,31 @@ fn zodex_local_help_exposes_phase_two_commands_only() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("setup"));
     assert!(stdout.contains("exec"));
+    assert!(stdout.contains("start"));
+    assert!(stdout.contains("stop"));
     assert!(stdout.contains("status"));
-    assert!(!stdout.contains("start"));
-    assert!(!stdout.contains("stop"));
+    assert!(!stdout.contains("lease-worker"));
     assert!(!stdout.contains("reset"));
+}
+
+#[test]
+fn zodex_local_start_requires_finite_ttl_and_has_no_no_ttl_mode() {
+    let output = Command::new(env!("CARGO_BIN_EXE_zodex"))
+        .args(["local", "start", "--help"])
+        .output()
+        .expect("run zodex local start --help");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--ttl <TTL>"));
+    assert!(!stdout.contains("--no-ttl"));
+
+    let missing = Command::new(env!("CARGO_BIN_EXE_zodex"))
+        .args(["local", "start"])
+        .output()
+        .expect("run zodex local start without ttl");
+    assert!(!missing.status.success());
+    assert!(String::from_utf8_lossy(&missing.stderr).contains("--ttl <TTL>"));
 }
 
 #[test]
@@ -98,8 +119,10 @@ fn zodex_local_setup_fails_before_mutation_on_unsupported_platform() {
     let home = tempfile::tempdir().expect("temp HOME");
     let reader = home.path().join("reader.pem");
     let publisher = home.path().join("publisher.pem");
+    let tunnel_key = home.path().join("tunnel-runtime-key");
     std::fs::write(&reader, "fixture").expect("reader fixture");
     std::fs::write(&publisher, "fixture").expect("publisher fixture");
+    std::fs::write(&tunnel_key, "fixture-runtime-key").expect("tunnel key fixture");
 
     let output = Command::new(env!("CARGO_BIN_EXE_zodex"))
         .args([
@@ -114,6 +137,12 @@ fn zodex_local_setup_fails_before_mutation_on_unsupported_platform() {
         .arg(&reader)
         .args(["--publisher-app-id", "2", "--publisher-pem"])
         .arg(&publisher)
+        .args([
+            "--tunnel-id",
+            "tunnel_0123456789abcdef0123456789abcdef",
+            "--tunnel-runtime-key",
+        ])
+        .arg(&tunnel_key)
         .env("HOME", home.path())
         .output()
         .expect("run unsupported local setup");

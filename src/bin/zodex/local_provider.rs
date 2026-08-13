@@ -133,6 +133,10 @@ fn local_machine_run_args(command: &[String]) -> Vec<String> {
     args
 }
 
+fn local_machine_stop_args() -> Vec<String> {
+    vec!["machine".into(), "stop".into(), LOCAL_MACHINE_NAME.into()]
+}
+
 fn parse_apple_system_version(raw: &str) -> Result<String> {
     let versions: Vec<AppleSystemVersionInfo> = serde_json::from_str(raw)
         .context("failed to parse `container system version --format json` output")?;
@@ -229,6 +233,17 @@ fn run_local_machine_exec(command: &[String]) -> Result<String> {
         bail!("Local operator exec command must not be empty");
     }
     run_container_capture(&local_machine_run_args(command))
+}
+
+fn stop_local_machine() -> Result<()> {
+    let Some(machine) = inspect_local_machine()? else {
+        return Ok(());
+    };
+    if !machine_status_is_running(&machine.status) {
+        return Ok(());
+    }
+    run_container_capture(&local_machine_stop_args())?;
+    Ok(())
 }
 
 fn run_local_machine_exec_with_input(command: &[String], input: &[u8]) -> Result<String> {
@@ -346,6 +361,10 @@ fn print_local_status() -> Result<()> {
     let (target_path, lease_path) = local_state_paths()?;
     let target = load_local_target_record(&target_path)?;
     let lease = load_local_access_lease(&lease_path)?;
+    let now = current_epoch_seconds()?;
+    let mut machine_running = false;
+    let mut tunnel_active = false;
+    let mut tunnel_ready = false;
 
     println!("Local target: {LOCAL_MACHINE_NAME}");
     println!(
@@ -382,6 +401,7 @@ fn print_local_status() -> Result<()> {
                 }
                 Some(machine) => {
                     let running = machine_status_is_running(&machine.status);
+                    machine_running = running;
                     println!("Machine: {} ({})", if running { "running" } else { "stopped" }, machine.status);
                     println!("Resources: {} CPUs, {} memory", machine.cpus, format_bytes(machine.memory));
                     match classify_local_home_mount(&machine.home_mount) {
@@ -401,16 +421,99 @@ fn print_local_status() -> Result<()> {
         }
     }
 
-    match lease {
-        Some(lease) if lease.active => {
-            let now = current_epoch_seconds()?;
-            if lease.expires_at_epoch_seconds <= now {
-                println!("MCP access: expired (stale lease state)");
-            } else {
-                println!("MCP access: active until {}", format_epoch_seconds_rfc3339(lease.expires_at_epoch_seconds)?);
-            }
+    if machine_running && matches!(target.as_ref().map(|record| &record.setup_state), Some(LocalSetupState::Ready)) {
+        match local_lifecycle::local_guest_runtime_status() {
+            Ok((daemon_active, daemon_healthy, publisher_active)) => println!(
+                "Guest services: zodexd={}, zodex-prd={}",
+                if daemon_healthy {
+                    "healthy"
+                } else if daemon_active {
+                    "active / unhealthy"
+                } else {
+                    "inactive"
+                },
+                if publisher_active { "active" } else { "inactive" }
+            ),
+            Err(error) => println!("Guest services: unknown ({error})"),
         }
-        _ => println!("MCP access: inactive"),
+        match local_lifecycle::local_tunnel_runtime_status() {
+            Ok((active, ready)) => {
+                tunnel_active = active;
+                tunnel_ready = ready;
+                println!(
+                    "Tunnel: {}",
+                    if ready {
+                        "ready"
+                    } else if active {
+                        "running / not ready"
+                    } else {
+                        "inactive"
+                    }
+                );
+            }
+            Err(error) => println!("Tunnel: unknown ({error})"),
+        }
+    } else {
+        println!("Guest services: inactive");
+        println!("Tunnel: inactive");
+    }
+
+    if matches!(target.as_ref().map(|record| &record.setup_state), Some(LocalSetupState::Ready)) {
+        println!(
+            "Operator exec: {}",
+            if machine_running {
+                "available (independent of MCP access)"
+            } else {
+                "available on demand (independent of MCP access)"
+            }
+        );
+    } else {
+        println!("Operator exec: unavailable (setup not ready)");
+    }
+
+    match local_lifecycle::local_lease_view(lease.as_ref(), now) {
+        local_lifecycle::LocalLeaseView::Inactive => println!("MCP access: inactive"),
+        local_lifecycle::LocalLeaseView::Active if machine_running && tunnel_ready => {
+            let lease = lease.as_ref().expect("active view has lease");
+            println!(
+                "MCP access: active until {}",
+                format_epoch_seconds_rfc3339(lease.expires_at_epoch_seconds)?
+            );
+        }
+        local_lifecycle::LocalLeaseView::Active => {
+            let lease = lease.as_ref().expect("active view has lease");
+            println!(
+                "MCP access: inactive (lease valid until {}, but runtime/tunnel is not ready)",
+                format_epoch_seconds_rfc3339(lease.expires_at_epoch_seconds)?
+            );
+        }
+        local_lifecycle::LocalLeaseView::Expired if tunnel_ready => {
+            let lease = lease.as_ref().expect("expired view has lease");
+            println!(
+                "MCP access: revocation overdue (lease expired at {}, tunnel is still ready)",
+                format_epoch_seconds_rfc3339(lease.expires_at_epoch_seconds)?
+            );
+        }
+        local_lifecycle::LocalLeaseView::Expired => {
+            let lease = lease.as_ref().expect("expired view has lease");
+            println!(
+                "MCP access: expired at {} (runtime is not reachable)",
+                format_epoch_seconds_rfc3339(lease.expires_at_epoch_seconds)?
+            );
+        }
+        local_lifecycle::LocalLeaseView::RevocationPending => {
+            println!("MCP access: inactive (machine-stop reconciliation pending)");
+        }
+        local_lifecycle::LocalLeaseView::PossiblyActiveRevocationPending => {
+            println!(
+                "MCP access: revocation pending ({})",
+                if tunnel_active {
+                    "tunnel may still be reachable"
+                } else {
+                    "runtime state is not fully reconciled"
+                }
+            );
+        }
     }
     Ok(())
 }

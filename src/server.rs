@@ -391,9 +391,9 @@ mod tests {
             .map(|tool| tool.name.to_string())
             .collect();
 
-        assert!(names.iter().any(|name| name == "exec_command"));
-        assert!(names.iter().any(|name| name == "write_stdin"));
-        assert!(names.iter().any(|name| name == "apply_patch"));
+        let mut sorted = names.clone();
+        sorted.sort();
+        assert_eq!(sorted, ["apply_patch", "exec_command", "write_stdin"]);
         assert!(
             names.iter().all(|name| name != "publish-pr"),
             "publish-pr must not be exposed on remote MCP surface"

@@ -17,7 +17,8 @@ RUN apt-get update && \
       python3-minimal \
       procps \
       sudo \
-      systemd && \
+      systemd \
+      unzip && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
