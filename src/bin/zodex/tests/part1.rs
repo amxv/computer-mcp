@@ -1,12 +1,16 @@
     use super::{
-        DEFAULT_LOG_LINES, GithubYoloAgentGitStatus, OperatorSpriteRecord, OperatorSpriteRegistry,
-        PUBLISHER_SERVICE_LABEL, ProcessModeState, PushGrantRecord, SERVICE_NAME,
+        DEFAULT_LOG_LINES, GithubYoloAgentGitStatus, LOCAL_MACHINE_NAME,
+        LocalAccessLease, LocalHomeMountStatus, LocalPlatformSupport, LocalProviderAvailability,
+        LocalSetupState, LocalTargetRecord, OperatorSpriteRecord, OperatorSpriteRegistry,
+        PUBLISHER_SERVICE_LABEL, ProviderCommandOutput,
+        ProcessModeState, PushGrantRecord, SERVICE_NAME,
         SPRITE_MAIN_SERVICE_LABEL, ServiceManager, SpriteServiceState, SpriteServiceStatus,
         SystemctlAction, browser_open_attempts, build_certbot_args,
         build_github_yolo_agent_git_status_lines, build_github_yolo_mode_record,
         build_github_yolo_mode_record_at, build_journalctl_args, build_operator_upgrade_shell_args,
         build_process_status_lines, build_publisher_status_lines, build_reader_status_lines,
-        build_runtime_upgrade_shell_args, build_sprite_api_args,
+        apple_machine_create_help_args, apple_machine_inspect_args, build_runtime_upgrade_shell_args,
+        build_sprite_api_args, classify_local_home_mount, classify_local_platform,
         build_sprite_services_status_lines, build_sprite_setup_script, build_sprite_upgrade_script,
         build_status_summary_lines, build_systemctl_args, certbot_cert_name,
         credential_host_is_github, credential_url_host, credential_url_path,
@@ -15,14 +19,20 @@
         generate_self_signed_certificate, git_credential_request_repo,
         git_credential_request_targets_github, github_mode_expired,
         github_yolo_agent_git_inspect_script, github_yolo_agent_git_repair_script,
-        load_matching_push_grant, load_push_grant_from_dir, merge_github_yolo_mode_records,
+        format_bytes, load_local_access_lease, load_local_target_record, load_matching_push_grant,
+        load_push_grant_from_dir, local_access_lease_path_from_home,
+        local_target_state_path_from_home, machine_status_is_running,
+        merge_github_yolo_mode_records,
         normalize_github_repo, normalize_github_repos, normalize_proxy_origin,
         operator_sprites_registry_path_from_home, parse_git_credential_request,
-        parse_github_yolo_agent_git_status, parse_push_grant_ttl, parse_push_grants,
+        parse_apple_machine_inspect, parse_apple_system_version, parse_github_yolo_agent_git_status,
+        parse_push_grant_ttl,
+        parse_push_grants, probe_apple_provider_with,
         parse_systemctl_show, process_log_path, process_pid_path, proxy_mcp_status_looks_healthy,
         push_grant_expired, read_tail_lines, render_proxy_wrangler_config, render_systemd_unit,
         resolve_publisher_client_id, resolve_remote_sprite_from_registry, select_tls_san_ip,
-        service_manager_from_pid1, shell_escape_single_quotes, sprite_service_logs_api_path,
+        save_local_access_lease, save_local_target_record, service_manager_from_pid1,
+        shell_escape_single_quotes, sprite_service_logs_api_path,
         sprite_service_supervisor_pids_from_ps, state_root_for_config, status_host_hint,
         strip_sprite_api_prelude, tls_artifacts_exist, upsert_operator_sprite_record,
         write_if_changed,
@@ -30,7 +40,10 @@
     use crate::operator_cli::Cli;
     use clap::{CommandFactory, Parser};
     use std::fs;
+    use std::io;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
     use std::time::Duration;
     use tempfile::tempdir;

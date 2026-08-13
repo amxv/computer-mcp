@@ -48,3 +48,43 @@ fn zodex_github_mode_yolo_help_exposes_expected_flags() {
     assert!(stdout.contains("--no-ttl"));
     assert!(stdout.contains("[default: 2h]"));
 }
+
+#[test]
+fn zodex_local_help_exposes_status_only() {
+    let output = Command::new(env!("CARGO_BIN_EXE_zodex"))
+        .args(["local", "--help"])
+        .output()
+        .expect("run zodex local --help");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("status"));
+    assert!(!stdout.contains("setup"));
+    assert!(!stdout.contains("start"));
+    assert!(!stdout.contains("exec"));
+    assert!(!stdout.contains("reset"));
+}
+
+#[test]
+fn zodex_local_status_is_read_only_and_truthful_before_configuration() {
+    let home = tempfile::tempdir().expect("temp HOME");
+    let output = Command::new(env!("CARGO_BIN_EXE_zodex"))
+        .args(["local", "status"])
+        .env("HOME", home.path())
+        .output()
+        .expect("run zodex local status");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Local target: zodex-local"));
+    assert!(stdout.contains("Configuration: not configured"));
+    assert!(stdout.contains("Provider:"));
+    assert!(stdout.contains("MCP access: inactive"));
+    assert!(!home.path().join(".config/zodex/local-target.json").exists());
+    assert!(
+        !home
+            .path()
+            .join(".config/zodex/local-access-lease.json")
+            .exists()
+    );
+}

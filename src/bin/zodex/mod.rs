@@ -1,6 +1,8 @@
 include!("prelude.rs");
 include!("dispatch.rs");
 include!("credentials.rs");
+include!("local_state.rs");
+include!("local_provider.rs");
 include!("sprite_proxy.rs");
 include!("github_device.rs");
 include!("github_mode.rs");
