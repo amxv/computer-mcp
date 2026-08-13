@@ -1,3 +1,4 @@
+use super::local_network::*;
 use super::*;
 
 const LOCAL_ZODEXD_UNIT: &str = include_str!("local_zodexd.service");
@@ -5,17 +6,19 @@ const LOCAL_PUBLISHER_UNIT: &str = include_str!("local_zodex_prd.service");
 const LOCAL_SETUP_REMOTE_SCRIPT_PATH: &str = "/tmp/zodex-local-setup.sh";
 const LOCAL_READER_PEM_TMP_PATH: &str = "/tmp/zodex-local-reader.pem";
 const LOCAL_PUBLISHER_PEM_TMP_PATH: &str = "/tmp/zodex-local-publisher.pem";
+const LOCAL_NETWORK_SCRIPT_TMP_PATH: &str = "/tmp/zodex-local-network";
+const LOCAL_NETWORK_UNIT_TMP_PATH: &str = "/tmp/zodex-local-network.service";
 
 #[derive(Debug, Clone)]
 pub(super) struct LocalSetupOptions<'a> {
-    repo: &'a str,
-    reader_app_id: u64,
-    reader_pem: &'a Path,
-    publisher_app_id: u64,
-    publisher_pem: &'a Path,
-    default_base: &'a str,
-    cpus: Option<u32>,
-    memory: Option<&'a str>,
+    pub(super) repo: &'a str,
+    pub(super) reader_app_id: u64,
+    pub(super) reader_pem: &'a Path,
+    pub(super) publisher_app_id: u64,
+    pub(super) publisher_pem: &'a Path,
+    pub(super) default_base: &'a str,
+    pub(super) cpus: Option<u32>,
+    pub(super) memory: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,12 +95,6 @@ fn validate_local_setup_options(options: &LocalSetupOptions<'_>) -> Result<Strin
     Ok(repo)
 }
 
-pub(super) fn local_host_network_isolation_gate() -> Result<()> {
-    bail!(
-        "Local setup is not yet safe to run: Apple Container machines use the shared built-in NAT network and Zodex has not yet proven a host-controlled policy that allows public Internet while denying macOS/private-LAN access"
-    )
-}
-
 pub(super) fn local_target_record(
     options: &LocalSetupOptions<'_>,
     repo: String,
@@ -112,6 +109,7 @@ pub(super) fn local_target_record(
         image_reference: Some(LOCAL_MACHINE_IMAGE.to_string()),
         requested_cpus: options.cpus,
         requested_memory: options.memory.map(str::to_string),
+        network: Some(expected_local_network()),
         setup_sources: Some(LocalSetupSources {
             repo,
             reader_app_id: options.reader_app_id,
@@ -163,6 +161,9 @@ if ! id -u zodex-tunnel >/dev/null 2>&1; then
 fi
 install -d -m 0700 -o zodex-tunnel -g zodex-tunnel /var/lib/zodex/tunnel
 install -d -m 0750 -o root -g zodex-tunnel /etc/zodex/tunnel
+install -d -m 0755 -o root -g root /usr/local/libexec
+install -m 0755 -o root -g root {network_script_tmp} {network_script_path}
+install -m 0644 -o root -g root {network_unit_tmp} {network_unit_path}
 
 awk '
   BEGIN {{seen_bind_host=0; seen_bind=0; inserted_http=0}}
@@ -222,9 +223,12 @@ cat > /etc/systemd/system/zodex-prd.service <<'EOF'
 cat > /etc/systemd/system/zodexd.service <<'EOF'
 {daemon_unit}EOF
 systemctl daemon-reload
+systemctl stop zodexd.service zodex-prd.service 2>/dev/null || true
+systemctl enable {network_service}
+systemctl restart {network_service}
 systemctl enable --now zodex-prd.service zodexd.service
 
-rm -f {reader_tmp} {publisher_tmp} {setup_script}
+rm -f {reader_tmp} {publisher_tmp} {network_script_tmp} {network_unit_tmp} {setup_script}
 "#,
         repo = shell_escape_single_quotes(&sources.repo),
         default_base = shell_escape_single_quotes(&sources.default_base),
@@ -236,6 +240,11 @@ rm -f {reader_tmp} {publisher_tmp} {setup_script}
         publisher_installation_id = sources.publisher_installation_id,
         publisher_unit = LOCAL_PUBLISHER_UNIT,
         daemon_unit = LOCAL_ZODEXD_UNIT,
+        network_script_tmp = LOCAL_NETWORK_SCRIPT_TMP_PATH,
+        network_script_path = LOCAL_NETWORK_SCRIPT_PATH,
+        network_unit_tmp = LOCAL_NETWORK_UNIT_TMP_PATH,
+        network_unit_path = LOCAL_NETWORK_UNIT_PATH,
+        network_service = LOCAL_NETWORK_SERVICE_NAME,
         setup_script = LOCAL_SETUP_REMOTE_SCRIPT_PATH,
     )
 }
@@ -251,6 +260,11 @@ fn provision_local_guest(
         .ok_or_else(|| anyhow!("Local setup record is missing source references"))?;
     let script = build_local_guest_setup_script(sources);
     write_local_machine_file(LOCAL_SETUP_REMOTE_SCRIPT_PATH, script.as_bytes())?;
+    write_local_machine_file(
+        LOCAL_NETWORK_SCRIPT_TMP_PATH,
+        build_local_network_reconcile_script().as_bytes(),
+    )?;
+    write_local_machine_file(LOCAL_NETWORK_UNIT_TMP_PATH, local_network_unit().as_bytes())?;
     write_local_machine_file(
         LOCAL_READER_PEM_TMP_PATH,
         &fs::read(reader_pem).context("failed to read reader PEM for Local provisioning")?,
@@ -269,30 +283,41 @@ fn verify_local_guest(record: &LocalTargetRecord) -> Result<()> {
         .as_ref()
         .ok_or_else(|| anyhow!("Local setup record is missing source references"))?
         .repo;
+    let expected_network = record
+        .network
+        .as_ref()
+        .ok_or_else(|| anyhow!("Local setup record is missing network policy identity"))?;
+    if !local_network_expectation_matches(expected_network) {
+        bail!("Local setup record network policy identity does not match this Zodex build");
+    }
 
+    run_local_machine_exec(&local_root_network_verify_command())?;
     run_local_machine_exec(&[
-        "/usr/bin/runuser".into(),
-        "-u".into(),
-        "zodex-agent".into(),
-        "--".into(),
-        "/usr/bin/env".into(),
-        "HOME=/home/zodex-agent".into(),
+        "/bin/bash".into(),
+        "-lc".into(),
+        format!(
+            "set -euo pipefail; systemctl is-active --quiet {network} zodex-prd.service zodexd.service; for service in zodex-prd.service zodexd.service; do pid=\"$(systemctl show --property MainPID --value \"$service\")\"; test \"$pid\" -gt 0; test \"$(ip netns identify \"$pid\")\" = {namespace}; done",
+            network = LOCAL_NETWORK_SERVICE_NAME,
+            namespace = LOCAL_NETWORK_NAMESPACE,
+        ),
+    ])?;
+
+    run_local_machine_exec(&local_agent_network_exec(&[
         "/bin/bash".into(),
         "-lc".into(),
         "test -w /workspace && touch /workspace/.zodex-write-check && rm /workspace/.zodex-write-check".into(),
-    ])?;
-    run_local_machine_exec(&[
-        "/usr/bin/runuser".into(),
-        "-u".into(),
-        "zodex-agent".into(),
-        "--".into(),
-        "/usr/bin/env".into(),
-        "HOME=/home/zodex-agent".into(),
+    ]))?;
+    run_local_machine_exec(&local_agent_network_exec(&[
+        "/usr/bin/getent".into(),
+        "ahostsv4".into(),
+        "github.com".into(),
+    ]))?;
+    run_local_machine_exec(&local_agent_network_exec(&[
         "git".into(),
         "ls-remote".into(),
         format!("https://github.com/{repo}.git"),
         "HEAD".into(),
-    ])?;
+    ]))?;
     run_local_machine_exec(&[
         "/bin/bash".into(),
         "-lc".into(),
@@ -300,39 +325,54 @@ fn verify_local_guest(record: &LocalTargetRecord) -> Result<()> {
     ])?;
 
     for secret_path in ["/etc/zodex/publisher/private-key.pem", "/etc/zodex/tunnel"] {
-        let result = run_local_machine_exec(&[
-            "/usr/bin/runuser".into(),
-            "-u".into(),
-            "zodex-agent".into(),
-            "--".into(),
+        let result = run_local_machine_exec(&local_agent_network_exec(&[
             "/bin/bash".into(),
             "-lc".into(),
-            format!("cat {secret_path} >/dev/null 2>&1"),
-        ]);
+            format!("test -r {secret_path}"),
+        ]));
         if result.is_ok() {
             bail!("zodex-agent unexpectedly gained access to {secret_path}");
         }
     }
 
-    if run_local_machine_exec(&[
-        "/usr/bin/runuser".into(),
-        "-u".into(),
-        "zodex-agent".into(),
-        "--".into(),
+    if run_local_machine_exec(&local_agent_network_exec(&[
         "/usr/bin/sudo".into(),
         "-n".into(),
         "true".into(),
-    ])
+    ]))
     .is_ok()
     {
         bail!("zodex-agent unexpectedly has passwordless sudo authority");
     }
 
-    run_local_machine_exec(&[
+    if run_local_machine_exec(&local_agent_network_exec(&[
+        "/usr/sbin/ip".into(),
+        "link".into(),
+        "add".into(),
+        "zodex-bypass".into(),
+        "type".into(),
+        "dummy".into(),
+    ]))
+    .is_ok()
+    {
+        bail!("zodex-agent unexpectedly has network-administration authority");
+    }
+
+    let gateway_probe = format!(
+        "if /usr/bin/ping -c 1 -W 1 {gateway} >/dev/null 2>&1; then exit 23; fi",
+        gateway = LOCAL_NETWORK_ROOT_GATEWAY
+    );
+    run_local_machine_exec(&local_agent_network_exec(&[
+        "/bin/bash".into(),
+        "-lc".into(),
+        gateway_probe,
+    ]))?;
+
+    run_local_machine_exec(&local_agent_network_exec(&[
         "/usr/bin/curl".into(),
         "-fsS".into(),
         "http://127.0.0.1:8080/health".into(),
-    ])?;
+    ]))?;
     Ok(())
 }
 
@@ -357,9 +397,6 @@ pub(super) async fn local_setup(options: LocalSetupOptions<'_>) -> Result<()> {
             "an unmanaged `{LOCAL_MACHINE_NAME}` machine already exists; refusing to adopt or overwrite it"
         );
     }
-
-    // The network gate intentionally runs before any target state or machine mutation.
-    local_host_network_isolation_gate()?;
 
     ensure_apple_container_system_started()?;
     let reader_installation_id =
@@ -421,12 +458,24 @@ pub(super) fn local_exec(command: &[String]) -> Result<()> {
     if target.setup_state != LocalSetupState::Ready {
         bail!("Zodex Local setup is incomplete; repair setup before operator exec");
     }
-    local_host_network_isolation_gate()?;
+    let expected_network = target
+        .network
+        .as_ref()
+        .ok_or_else(|| anyhow!("Zodex Local ready state is missing network policy identity"))?;
+    if !local_network_expectation_matches(expected_network) {
+        bail!("Zodex Local network policy identity has drifted; rerun `zodex local setup`");
+    }
     let machine = inspect_local_machine()?
         .ok_or_else(|| anyhow!("configured Local machine `{LOCAL_MACHINE_NAME}` is missing"))?;
     if classify_local_home_mount(&machine.home_mount) != LocalHomeMountStatus::Isolated {
         bail!("Local machine host-home isolation has drifted; refusing operator exec");
     }
+    run_local_machine_exec(&[
+        "/usr/bin/systemctl".into(),
+        "start".into(),
+        LOCAL_NETWORK_SERVICE_NAME.into(),
+    ])?;
+    run_local_machine_exec(&local_root_network_verify_command())?;
     let output = run_local_machine_exec(command)?;
     print!("{output}");
     Ok(())

@@ -271,6 +271,32 @@ enum SpriteCommand {
 
 #[derive(Debug, Subcommand)]
 enum LocalCommand {
+    /// Create or reconcile the persistent isolated Local Zodex machine.
+    Setup {
+        #[arg(long)]
+        repo: String,
+        #[arg(long)]
+        reader_app_id: u64,
+        #[arg(long)]
+        reader_pem: PathBuf,
+        #[arg(long)]
+        publisher_app_id: u64,
+        #[arg(long)]
+        publisher_pem: PathBuf,
+        #[arg(long, default_value = "main")]
+        default_base: String,
+        /// Override the Local machine CPU count.
+        #[arg(long)]
+        cpus: Option<u32>,
+        /// Override the Local machine memory (for example `32G`).
+        #[arg(long)]
+        memory: Option<String>,
+    },
+    /// Run an operator-controlled command as guest root outside the agent network namespace.
+    Exec {
+        #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
+    },
     /// Inspect Local configuration and Apple Container machine state without changing it.
     Status,
 }

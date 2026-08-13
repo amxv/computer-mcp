@@ -50,7 +50,7 @@ fn zodex_github_mode_yolo_help_exposes_expected_flags() {
 }
 
 #[test]
-fn zodex_local_help_exposes_status_only() {
+fn zodex_local_help_exposes_phase_two_commands_only() {
     let output = Command::new(env!("CARGO_BIN_EXE_zodex"))
         .args(["local", "--help"])
         .output()
@@ -58,10 +58,11 @@ fn zodex_local_help_exposes_status_only() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("setup"));
+    assert!(stdout.contains("exec"));
     assert!(stdout.contains("status"));
-    assert!(!stdout.contains("setup"));
     assert!(!stdout.contains("start"));
-    assert!(!stdout.contains("exec"));
+    assert!(!stdout.contains("stop"));
     assert!(!stdout.contains("reset"));
 }
 
@@ -87,4 +88,38 @@ fn zodex_local_status_is_read_only_and_truthful_before_configuration() {
             .join(".config/zodex/local-access-lease.json")
             .exists()
     );
+}
+
+#[test]
+fn zodex_local_setup_fails_before_mutation_on_unsupported_platform() {
+    if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        return;
+    }
+    let home = tempfile::tempdir().expect("temp HOME");
+    let reader = home.path().join("reader.pem");
+    let publisher = home.path().join("publisher.pem");
+    std::fs::write(&reader, "fixture").expect("reader fixture");
+    std::fs::write(&publisher, "fixture").expect("publisher fixture");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_zodex"))
+        .args([
+            "local",
+            "setup",
+            "--repo",
+            "amxv/zodex",
+            "--reader-app-id",
+            "1",
+            "--reader-pem",
+        ])
+        .arg(&reader)
+        .args(["--publisher-app-id", "2", "--publisher-pem"])
+        .arg(&publisher)
+        .env("HOME", home.path())
+        .output()
+        .expect("run unsupported local setup");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Local is unsupported"));
+    assert!(!home.path().join(".config/zodex/local-target.json").exists());
 }

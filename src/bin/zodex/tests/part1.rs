@@ -1,6 +1,6 @@
     use super::{
         DEFAULT_LOG_LINES, GithubYoloAgentGitStatus, LOCAL_MACHINE_NAME,
-        LocalAccessLease, LocalHomeMountStatus, LocalPlatformSupport, LocalProviderAvailability,
+        LocalAccessLease, LocalHomeMountStatus, LocalNetworkExpectation, LocalPlatformSupport, LocalProviderAvailability,
         LocalSetupSources, LocalSetupState, LocalTargetRecord, OperatorSpriteRecord,
         OperatorSpriteRegistry,
         PUBLISHER_SERVICE_LABEL, ProviderCommandOutput,
@@ -41,7 +41,10 @@
     };
     use super::local_setup::{
         LocalSetupAction, build_local_guest_setup_script, classify_local_setup_action,
-        local_host_network_isolation_gate, validate_local_default_base, validate_local_repo,
+        validate_local_default_base, validate_local_repo,
+    };
+    use super::local_network::{
+        LOCAL_NETWORK_POLICY_VERSION, LOCAL_NETWORK_NAMESPACE, expected_local_network,
     };
     use crate::operator_cli::Cli;
     use clap::{CommandFactory, Parser};

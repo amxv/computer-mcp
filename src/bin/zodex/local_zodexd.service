@@ -1,13 +1,17 @@
 [Unit]
 Description=Zodex Local agent daemon
-After=network-online.target zodex-prd.service
-Wants=network-online.target
-Requires=zodex-prd.service
+After=zodex-local-network.service zodex-prd.service
+Requires=zodex-local-network.service zodex-prd.service
 
 [Service]
 Type=simple
 User=zodex-agent
 Group=zodex
+NetworkNamespacePath=/run/netns/zodex-agent
+BindReadOnlyPaths=/etc/netns/zodex-agent/resolv.conf:/etc/resolv.conf
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
 ExecStart=/usr/local/bin/zodexd --config /etc/zodex/config.toml
 Restart=always
 RestartSec=1

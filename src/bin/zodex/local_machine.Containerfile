@@ -12,7 +12,9 @@ RUN apt-get update && \
       git \
       iproute2 \
       iputils-ping \
+      nftables \
       openssl \
+      python3-minimal \
       procps \
       sudo \
       systemd && \
