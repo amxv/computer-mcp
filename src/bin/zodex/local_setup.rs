@@ -31,6 +31,13 @@ pub(super) enum LocalSetupAction {
     RejectUnmanaged,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(super) struct LocalProvisioningFiles<'a> {
+    pub(super) reader_pem: &'a Path,
+    pub(super) publisher_pem: &'a Path,
+    pub(super) tunnel_runtime_key: &'a Path,
+}
+
 pub(super) fn classify_local_setup_action(
     state: Option<&LocalTargetRecord>,
     machine: Option<&AppleMachineInspect>,
@@ -71,7 +78,7 @@ pub(super) fn validate_local_default_base(default_base: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_local_setup_file(path: &Path, label: &str) -> Result<()> {
+pub(super) fn validate_local_setup_file(path: &Path, label: &str) -> Result<()> {
     let metadata = fs::metadata(path)
         .with_context(|| format!("failed to read {label} at {}", path.display()))?;
     if !metadata.is_file() {
@@ -108,6 +115,9 @@ fn validate_local_setup_options(options: &LocalSetupOptions<'_>) -> Result<Strin
         .is_some_and(|memory| memory.trim().is_empty())
     {
         bail!("Local memory override must not be empty");
+    }
+    if let Some(memory) = options.memory {
+        parse_local_memory_bytes(memory)?;
     }
     Ok(repo)
 }
@@ -439,6 +449,80 @@ fn verify_local_guest(record: &LocalTargetRecord) -> Result<()> {
     Ok(())
 }
 
+fn preserve_last_ready_setup_intent(record: Option<&LocalTargetRecord>) -> Result<()> {
+    let Some(record) = record.filter(|record| record.setup_state == LocalSetupState::Ready) else {
+        return Ok(());
+    };
+    let intent = local_ready_setup_intent_from_target(record)?;
+    let path = local_last_ready_setup_path()?;
+    save_local_ready_setup_intent(&path, &intent)
+}
+
+pub(super) fn apply_local_provisioning(
+    target_path: &Path,
+    mut record: LocalTargetRecord,
+    action: LocalSetupAction,
+    existing_machine: Option<&AppleMachineInspect>,
+    files: LocalProvisioningFiles<'_>,
+    image_prebuilt: bool,
+) -> Result<LocalTargetRecord> {
+    record.setup_state = LocalSetupState::Provisioning;
+    save_local_target_record(target_path, &record)?;
+
+    match action {
+        LocalSetupAction::Create => {
+            if !image_prebuilt {
+                build_local_machine_image()?;
+            }
+            create_local_machine(record.requested_cpus, record.requested_memory.as_deref())?;
+        }
+        LocalSetupAction::Reconcile => {
+            let machine = existing_machine
+                .ok_or_else(|| anyhow!("Local reconcile requires an existing provider machine"))?;
+            if local_machine_configuration_needs_restart(
+                machine,
+                record.requested_cpus,
+                record.requested_memory.as_deref(),
+            )? {
+                stop_local_machine()?;
+            }
+            reconcile_local_machine_resources(
+                record.requested_cpus,
+                record.requested_memory.as_deref(),
+            )?;
+        }
+        LocalSetupAction::RejectUnmanaged => {
+            bail!("refusing to provision an unmanaged `{LOCAL_MACHINE_NAME}` machine")
+        }
+    }
+
+    provision_local_guest(
+        &record,
+        files.reader_pem,
+        files.publisher_pem,
+        files.tunnel_runtime_key,
+    )?;
+    let machine = inspect_local_machine()?
+        .ok_or_else(|| anyhow!("Local machine disappeared during setup"))?;
+    if classify_local_home_mount(&machine.home_mount) != LocalHomeMountStatus::Isolated {
+        bail!("Local machine home mount is not isolated after provisioning");
+    }
+    let resource_drift = local_resource_drift_lines(&record, &machine);
+    if !resource_drift.is_empty() {
+        bail!(
+            "Local machine resources did not reconcile: {}",
+            resource_drift.join("; ")
+        );
+    }
+    verify_local_guest(&record)?;
+
+    record.setup_state = LocalSetupState::Ready;
+    let ready_intent = local_ready_setup_intent_from_target(&record)?;
+    save_local_ready_setup_intent(&local_last_ready_setup_path()?, &ready_intent)?;
+    save_local_target_record(target_path, &record)?;
+    Ok(record)
+}
+
 pub(super) async fn local_setup(options: LocalSetupOptions<'_>) -> Result<()> {
     let repo = validate_local_setup_options(&options)?;
     match probe_apple_provider() {
@@ -461,6 +545,8 @@ pub(super) async fn local_setup(options: LocalSetupOptions<'_>) -> Result<()> {
         );
     }
 
+    preserve_last_ready_setup_intent(existing_state.as_ref())?;
+
     super::local_lifecycle::local_revoke_access_before_setup()?;
 
     ensure_apple_container_system_started()?;
@@ -482,41 +568,25 @@ pub(super) async fn local_setup(options: LocalSetupOptions<'_>) -> Result<()> {
     )
     .await?;
 
-    let mut record = local_target_record(
+    let record = local_target_record(
         &options,
         repo,
         reader_installation_id,
         publisher_installation_id,
         LocalSetupState::Provisioning,
     );
-    save_local_target_record(&target_path, &record)?;
-
-    match classify_local_setup_action(existing_state.as_ref(), existing_machine.as_ref()) {
-        LocalSetupAction::Create => {
-            build_local_machine_image()?;
-            create_local_machine(options.cpus, options.memory)?;
-        }
-        LocalSetupAction::Reconcile => {
-            reconcile_local_machine_resources(options.cpus, options.memory)?;
-        }
-        LocalSetupAction::RejectUnmanaged => unreachable!("unmanaged Local machine rejected above"),
-    }
-
-    provision_local_guest(
-        &record,
-        options.reader_pem,
-        options.publisher_pem,
-        options.tunnel_runtime_key,
+    apply_local_provisioning(
+        &target_path,
+        record,
+        classify_local_setup_action(existing_state.as_ref(), existing_machine.as_ref()),
+        existing_machine.as_ref(),
+        LocalProvisioningFiles {
+            reader_pem: options.reader_pem,
+            publisher_pem: options.publisher_pem,
+            tunnel_runtime_key: options.tunnel_runtime_key,
+        },
+        false,
     )?;
-    let machine = inspect_local_machine()?
-        .ok_or_else(|| anyhow!("Local machine disappeared during setup"))?;
-    if classify_local_home_mount(&machine.home_mount) != LocalHomeMountStatus::Isolated {
-        bail!("Local machine home mount is not isolated after provisioning");
-    }
-    verify_local_guest(&record)?;
-
-    record.setup_state = LocalSetupState::Ready;
-    save_local_target_record(&target_path, &record)?;
     println!("local-setup: complete");
     Ok(())
 }

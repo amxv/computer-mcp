@@ -5,6 +5,7 @@ include!("local_state.rs");
 include!("local_provider.rs");
 mod local_lifecycle;
 mod local_network;
+mod local_recovery;
 mod local_setup;
 mod local_tunnel;
 mod operator_guest;
@@ -23,4 +24,5 @@ mod tests {
     include!("tests/part3.rs");
     include!("tests/part4.rs");
     include!("tests/part5.rs");
+    include!("tests/part6.rs");
 }

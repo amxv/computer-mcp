@@ -137,6 +137,10 @@ fn local_machine_stop_args() -> Vec<String> {
     vec!["machine".into(), "stop".into(), LOCAL_MACHINE_NAME.into()]
 }
 
+fn local_machine_delete_args() -> Vec<String> {
+    vec!["machine".into(), "delete".into(), LOCAL_MACHINE_NAME.into()]
+}
+
 fn parse_apple_system_version(raw: &str) -> Result<String> {
     let versions: Vec<AppleSystemVersionInfo> = serde_json::from_str(raw)
         .context("failed to parse `container system version --format json` output")?;
@@ -244,6 +248,100 @@ fn stop_local_machine() -> Result<()> {
     }
     run_container_capture(&local_machine_stop_args())?;
     Ok(())
+}
+
+fn delete_local_machine() -> Result<()> {
+    if inspect_local_machine()?.is_none() {
+        return Ok(());
+    }
+    run_container_capture(&local_machine_delete_args())?;
+    Ok(())
+}
+
+fn parse_local_memory_bytes(raw: &str) -> Result<u64> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        bail!("Local memory override must not be empty");
+    }
+    let digit_end = trimmed
+        .find(|ch: char| !ch.is_ascii_digit())
+        .unwrap_or(trimmed.len());
+    if digit_end == 0 {
+        bail!("Local memory override must start with a positive integer");
+    }
+    let amount = trimmed[..digit_end]
+        .parse::<u64>()
+        .context("Local memory override is too large")?;
+    if amount == 0 {
+        bail!("Local memory override must be greater than zero");
+    }
+    let suffix = trimmed[digit_end..].to_ascii_lowercase();
+    let multiplier = match suffix.as_str() {
+        "" | "b" => 1,
+        "k" | "kb" | "kib" => 1024,
+        "m" | "mb" | "mib" => 1024_u64.pow(2),
+        "g" | "gb" | "gib" => 1024_u64.pow(3),
+        "t" | "tb" | "tib" => 1024_u64.pow(4),
+        "p" | "pb" | "pib" => 1024_u64.pow(5),
+        _ => bail!("Local memory override must use B, K, M, G, T, or P units (for example `32G`)"),
+    };
+    amount
+        .checked_mul(multiplier)
+        .ok_or_else(|| anyhow!("Local memory override is too large"))
+}
+
+fn local_machine_configuration_needs_restart(
+    machine: &AppleMachineInspect,
+    cpus: Option<u32>,
+    memory: Option<&str>,
+) -> Result<bool> {
+    if classify_local_home_mount(&machine.home_mount) != LocalHomeMountStatus::Isolated {
+        return Ok(true);
+    }
+    if cpus.is_some_and(|requested| requested != machine.cpus) {
+        return Ok(true);
+    }
+    if let Some(memory) = memory
+        && parse_local_memory_bytes(memory)? != machine.memory
+    {
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+fn local_resource_drift_lines(
+    record: &LocalTargetRecord,
+    machine: &AppleMachineInspect,
+) -> Vec<String> {
+    let mut drift = Vec::new();
+    if let Some(requested) = record.requested_cpus
+        && requested != machine.cpus
+    {
+        drift.push(format!("CPUs requested {requested}, observed {}", machine.cpus));
+    }
+    if let Some(requested) = record.requested_memory.as_deref() {
+        match parse_local_memory_bytes(requested) {
+            Ok(bytes) if bytes != machine.memory => drift.push(format!(
+                "memory requested {requested}, observed {}",
+                format_bytes(machine.memory)
+            )),
+            Err(_) => drift.push(format!(
+                "memory intent `{requested}` cannot be compared with observed {}",
+                format_bytes(machine.memory)
+            )),
+            _ => {}
+        }
+    }
+    drift
+}
+
+fn local_runtime_ready_for_mcp(
+    machine_running: bool,
+    daemon_healthy: bool,
+    tunnel_ready: bool,
+    isolation_verified: bool,
+) -> bool {
+    machine_running && daemon_healthy && tunnel_ready && isolation_verified
 }
 
 fn run_local_machine_exec_with_input(command: &[String], input: &[u8]) -> Result<String> {
@@ -377,10 +475,14 @@ fn print_local_status() -> Result<()> {
     let (target_path, lease_path) = local_state_paths()?;
     let target = load_local_target_record(&target_path)?;
     let lease = load_local_access_lease(&lease_path)?;
+    let reset_intent = load_local_ready_setup_intent(&local_last_ready_setup_path()?);
     let now = current_epoch_seconds()?;
+    let mut machine_exists = false;
     let mut machine_running = false;
+    let mut daemon_healthy = false;
     let mut tunnel_active = false;
     let mut tunnel_ready = false;
+    let mut isolation_verified = false;
 
     println!("Local target: {LOCAL_MACHINE_NAME}");
     println!(
@@ -391,6 +493,19 @@ fn print_local_status() -> Result<()> {
             Some(LocalSetupState::Ready) => "ready",
         }
     );
+    match reset_intent {
+        Ok(Some(_)) => println!("Reset recovery: last-ready setup intent available"),
+        Ok(None)
+            if matches!(
+                target.as_ref().map(|record| &record.setup_state),
+                Some(LocalSetupState::Ready)
+            ) =>
+        {
+            println!("Reset recovery: available from current ready configuration");
+        }
+        Ok(None) => println!("Reset recovery: unavailable until setup reaches ready"),
+        Err(error) => println!("Reset recovery: invalid saved intent ({error})"),
+    }
 
     match probe_apple_provider() {
         LocalProviderAvailability::Unsupported(reason) => {
@@ -416,10 +531,16 @@ fn print_local_status() -> Result<()> {
                     }
                 }
                 Some(machine) => {
+                    machine_exists = true;
                     let running = machine_status_is_running(&machine.status);
                     machine_running = running;
                     println!("Machine: {} ({})", if running { "running" } else { "stopped" }, machine.status);
                     println!("Resources: {} CPUs, {} memory", machine.cpus, format_bytes(machine.memory));
+                    if let Some(record) = target.as_ref() {
+                        for drift in local_resource_drift_lines(record, &machine) {
+                            println!("Resource drift: {drift}");
+                        }
+                    }
                     match classify_local_home_mount(&machine.home_mount) {
                         LocalHomeMountStatus::Isolated => {
                             println!("Home mount: none");
@@ -439,18 +560,36 @@ fn print_local_status() -> Result<()> {
 
     if machine_running && matches!(target.as_ref().map(|record| &record.setup_state), Some(LocalSetupState::Ready)) {
         match local_lifecycle::local_guest_runtime_status() {
-            Ok((daemon_active, daemon_healthy, publisher_active)) => println!(
-                "Guest services: zodexd={}, zodex-prd={}",
-                if daemon_healthy {
-                    "healthy"
-                } else if daemon_active {
-                    "active / unhealthy"
-                } else {
-                    "inactive"
-                },
-                if publisher_active { "active" } else { "inactive" }
-            ),
+            Ok((daemon_active, healthy, publisher_active)) => {
+                daemon_healthy = healthy;
+                println!(
+                    "Guest services: zodexd={}, zodex-prd={}",
+                    if healthy {
+                        "healthy"
+                    } else if daemon_active {
+                        "active / unhealthy"
+                    } else {
+                        "inactive"
+                    },
+                    if publisher_active { "active" } else { "inactive" }
+                );
+            }
             Err(error) => println!("Guest services: unknown ({error})"),
+        }
+        let target_network_current = target
+            .as_ref()
+            .and_then(|record| record.network.as_ref())
+            .is_some_and(local_network::local_network_expectation_matches);
+        if !target_network_current {
+            println!("Isolation: drifted (saved network policy does not match this Zodex build)");
+        } else {
+            match local_lifecycle::local_runtime_isolation_status() {
+                Ok(()) => {
+                    isolation_verified = true;
+                    println!("Isolation: verified");
+                }
+                Err(error) => println!("Isolation: drifted / needs setup repair ({error})"),
+            }
         }
         match local_lifecycle::local_tunnel_runtime_status() {
             Ok((active, ready)) => {
@@ -471,10 +610,13 @@ fn print_local_status() -> Result<()> {
         }
     } else {
         println!("Guest services: inactive");
+        println!("Isolation: inactive / unverified");
         println!("Tunnel: inactive");
     }
 
-    if matches!(target.as_ref().map(|record| &record.setup_state), Some(LocalSetupState::Ready)) {
+    if matches!(target.as_ref().map(|record| &record.setup_state), Some(LocalSetupState::Ready))
+        && machine_exists
+    {
         println!(
             "Operator exec: {}",
             if machine_running {
@@ -483,13 +625,25 @@ fn print_local_status() -> Result<()> {
                 "available on demand (independent of MCP access)"
             }
         );
+    } else if matches!(target.as_ref().map(|record| &record.setup_state), Some(LocalSetupState::Ready)) {
+        println!("Operator exec: unavailable (configured machine is missing; rerun `zodex local setup`)");
     } else {
         println!("Operator exec: unavailable (setup not ready)");
     }
 
     match local_lifecycle::local_lease_view(lease.as_ref(), now) {
+        local_lifecycle::LocalLeaseView::Inactive if tunnel_ready => println!(
+            "MCP access: unexpected reachability (tunnel is ready without an active lease; run `zodex local stop`)"
+        ),
         local_lifecycle::LocalLeaseView::Inactive => println!("MCP access: inactive"),
-        local_lifecycle::LocalLeaseView::Active if machine_running && tunnel_ready => {
+        local_lifecycle::LocalLeaseView::Active
+            if local_runtime_ready_for_mcp(
+                machine_running,
+                daemon_healthy,
+                tunnel_ready,
+                isolation_verified,
+            ) =>
+        {
             let lease = lease.as_ref().expect("active view has lease");
             println!(
                 "MCP access: active until {}",
@@ -498,10 +652,17 @@ fn print_local_status() -> Result<()> {
         }
         local_lifecycle::LocalLeaseView::Active => {
             let lease = lease.as_ref().expect("active view has lease");
-            println!(
-                "MCP access: inactive (lease valid until {}, but runtime/tunnel is not ready)",
-                format_epoch_seconds_rfc3339(lease.expires_at_epoch_seconds)?
-            );
+            if tunnel_ready {
+                println!(
+                    "MCP access: not accepted as active (lease valid until {}, tunnel is ready but runtime/isolation checks are not satisfied)",
+                    format_epoch_seconds_rfc3339(lease.expires_at_epoch_seconds)?
+                );
+            } else {
+                println!(
+                    "MCP access: inactive (lease valid until {}, but runtime/tunnel/isolation is not ready)",
+                    format_epoch_seconds_rfc3339(lease.expires_at_epoch_seconds)?
+                );
+            }
         }
         local_lifecycle::LocalLeaseView::Expired if tunnel_ready => {
             let lease = lease.as_ref().expect("expired view has lease");
