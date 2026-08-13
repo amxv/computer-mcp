@@ -290,6 +290,22 @@ fn write_local_machine_file(remote_path: &str, contents: &[u8]) -> Result<()> {
     Ok(())
 }
 
+fn local_machine_atomic_write_command(remote_path: &str) -> Vec<String> {
+    vec![
+        "/bin/sh".into(),
+        "-c".into(),
+        "set -eu; umask 077; staging=\"$1.zodex-upload.$$\"; trap 'rm -f -- \"$staging\"' EXIT HUP INT TERM; cat > \"$staging\"; mv -f -- \"$staging\" \"$1\"; trap - EXIT HUP INT TERM".into(),
+        "zodex-write-atomic".into(),
+        remote_path.into(),
+    ]
+}
+
+fn write_local_machine_file_atomic(remote_path: &str, contents: &[u8]) -> Result<()> {
+    let command = local_machine_atomic_write_command(remote_path);
+    run_local_machine_exec_with_input(&command, contents)?;
+    Ok(())
+}
+
 fn probe_apple_provider_with<F>(platform: LocalPlatformSupport, mut run: F) -> LocalProviderAvailability
 where
     F: FnMut(&str, &[String]) -> io::Result<ProviderCommandOutput>,
