@@ -44,7 +44,7 @@ A phase is `complete` only when its observable outcome, phase-specific positive 
 
 | Phase | Capability | Status | Completion commit | Evidence / next boundary |
 | ---: | --- | --- | --- | --- |
-| 1 | Local provider/state seam and truthful read-only status | complete | `085efc1aacb16f38c82587522c23d5ca5b4efee5` + live-evidence completion commit | Apple Silicon/macOS 26.3.1 with Apple Container 1.2.2 proved the real version, capability, machine-not-found and read-only status shapes match the implementation. |
+| 1 | Local provider/state seam and truthful read-only status | complete | `a8a710846d71705dcb9a329ac6059290a8d42434` | Apple Silicon/macOS 26.3.1 with Apple Container 1.2.2 proved the real version, capability, machine-not-found and read-only status shapes match the implementation. |
 | 2 | Persistent Local machine setup and privileged operator exec | pending | — | Requires Phase 1. Private-LAN denial is a hard live security gate; block/amend if it cannot be host-enforced. |
 | 3 | Secure MCP ingress and durable TTL start/stop lifecycle | pending | — | Requires a Phase 2-ready safe Local machine and official current Secure MCP Tunnel compatibility. |
 | 4 | GitHub mode target parity with `--local` | pending | — | Requires Local privileged guest transport; preserve one canonical YOLO policy and Sprite behavior. |
@@ -103,7 +103,7 @@ Never put API keys, GitHub tokens, PEM contents, OpenAI tunnel runtime keys, pri
 
 - **Agent/session:** `mini_cascade` on the Apple Silicon macOS workspace checkout.
 - **Starting state:** clean `main` at `20206f6e3481d9a0a77dbc5858c9f52115abac66`, exactly equal to fetched `origin/main`; no pre-existing uncommitted work was present.
-- **Ending commit(s):** implementation/tests commit `085efc1aacb16f38c82587522c23d5ca5b4efee5`; live-evidence completion commit follows this entry and is reported in the final and AgentBox handoffs because a commit cannot contain its own SHA.
+- **Ending commit(s):** implementation/tests commit `085efc1aacb16f38c82587522c23d5ca5b4efee5`; live-evidence completion commit `a8a710846d71705dcb9a329ac6059290a8d42434`. The ledger-coordinate commit follows this entry and is reported in the final and AgentBox handoffs because a commit cannot contain its own SHA.
 - **Outcome:** completed the required Phase 1 provider probe on the target Apple Silicon Mac. The fixed `zodex-local` machine does not exist, so status truthfully reports the target as not configured and does not adopt or create a machine.
 - **Files/areas changed:** `gg/local-apple-silicon-runtime/local-apple-silicon-runtime-progress.md` only; no runtime implementation changes were required.
 - **Positive evidence:** on `arm64` macOS 26.3.1, `container system version --format json` returned Apple Container CLI 1.2.2 with the expected structured array and `appName`/`version` fields. `container machine create --help` exposes `--home-mount <home-mount>` with `ro`, `rw` and `none`. With the provider service running, `cargo run --quiet --bin zodex -- local status` exited 0 and printed `Local target: zodex-local`, `Configuration: not configured`, `Provider: ready (1.2.2)`, `Machine: not found` and `MCP access: inactive`.
