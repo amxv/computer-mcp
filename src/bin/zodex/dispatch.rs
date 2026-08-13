@@ -213,6 +213,29 @@ pub(crate) async fn run() -> Result<()> {
             }
         }
         Commands::Local { command } => match command {
+            LocalCommand::Setup {
+                repo,
+                reader_app_id,
+                reader_pem,
+                publisher_app_id,
+                publisher_pem,
+                default_base,
+                cpus,
+                memory,
+            } => {
+                local_setup::local_setup(local_setup::LocalSetupOptions {
+                    repo: &repo,
+                    reader_app_id,
+                    reader_pem: &reader_pem,
+                    publisher_app_id,
+                    publisher_pem: &publisher_pem,
+                    default_base: &default_base,
+                    cpus,
+                    memory: memory.as_deref(),
+                })
+                .await?;
+            }
+            LocalCommand::Exec { command } => local_setup::local_exec(&command)?,
             LocalCommand::Status => print_local_status()?,
         },
         Commands::Proxy { command } => match command {

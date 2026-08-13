@@ -623,6 +623,7 @@
             image_reference: Some("local/zodex-machine:1".to_string()),
             requested_cpus: None,
             requested_memory: None,
+            network: Some(expected_local_network()),
             setup_sources: None,
         };
 
@@ -660,6 +661,9 @@
         assert!(script.contains("bind_host = \\\"127.0.0.1\\\""));
         assert!(script.contains("User=zodex-agent"));
         assert!(script.contains("User=zodex-publisher"));
+        assert!(script.contains("NetworkNamespacePath=/run/netns/zodex-agent"));
+        assert!(script.contains("zodex-local-network.service"));
+        assert!(script.contains("/usr/local/libexec/zodex-local-network"));
         assert!(script.contains("useradd --system --gid zodex-tunnel"));
         assert!(script.contains("/etc/zodex/tunnel"));
         assert!(!script.contains("/Users/operator/reader.pem"));
@@ -679,15 +683,6 @@
     }
 
     #[test]
-    fn local_setup_network_gate_fails_closed_until_host_policy_is_proven() {
-        let error = local_host_network_isolation_gate()
-            .expect_err("unproven host networking must block setup")
-            .to_string();
-        assert!(error.contains("public Internet"));
-        assert!(error.contains("private-LAN"));
-    }
-
-    #[test]
     fn local_state_round_trips_with_atomic_private_files() {
         let temp = tempfile::tempdir().expect("temp dir");
         let target_path = local_target_state_path_from_home(temp.path());
@@ -699,6 +694,7 @@
             image_reference: Some("local/zodex-machine:latest".to_string()),
             requested_cpus: Some(12),
             requested_memory: Some("32G".to_string()),
+            network: Some(expected_local_network()),
             setup_sources: Some(LocalSetupSources {
                 repo: "amxv/zodex".to_string(),
                 reader_app_id: 1,

@@ -17,7 +17,17 @@ struct LocalTargetRecord {
     #[serde(default)]
     requested_memory: Option<String>,
     #[serde(default)]
+    network: Option<LocalNetworkExpectation>,
+    #[serde(default)]
     setup_sources: Option<LocalSetupSources>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct LocalNetworkExpectation {
+    policy_version: u32,
+    namespace: String,
+    root_interface: String,
+    agent_interface: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -82,6 +92,9 @@ fn load_local_target_record(path: &Path) -> Result<Option<LocalTargetRecord>> {
         }
         if record.setup_state == LocalSetupState::Ready && record.setup_sources.is_none() {
             bail!("ready Local target state is missing setup source references");
+        }
+        if record.setup_state == LocalSetupState::Ready && record.network.is_none() {
+            bail!("ready Local target state is missing network policy identity");
         }
     }
     Ok(record)
