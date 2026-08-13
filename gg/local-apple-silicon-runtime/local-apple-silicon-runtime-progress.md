@@ -44,7 +44,7 @@ A phase is `complete` only when its observable outcome, phase-specific positive 
 
 | Phase | Capability | Status | Completion commit | Evidence / next boundary |
 | ---: | --- | --- | --- | --- |
-| 1 | Local provider/state seam and truthful read-only status | blocked | — | Implementation is pushed in `085efc1aacb16f38c82587522c23d5ca5b4efee5`; the required read-only live probe on an Apple Silicon Mac with Apple Container is still unavailable from this Sprite. |
+| 1 | Local provider/state seam and truthful read-only status | complete | `085efc1aacb16f38c82587522c23d5ca5b4efee5` + live-evidence completion commit | Apple Silicon/macOS 26.3.1 with Apple Container 1.2.2 proved the real version, capability, machine-not-found and read-only status shapes match the implementation. |
 | 2 | Persistent Local machine setup and privileged operator exec | pending | — | Requires Phase 1. Private-LAN denial is a hard live security gate; block/amend if it cannot be host-enforced. |
 | 3 | Secure MCP ingress and durable TTL start/stop lifecycle | pending | — | Requires a Phase 2-ready safe Local machine and official current Secure MCP Tunnel compatibility. |
 | 4 | GitHub mode target parity with `--local` | pending | — | Requires Local privileged guest transport; preserve one canonical YOLO policy and Sprite behavior. |
@@ -54,11 +54,11 @@ A phase is `complete` only when its observable outcome, phase-specific positive 
 
 ## Current handoff
 
-- **Last completed phase:** none.
-- **Earliest incomplete phase:** Phase 1.
-- **Phase title:** `Local provider/state seam and truthful read-only status`.
-- **Observable boundary:** the read-only `zodex local status`, Local provider/state seams, deterministic Apple provider parsing/capability classification, private atomic Local state and shared duration grammar are implemented and validated on Linux; Phase 1 still requires its read-only live Apple Silicon provider probe before it can be complete.
-- **Current blockers:** this execution environment is Linux/x86_64 and has no Apple `container` CLI or Apple Silicon Mac access, so the Phase 1 live provider/status probe cannot be performed here. Do not begin Phase 2 until a supported Mac proves the current provider/version/capability shape live. Phase 2 then carries the highest-regret factual uncertainty: host/provider enforcement of public-Internet egress while denying macOS/private-LAN access.
+- **Last completed phase:** Phase 1.
+- **Earliest incomplete phase:** Phase 2.
+- **Phase title:** `Persistent Local machine setup and privileged operator exec`.
+- **Observable boundary:** the read-only `zodex local status`, Local provider/state seams, deterministic Apple provider parsing/capability classification, private atomic Local state and shared duration grammar are implemented and validated. A live Apple Silicon/macOS 26.3.1 probe against Apple Container 1.2.2 confirmed the real version, required `--home-mount ... none` capability, machine-not-found error shape and truthful non-mutating status output.
+- **Current blockers:** none for entering Phase 2. Phase 2 carries the highest-regret factual uncertainty: host/provider enforcement of public-Internet egress while denying macOS/private-LAN access. Treat that as a hard live gate and block/amend rather than weakening it to guest-only enforcement.
 - **Plan Amendments affecting next phase:** none.
 - **Prompt to use:** [`subsequent-agent-prompt.md`](./subsequent-agent-prompt.md).
 
@@ -98,6 +98,22 @@ If a session stops partway through a phase, leave the phase `in_progress`. Recor
 Never put API keys, GitHub tokens, PEM contents, OpenAI tunnel runtime keys, private host data, local databases or raw sensitive live payloads in this ledger.
 
 ## Progress entries
+
+### 2026-08-13 - Phase 1 - `complete`
+
+- **Agent/session:** `mini_cascade` on the Apple Silicon macOS workspace checkout.
+- **Starting state:** clean `main` at `20206f6e3481d9a0a77dbc5858c9f52115abac66`, exactly equal to fetched `origin/main`; no pre-existing uncommitted work was present.
+- **Ending commit(s):** implementation/tests commit `085efc1aacb16f38c82587522c23d5ca5b4efee5`; live-evidence completion commit follows this entry and is reported in the final and AgentBox handoffs because a commit cannot contain its own SHA.
+- **Outcome:** completed the required Phase 1 provider probe on the target Apple Silicon Mac. The fixed `zodex-local` machine does not exist, so status truthfully reports the target as not configured and does not adopt or create a machine.
+- **Files/areas changed:** `gg/local-apple-silicon-runtime/local-apple-silicon-runtime-progress.md` only; no runtime implementation changes were required.
+- **Positive evidence:** on `arm64` macOS 26.3.1, `container system version --format json` returned Apple Container CLI 1.2.2 with the expected structured array and `appName`/`version` fields. `container machine create --help` exposes `--home-mount <home-mount>` with `ro`, `rw` and `none`. With the provider service running, `cargo run --quiet --bin zodex -- local status` exited 0 and printed `Local target: zodex-local`, `Configuration: not configured`, `Provider: ready (1.2.2)`, `Machine: not found` and `MCP access: inactive`.
+- **Regression evidence:** the Phase 1 targeted Local/Sprite/operator/install tests and full `bash scripts/check.sh` gate are rerun from this Apple Silicon checkout before the completion commit is pushed.
+- **Live evidence:** Apple Container system status reported its API server running at version 1.2.2. Raw `container machine inspect zodex-local` returned the expected not-found diagnostic. The Zodex status path classified that result as `Machine: not found`, exited successfully and left both `~/.config/zodex/local-target.json` and `~/.config/zodex/local-access-lease.json` absent. Starting the previously uninitialized provider service required installing its recommended default kernel with explicit operator authorization; no machine was created, started, stopped, adopted, destroyed or reconfigured.
+- **Documentation:** the progress ledger records the live completion evidence. Public help and CLI tests remain limited to the shipped read-only `local status`; no later-phase commands or generated MCP contracts changed.
+- **Decisions made:** Apple Container 1.2.2 matches all load-bearing Phase 1 parser and capability assumptions, so the implementation remains unchanged.
+- **Amendments:** none.
+- **Known defects/risks:** no Phase 1 defect remains. Phase 2 must prove that a host/provider-controlled boundary can allow public Internet while denying macOS/private-LAN access before Local setup can be accepted.
+- **Next handoff:** begin Phase 2 at `Persistent Local machine setup and privileged operator exec`; read the current Phase 1 provider/state modules and the Phase 2 files and security gates before implementing machine lifecycle behavior.
 
 ### 2026-08-13 — Phase 1 — `blocked`
 
