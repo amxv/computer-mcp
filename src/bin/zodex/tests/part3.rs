@@ -67,9 +67,13 @@
             publisher_pem_path: "/tmp/publisher.pem".to_string(),
             publisher_installation_id: 4,
             default_base: "main".to_string(),
+            tunnel_id: Some("tunnel_0123456789abcdef0123456789abcdef".to_string()),
+            tunnel_runtime_key_path: Some("/tmp/tunnel-runtime-key".to_string()),
         };
-        let script = build_local_guest_setup_script(&sources);
-        let stop = script.find("systemctl stop zodexd.service zodex-prd.service").unwrap();
+        let script = build_local_guest_setup_script(&sources).expect("setup script");
+        let stop = script
+            .find("systemctl stop zodex-tunnel.service zodexd.service zodex-prd.service")
+            .unwrap();
         let network = script.find("systemctl restart zodex-local-network.service").unwrap();
         let start = script.find("systemctl enable --now zodex-prd.service zodexd.service").unwrap();
         assert!(stop < network && network < start);

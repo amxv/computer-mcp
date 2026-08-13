@@ -1,4 +1,5 @@
 use super::local_network::*;
+use super::local_tunnel::*;
 use super::*;
 
 const LOCAL_ZODEXD_UNIT: &str = include_str!("local_zodexd.service");
@@ -17,6 +18,8 @@ pub(super) struct LocalSetupOptions<'a> {
     pub(super) publisher_app_id: u64,
     pub(super) publisher_pem: &'a Path,
     pub(super) default_base: &'a str,
+    pub(super) tunnel_id: &'a str,
+    pub(super) tunnel_runtime_key: &'a Path,
     pub(super) cpus: Option<u32>,
     pub(super) memory: Option<&'a str>,
 }
@@ -83,6 +86,20 @@ fn validate_local_setup_options(options: &LocalSetupOptions<'_>) -> Result<Strin
     validate_local_default_base(options.default_base)?;
     validate_local_setup_file(options.reader_pem, "reader PEM")?;
     validate_local_setup_file(options.publisher_pem, "publisher PEM")?;
+    validate_local_tunnel_id(options.tunnel_id)?;
+    validate_local_setup_file(options.tunnel_runtime_key, "tunnel runtime key")?;
+    if fs::metadata(options.tunnel_runtime_key)
+        .with_context(|| {
+            format!(
+                "failed to inspect tunnel runtime key at {}",
+                options.tunnel_runtime_key.display()
+            )
+        })?
+        .len()
+        == 0
+    {
+        bail!("tunnel runtime key file must not be empty");
+    }
     if matches!(options.cpus, Some(0)) {
         bail!("Local CPU count must be greater than zero");
     }
@@ -119,12 +136,19 @@ pub(super) fn local_target_record(
             publisher_pem_path: options.publisher_pem.display().to_string(),
             publisher_installation_id,
             default_base: options.default_base.to_string(),
+            tunnel_id: Some(options.tunnel_id.to_string()),
+            tunnel_runtime_key_path: Some(options.tunnel_runtime_key.display().to_string()),
         }),
     }
 }
 
-pub(super) fn build_local_guest_setup_script(sources: &LocalSetupSources) -> String {
-    format!(
+pub(super) fn build_local_guest_setup_script(sources: &LocalSetupSources) -> Result<String> {
+    let tunnel_id = sources
+        .tunnel_id
+        .as_deref()
+        .ok_or_else(|| anyhow!("Local setup sources are missing tunnel ID"))?;
+    let tunnel_fragment = build_local_tunnel_install_fragment(tunnel_id)?;
+    Ok(format!(
         r#"#!/usr/bin/env bash
 set -euo pipefail
 
@@ -132,9 +156,10 @@ REPO={repo}
 DEFAULT_BASE={default_base}
 CFG=/etc/zodex/config.toml
 
-if ! command -v git >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1; then
+if command -v apt-get >/dev/null 2>&1 && \
+   (! command -v git >/dev/null 2>&1 || ! command -v unzip >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1); then
   apt-get update -y
-  apt-get install -y --no-install-recommends git curl ca-certificates sudo
+  apt-get install -y --no-install-recommends git curl ca-certificates sudo unzip python3-minimal
 fi
 
 TMP_INSTALLER="$(mktemp)"
@@ -164,6 +189,7 @@ install -d -m 0750 -o root -g zodex-tunnel /etc/zodex/tunnel
 install -d -m 0755 -o root -g root /usr/local/libexec
 install -m 0755 -o root -g root {network_script_tmp} {network_script_path}
 install -m 0644 -o root -g root {network_unit_tmp} {network_unit_path}
+{tunnel_fragment}
 
 awk '
   BEGIN {{seen_bind_host=0; seen_bind=0; inserted_http=0}}
@@ -223,12 +249,12 @@ cat > /etc/systemd/system/zodex-prd.service <<'EOF'
 cat > /etc/systemd/system/zodexd.service <<'EOF'
 {daemon_unit}EOF
 systemctl daemon-reload
-systemctl stop zodexd.service zodex-prd.service 2>/dev/null || true
+systemctl stop {tunnel_service} zodexd.service zodex-prd.service 2>/dev/null || true
 systemctl enable {network_service}
 systemctl restart {network_service}
 systemctl enable --now zodex-prd.service zodexd.service
 
-rm -f {reader_tmp} {publisher_tmp} {network_script_tmp} {network_unit_tmp} {setup_script}
+rm -f {reader_tmp} {publisher_tmp} {tunnel_runtime_key_tmp} {network_script_tmp} {network_unit_tmp} {setup_script}
 "#,
         repo = shell_escape_single_quotes(&sources.repo),
         default_base = shell_escape_single_quotes(&sources.default_base),
@@ -245,26 +271,37 @@ rm -f {reader_tmp} {publisher_tmp} {network_script_tmp} {network_unit_tmp} {setu
         network_unit_tmp = LOCAL_NETWORK_UNIT_TMP_PATH,
         network_unit_path = LOCAL_NETWORK_UNIT_PATH,
         network_service = LOCAL_NETWORK_SERVICE_NAME,
+        tunnel_fragment = tunnel_fragment,
+        tunnel_service = LOCAL_TUNNEL_SERVICE_NAME,
+        tunnel_runtime_key_tmp = LOCAL_TUNNEL_RUNTIME_KEY_TMP_PATH,
         setup_script = LOCAL_SETUP_REMOTE_SCRIPT_PATH,
-    )
+    ))
 }
 
 fn provision_local_guest(
     record: &LocalTargetRecord,
     reader_pem: &Path,
     publisher_pem: &Path,
+    tunnel_runtime_key: &Path,
 ) -> Result<()> {
     let sources = record
         .setup_sources
         .as_ref()
         .ok_or_else(|| anyhow!("Local setup record is missing source references"))?;
-    let script = build_local_guest_setup_script(sources);
+    let script = build_local_guest_setup_script(sources)?;
     write_local_machine_file(LOCAL_SETUP_REMOTE_SCRIPT_PATH, script.as_bytes())?;
     write_local_machine_file(
         LOCAL_NETWORK_SCRIPT_TMP_PATH,
         build_local_network_reconcile_script().as_bytes(),
     )?;
     write_local_machine_file(LOCAL_NETWORK_UNIT_TMP_PATH, local_network_unit().as_bytes())?;
+    let tunnel_key = fs::read(tunnel_runtime_key).with_context(|| {
+        format!(
+            "failed to read tunnel runtime key from {}",
+            tunnel_runtime_key.display()
+        )
+    })?;
+    write_local_machine_file(LOCAL_TUNNEL_RUNTIME_KEY_TMP_PATH, &tunnel_key)?;
     write_local_machine_file(
         LOCAL_READER_PEM_TMP_PATH,
         &fs::read(reader_pem).context("failed to read reader PEM for Local provisioning")?,
@@ -301,6 +338,19 @@ fn verify_local_guest(record: &LocalTargetRecord) -> Result<()> {
             namespace = LOCAL_NETWORK_NAMESPACE,
         ),
     ])?;
+    run_local_machine_exec(&[
+        "/bin/bash".into(),
+        "-lc".into(),
+        format!(
+            "set -euo pipefail; test -x {binary}; test -s {config}; test -s {key}; test \"$(cat {version_path})\" = {version}; test \"$(stat -c '%U:%G:%a' {key})\" = 'zodex-tunnel:zodex-tunnel:600'; test \"$(stat -c '%U:%G:%a' {config})\" = 'root:zodex-tunnel:640'; systemctl is-enabled {service} >/dev/null 2>&1 && exit 71 || true; systemctl is-active --quiet {service} && exit 72 || true",
+            binary = LOCAL_TUNNEL_BINARY_PATH,
+            config = LOCAL_TUNNEL_CONFIG_PATH,
+            key = LOCAL_TUNNEL_RUNTIME_KEY_PATH,
+            version_path = LOCAL_TUNNEL_VERSION_PATH,
+            version = shell_escape_single_quotes(LOCAL_TUNNEL_VERSION),
+            service = LOCAL_TUNNEL_SERVICE_NAME,
+        ),
+    ])?;
 
     run_local_machine_exec(&local_agent_network_exec(&[
         "/bin/bash".into(),
@@ -324,7 +374,11 @@ fn verify_local_guest(record: &LocalTargetRecord) -> Result<()> {
         "test \"$(stat -c %U /var/lib/zodex/publisher/run)\" = zodex-publisher && test \"$(stat -c %a /var/lib/zodex/publisher/run)\" = 750 && test \"$(stat -c %U /var/lib/zodex/publisher/run/zodex-prd.sock)\" = zodex-publisher && test \"$(stat -c %a /var/lib/zodex/publisher/run/zodex-prd.sock)\" = 660".into(),
     ])?;
 
-    for secret_path in ["/etc/zodex/publisher/private-key.pem", "/etc/zodex/tunnel"] {
+    for secret_path in [
+        "/etc/zodex/publisher/private-key.pem",
+        LOCAL_TUNNEL_RUNTIME_KEY_PATH,
+        LOCAL_TUNNEL_CONFIG_PATH,
+    ] {
         let result = run_local_machine_exec(&local_agent_network_exec(&[
             "/bin/bash".into(),
             "-lc".into(),
@@ -343,6 +397,15 @@ fn verify_local_guest(record: &LocalTargetRecord) -> Result<()> {
     .is_ok()
     {
         bail!("zodex-agent unexpectedly has passwordless sudo authority");
+    }
+    if run_local_machine_exec(&local_agent_network_exec(&[
+        "/usr/bin/systemctl".into(),
+        "start".into(),
+        LOCAL_TUNNEL_SERVICE_NAME.into(),
+    ]))
+    .is_ok()
+    {
+        bail!("zodex-agent unexpectedly can start the tunnel service");
     }
 
     if run_local_machine_exec(&local_agent_network_exec(&[
@@ -398,6 +461,8 @@ pub(super) async fn local_setup(options: LocalSetupOptions<'_>) -> Result<()> {
         );
     }
 
+    super::local_lifecycle::local_revoke_access_before_setup()?;
+
     ensure_apple_container_system_started()?;
     let reader_installation_id =
         resolve_repo_installation_id(options.reader_app_id, options.reader_pem, &repo).await?;
@@ -437,7 +502,12 @@ pub(super) async fn local_setup(options: LocalSetupOptions<'_>) -> Result<()> {
         LocalSetupAction::RejectUnmanaged => unreachable!("unmanaged Local machine rejected above"),
     }
 
-    provision_local_guest(&record, options.reader_pem, options.publisher_pem)?;
+    provision_local_guest(
+        &record,
+        options.reader_pem,
+        options.publisher_pem,
+        options.tunnel_runtime_key,
+    )?;
     let machine = inspect_local_machine()?
         .ok_or_else(|| anyhow!("Local machine disappeared during setup"))?;
     if classify_local_home_mount(&machine.home_mount) != LocalHomeMountStatus::Isolated {

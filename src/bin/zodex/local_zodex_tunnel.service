@@ -1,0 +1,26 @@
+[Unit]
+Description=Zodex Local Secure MCP Tunnel
+After=zodex-local-network.service zodexd.service
+Requires=zodex-local-network.service zodexd.service
+
+[Service]
+Type=simple
+User=zodex-tunnel
+Group=zodex-tunnel
+NetworkNamespacePath=/run/netns/zodex-agent
+BindReadOnlyPaths=/etc/netns/zodex-agent/resolv.conf:/etc/resolv.conf
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectSystem=strict
+PrivateTmp=yes
+RuntimeDirectory=zodex-tunnel
+RuntimeDirectoryMode=0700
+ReadWritePaths=/run/zodex-tunnel /var/lib/zodex/tunnel
+ExecStart=/usr/local/bin/tunnel-client run --config /etc/zodex/tunnel/config.yaml
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

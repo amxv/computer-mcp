@@ -285,6 +285,12 @@ enum LocalCommand {
         publisher_pem: PathBuf,
         #[arg(long, default_value = "main")]
         default_base: String,
+        /// Pre-created OpenAI Secure MCP Tunnel ID.
+        #[arg(long)]
+        tunnel_id: String,
+        /// Path to a restricted OpenAI tunnel runtime API key file.
+        #[arg(long)]
+        tunnel_runtime_key: PathBuf,
         /// Override the Local machine CPU count.
         #[arg(long)]
         cpus: Option<u32>,
@@ -297,8 +303,21 @@ enum LocalCommand {
         #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
         command: Vec<String>,
     },
+    /// Open Secure MCP Tunnel access for a finite duration.
+    Start {
+        /// Required access duration (for example `30m`, `2h`, or `2d`).
+        #[arg(long)]
+        ttl: String,
+    },
+    /// Revoke MCP access and stop the Local machine while preserving its disk.
+    Stop,
     /// Inspect Local configuration and Apple Container machine state without changing it.
     Status,
+    #[command(hide = true)]
+    LeaseWorker {
+        #[arg(long)]
+        generation: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
