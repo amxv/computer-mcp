@@ -12,6 +12,7 @@ pub(super) const LOCAL_TUNNEL_UNIT_PATH: &str = "/etc/systemd/system/zodex-tunne
 pub(super) const LOCAL_TUNNEL_RUNTIME_KEY_PATH: &str = "/etc/zodex/tunnel/runtime-key";
 pub(super) const LOCAL_TUNNEL_RUNTIME_KEY_TMP_PATH: &str = "/tmp/zodex-local-tunnel-runtime-key";
 pub(super) const LOCAL_TUNNEL_CONFIG_PATH: &str = "/etc/zodex/tunnel/config.yaml";
+pub(super) const LOCAL_TUNNEL_MCP_BEARER_PATH: &str = "/etc/zodex/tunnel/mcp-bearer";
 pub(super) const LOCAL_TUNNEL_VERSION_PATH: &str = "/etc/zodex/tunnel/version";
 pub(super) const LOCAL_TUNNEL_HEALTH_URL: &str = "http://127.0.0.1:18080";
 
@@ -64,8 +65,12 @@ install -m 0600 -o zodex-tunnel -g zodex-tunnel {runtime_key_tmp} {runtime_key_p
 python3 - "$CFG" "$TUNNEL_ID" {config_path} <<'PY'
 import pathlib
 import sys
-import tomllib
 import urllib.parse
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
 
 config_path = pathlib.Path(sys.argv[1])
 tunnel_id = sys.argv[2]
@@ -76,6 +81,8 @@ api_key = config.get("api_key")
 if not isinstance(api_key, str) or not api_key:
     raise SystemExit("zodex config is missing api_key")
 server_url = "http://127.0.0.1:8080/mcp?key=" + urllib.parse.quote(api_key, safe="")
+bearer_path = pathlib.Path("{mcp_bearer_path}")
+bearer_path.write_text("Bearer " + api_key, encoding="utf-8")
 output_path.write_text(
     "config_version: 1\n"
     "control_plane:\n"
@@ -90,6 +97,8 @@ output_path.write_text(
     "process:\n"
     "  pid_file: /run/zodex-tunnel/tunnel-client.pid\n"
     "mcp:\n"
+    "  discovery_extra_headers:\n"
+    "    Authorization: \"file:{mcp_bearer_path}\"\n"
     "  server_urls:\n"
     "    - channel: main\n"
     f"      url: {{server_url}}\n",
@@ -98,6 +107,8 @@ output_path.write_text(
 PY
 chown root:zodex-tunnel {config_path}
 chmod 0640 {config_path}
+chown root:zodex-tunnel {mcp_bearer_path}
+chmod 0640 {mcp_bearer_path}
 cat > {unit_path} <<'EOF'
 {unit}EOF
 systemctl disable {service_name} 2>/dev/null || true
@@ -111,6 +122,7 @@ systemctl disable {service_name} 2>/dev/null || true
         runtime_key_tmp = LOCAL_TUNNEL_RUNTIME_KEY_TMP_PATH,
         runtime_key_path = LOCAL_TUNNEL_RUNTIME_KEY_PATH,
         config_path = LOCAL_TUNNEL_CONFIG_PATH,
+        mcp_bearer_path = LOCAL_TUNNEL_MCP_BEARER_PATH,
         unit_path = LOCAL_TUNNEL_UNIT_PATH,
         unit = LOCAL_TUNNEL_UNIT,
         service_name = LOCAL_TUNNEL_SERVICE_NAME,

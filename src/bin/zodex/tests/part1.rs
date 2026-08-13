@@ -1,5 +1,6 @@
     use super::{
         DEFAULT_LOG_LINES, GithubYoloAgentGitStatus, LOCAL_MACHINE_NAME,
+        LOCAL_UPLOAD_DONE_MARKER, LOCAL_UPLOAD_READY_MARKER,
         LocalAccessLease, LocalHomeMountStatus, LocalNetworkExpectation, LocalPlatformSupport, LocalProviderAvailability,
         LocalSetupSources, LocalSetupState, LocalTargetRecord, OperatorSpriteRecord,
         OperatorSpriteRegistry,
@@ -22,14 +23,16 @@
         github_yolo_agent_git_inspect_script, github_yolo_agent_git_repair_script,
         format_bytes, load_local_access_lease, load_local_target_record, load_matching_push_grant,
         load_push_grant_from_dir, local_access_lease_path_from_home, local_machine_create_args,
-        local_machine_run_args, local_machine_set_args, local_target_state_path_from_home,
+        local_machine_full_pty_args, local_machine_run_args, local_machine_run_with_input_args,
+        local_machine_set_args,
+        local_systemd_ready_command, local_target_state_path_from_home,
         machine_status_is_running,
         merge_github_yolo_mode_records,
         normalize_github_repo, normalize_github_repos, normalize_proxy_origin,
         operator_sprites_registry_path_from_home, parse_git_credential_request,
         parse_apple_machine_inspect, parse_apple_system_version, parse_github_yolo_agent_git_status,
         parse_push_grant_ttl,
-        parse_push_grants, probe_apple_provider_with,
+        parse_push_grants, probe_apple_provider_with, read_local_upload_marker,
         parse_systemctl_show, process_log_path, process_pid_path, proxy_mcp_status_looks_healthy,
         push_grant_expired, read_tail_lines, render_proxy_wrangler_config, render_systemd_unit,
         resolve_publisher_client_id, resolve_remote_sprite_from_registry, select_tls_san_ip,
@@ -39,6 +42,7 @@
         strip_sprite_api_prelude, tls_artifacts_exist, upsert_operator_sprite_record,
         write_if_changed,
     };
+    use super::local_lifecycle::local_tunnel_stop_command;
     use super::local_setup::{
         LocalSetupAction, build_local_guest_setup_script, classify_local_setup_action,
         validate_local_default_base, validate_local_repo,

@@ -206,11 +206,11 @@ Sprite spellings continue unchanged. When target inference would be ambiguous be
 
 **Selected:** A.
 
-#### 2. Use a provider-private Ubuntu/systemd machine image and the existing runtime-only Zodex installer
+#### 2. Use a provider-private Debian slim/systemd machine image and the existing runtime-only Zodex installer
 
 **Reversible implementation choice, load-bearing for service ownership.**
 
-- **A. Minimal reviewed Ubuntu 24.04-or-newer systemd image plus `ZODEX_INSTALL_MODE=runtime`.** — **Recommended**
+- **A. Minimal reviewed Debian Bookworm slim systemd image plus `ZODEX_INSTALL_MODE=runtime`.** — **Recommended**
 - **B. Run the existing direct `zodex install/start` systemd path inside the machine.** The current direct unit can run `zodexd` as root and conflates provider lifecycle with guest install.
 - **C. Create a second Local-specific runtime implementation.** Duplicates the existing users/Git/runtime logic.
 
@@ -388,7 +388,7 @@ No `target` field is added to `ExecCommandInput`, `WriteStdinInput` or `ApplyPat
 - **Ongoing constraint:** setup and acceptance must still fail closed if the installed provider is later upgraded or its capabilities/output drift.
 - **If drift appears:** stop before exposing or mutating Local, capture the current provider evidence, obtain any required user decision and rewrite the canonical provider requirement directly.
 
-#### A2. Ubuntu 24.04 supplies the namespace/nftables primitives needed by the selected boundary
+#### A2. Debian Bookworm supplies the namespace/nftables primitives needed by the selected boundary
 
 - **Known:** the selected machine recipe can install `iproute2`, `nftables` and systemd support; the trusted provider-root transport can create namespaces, veth devices and root-owned policy before model services start.
 - **Working assumption:** the Apple machine kernel enables the required network namespace, veth, nftables forwarding/NAT and capability controls.
@@ -580,7 +580,7 @@ Do not put raw secrets into the Local host records. Define future source-referen
 - `src/bin/zodex/local_provider.rs` (read in full) — current provider capability parsing, embedded image build, no-home-mount create/set, inspect, literal-argv root exec and stdin transfer; extend this boundary rather than duplicating container command construction.
 - `src/bin/zodex/local_setup.rs` (read in full) — hidden setup/reconcile transaction, fail-closed placeholder `local_host_network_isolation_gate`, guest provisioning and verification. Replace the placeholder with the selected namespace lifecycle and retain the completed foundation.
 - `src/bin/zodex/local_state.rs` (read in full) — `LocalTargetRecord`, `LocalSetupSources`, atomic persistence and ready/provisioning validation. The ready record must carry enough expected-policy identity/version to diagnose namespace drift without storing secrets.
-- `src/bin/zodex/local_machine.Containerfile`, `local_zodexd.service`, `local_zodex_prd.service` (read in full) — embedded Ubuntu/systemd image and provider-private units that must gain namespace prerequisites/attachment.
+- `src/bin/zodex/local_machine.Containerfile`, `local_zodexd.service`, `local_zodex_prd.service` (read in full) — embedded Debian slim/systemd image and provider-private units that must gain namespace prerequisites/attachment.
 - `src/bin/zodex/tests/part2.rs` (Local tests around provider/setup/state) and `tests/zodex_operator_cli.rs` (Local help) — current hidden-foundation and public-surface evidence.
 
 **Linux authority and service patterns**
@@ -589,7 +589,7 @@ Do not put raw secrets into the Local host records. Define future source-referen
 - `src/bin/zodex/sprite_proxy.rs` (post-provision identity/reader/publisher checks only) — verification depth to preserve without copying Sprite transport.
 - `src/bin/zodex/status.rs` (`expected_sprite_service_definitions`) and `src/bin/zodex/process.rs` (`daemon_launch_command`) — existing explicit agent/publisher identities.
 - `src/config.rs` (bind/workdir/runtime paths) — the daemon remains loopback-bound inside the agent namespace and `/workspace` remains persistent native guest storage.
-- Installed Ubuntu 24.04 `ip-netns`, `nft`, systemd service and sandboxing manuals — confirm the exact available namespace attachment mechanism and boot ordering before finalizing embedded units. Use one root-owned service/script responsibility for namespace/veth/nftables reconciliation; do not scatter commands across every service.
+- Installed Debian Bookworm `ip-netns`, `nft`, systemd service and sandboxing manuals — confirm the exact available namespace attachment mechanism and boot ordering before finalizing embedded units. Use one root-owned service/script responsibility for namespace/veth/nftables reconciliation; do not scatter commands across every service.
 
 **Research and regressions**
 

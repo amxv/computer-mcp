@@ -208,7 +208,7 @@
         let error = validate_local_reset_intent(&stale_image)
             .expect_err("stale embedded image identity must block reset")
             .to_string();
-        assert!(error.contains("expects `local/zodex-machine:1`"));
+        assert!(error.contains("expects `local/zodex-machine:4`"));
     }
 
     #[test]

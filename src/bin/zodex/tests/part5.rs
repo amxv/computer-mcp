@@ -55,7 +55,7 @@
             }
             if script.contains("printf 'helper=%s\\n'") {
                 return Ok(format!(
-                    "helper={}\nuse_http_path=true\npush_rewrite=https://github.com/\n",
+                    "helper={}\nuse_http_path=true\npush_rewrite=https://github.com/\nowner=zodex-agent\nmode=600\n",
                     expected_zodex_agent_git_helper()
                 ));
             }
@@ -336,10 +336,11 @@
             .is_err()
         );
 
-        let local = local_machine_atomic_write_command("/tmp/state.json");
+        let local = local_machine_atomic_write_command("/tmp/state.json", 2);
         assert_eq!(local[0], "/bin/sh");
-        assert!(local[2].contains("cat > \"$staging\""));
+        assert!(local[2].contains("head -c \"$2\" > \"$staging\""));
         assert!(local[2].contains("mv -f -- \"$staging\" \"$1\""));
+        assert_eq!(local[5], "2");
         let local_joined = local.join(" ");
         for forbidden in ["ip netns", "systemctl", "runuser", "zodex-agent", "nft"] {
             assert!(!local_joined.contains(forbidden), "local transfer contains {forbidden}");

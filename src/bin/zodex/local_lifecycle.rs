@@ -2,8 +2,9 @@ use super::local_network::{
     LOCAL_NETWORK_NAMESPACE, local_network_expectation_matches, local_root_network_verify_command,
 };
 use super::local_tunnel::{
-    LOCAL_TUNNEL_CONFIG_PATH, LOCAL_TUNNEL_RUNTIME_KEY_PATH, LOCAL_TUNNEL_SERVICE_NAME,
-    LOCAL_TUNNEL_VERSION, LOCAL_TUNNEL_VERSION_PATH, local_tunnel_ready_command,
+    LOCAL_TUNNEL_CONFIG_PATH, LOCAL_TUNNEL_MCP_BEARER_PATH, LOCAL_TUNNEL_RUNTIME_KEY_PATH,
+    LOCAL_TUNNEL_SERVICE_NAME, LOCAL_TUNNEL_VERSION, LOCAL_TUNNEL_VERSION_PATH,
+    local_tunnel_ready_command,
 };
 use super::*;
 
@@ -64,6 +65,17 @@ pub(super) fn local_service_namespace_verify_command() -> Vec<String> {
     ]
 }
 
+pub(super) fn local_tunnel_stop_command() -> Vec<String> {
+    vec![
+        "/bin/bash".into(),
+        "-lc".into(),
+        format!(
+            "set -euo pipefail; if [ \"$(systemctl show --property=LoadState --value {service} 2>/dev/null || true)\" != not-found ]; then systemctl stop {service}; fi",
+            service = LOCAL_TUNNEL_SERVICE_NAME,
+        ),
+    ]
+}
+
 impl LocalLifecycleRuntime for SystemLocalLifecycleRuntime {
     fn now_epoch_seconds(&mut self) -> Result<u64> {
         current_epoch_seconds()
@@ -77,6 +89,7 @@ impl LocalLifecycleRuntime for SystemLocalLifecycleRuntime {
         if classify_local_home_mount(&machine.home_mount) != LocalHomeMountStatus::Isolated {
             bail!("Local machine host-home isolation has drifted; rerun `zodex local setup`");
         }
+        ensure_local_machine_systemd_ready()?;
 
         if run_local_machine_exec(&local_root_network_verify_command()).is_err() {
             run_local_machine_exec(&local_network_repair_command())?;
@@ -95,10 +108,11 @@ impl LocalLifecycleRuntime for SystemLocalLifecycleRuntime {
             "/bin/bash".into(),
             "-lc".into(),
             format!(
-                "set -euo pipefail; systemctl is-active --quiet zodex-prd.service zodexd.service; for service in zodex-prd.service zodexd.service; do pid=\"$(systemctl show --property MainPID --value \"$service\")\"; test \"$pid\" -gt 0; test \"$(ip netns identify \"$pid\")\" = {namespace}; done; test -x /usr/local/bin/tunnel-client; test -r {tunnel_config}; test -r {tunnel_key}; test \"$(cat {version_path})\" = {version}; test \"$(stat -c '%U:%G:%a' {tunnel_key})\" = 'zodex-tunnel:zodex-tunnel:600'; test \"$(stat -c '%U:%G:%a' {tunnel_config})\" = 'root:zodex-tunnel:640'; ip netns exec {namespace} curl -fsS http://127.0.0.1:8080/health >/dev/null",
+                "set -euo pipefail; systemctl is-active --quiet zodex-prd.service zodexd.service; for service in zodex-prd.service zodexd.service; do pid=\"$(systemctl show --property MainPID --value \"$service\")\"; test \"$pid\" -gt 0; test \"$(ip netns identify \"$pid\")\" = {namespace}; done; test -x /usr/local/bin/tunnel-client; test -r {tunnel_config}; test -r {tunnel_key}; test -r {mcp_bearer}; test \"$(cat {version_path})\" = {version}; test \"$(stat -c '%U:%G:%a' {tunnel_key})\" = 'zodex-tunnel:zodex-tunnel:600'; test \"$(stat -c '%U:%G:%a' {tunnel_config})\" = 'root:zodex-tunnel:640'; test \"$(stat -c '%U:%G:%a' {mcp_bearer})\" = 'root:zodex-tunnel:640'; ip netns exec {namespace} curl -fsS http://127.0.0.1:8080/health >/dev/null",
                 namespace = LOCAL_NETWORK_NAMESPACE,
                 tunnel_config = LOCAL_TUNNEL_CONFIG_PATH,
                 tunnel_key = LOCAL_TUNNEL_RUNTIME_KEY_PATH,
+                mcp_bearer = LOCAL_TUNNEL_MCP_BEARER_PATH,
                 version_path = LOCAL_TUNNEL_VERSION_PATH,
                 version = shell_escape_single_quotes(LOCAL_TUNNEL_VERSION),
             ),
@@ -151,11 +165,7 @@ impl LocalLifecycleRuntime for SystemLocalLifecycleRuntime {
         if !machine_status_is_running(&machine.status) {
             return Ok(());
         }
-        run_local_machine_exec(&[
-            "/usr/bin/systemctl".into(),
-            "stop".into(),
-            LOCAL_TUNNEL_SERVICE_NAME.into(),
-        ])?;
+        run_local_machine_exec(&local_tunnel_stop_command())?;
         Ok(())
     }
 
@@ -289,7 +299,10 @@ pub(super) fn revoke_local_access_with_runtime<R: LocalLifecycleRuntime>(
 
     if machine_stopped && disarm_on_success {
         runtime.disarm_supervisor()?;
-    } else if !machine_stopped && let Some(lease) = load_local_access_lease(lease_path)?.as_ref() {
+    } else if !machine_stopped
+        && disarm_on_success
+        && let Some(lease) = load_local_access_lease(lease_path)?.as_ref()
+    {
         let _ = runtime.arm_supervisor(lease);
     }
 
@@ -489,6 +502,8 @@ pub(super) fn build_local_lease_launchd_plist(
   <dict>
     <key>HOME</key>
     <string>{home}</string>
+    <key>PATH</key>
+    <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>

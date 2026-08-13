@@ -58,7 +58,7 @@ Sprite guest
 
 Apple Container Local machine, foundation present but setup not public
 ┌─────────────────────────────────────────────────────────────┐
-│ persistent Ubuntu/systemd machine, home mount disabled      │
+│ persistent Debian slim/systemd machine, home mount disabled │
 │  ├─ provider-root command/data-transfer seam                │
 │  ├─ zodex-agent / zodex-publisher / zodex-tunnel identities │
 │  ├─ loopback daemon and provider-private service assets     │
@@ -83,7 +83,7 @@ Apple Container Local machine, foundation present but setup not public
 - `src/bin/zodex/local_provider.rs` — Apple provider capability parsing, machine/image lifecycle, literal-argv root exec and bounded stdin-based transfer.
 - `src/bin/zodex/local_state.rs` — Local target/setup-source/lease records and atomic host-state persistence.
 - `src/bin/zodex/local_setup.rs` — hidden setup/reconcile transaction, embedded guest provisioning and post-provision verification; its network gate is deliberately fail closed until the selected namespace boundary is implemented.
-- `src/bin/zodex/local_machine.Containerfile`, `local_zodexd.service`, `local_zodex_prd.service` — embedded Ubuntu/systemd image and provider-private guest service assets.
+- `src/bin/zodex/local_machine.Containerfile`, `local_zodexd.service`, `local_zodex_prd.service` — embedded Debian slim/systemd image and provider-private guest service assets.
 
 The module split is recent organizational work, but the underlying operator responsibilities predate it.
 
@@ -160,7 +160,7 @@ Phase 1 is complete. The public `zodex local status` path detects platform/provi
 
 Commit `7028bcaa48705a045dfc1b8e47af68a55c27c1a1` also landed a coherent but deliberately hidden Phase 2 foundation:
 
-- an embedded Ubuntu 24.04/systemd machine recipe and provider-private service assets;
+- an embedded Debian Bookworm slim/systemd machine recipe and provider-private service assets;
 - explicit no-home-mount machine create/resource reconciliation;
 - provider-root execution that preserves argv boundaries plus bounded stdin-based file transfer;
 - durable nonsecret setup-source records and ready/provisioning validation;
@@ -729,7 +729,7 @@ Deliberately out of scope:
 
 ## Factual gaps / things not proven
 
-1. **Namespace primitives and boot ordering on the final Local image.** The selected root-owned namespace/veth/nftables design is implementation-ready, but the actual `zodex-local` Ubuntu machine has not yet live-proven kernel support, systemd ordering, public-DNS behavior, reboot reconciliation and fail-closed service attachment. Phase 2 must implement and test these contracts deterministically; Phase 7 must prove and repair them live before the workstream is accepted or released.
+1. **Namespace primitives and boot ordering on the final Local image.** The selected root-owned namespace/veth/nftables design is implementation-ready, but the actual `zodex-local` Debian slim machine has not yet live-proven kernel support, systemd ordering, public-DNS behavior, reboot reconciliation and fail-closed service attachment. Phase 2 must implement and test these contracts deterministically; Phase 7 must prove and repair them live before the workstream is accepted or released.
 2. **Future Apple CLI/version drift.** Apple Container 1.2.2 on the implementation Mac matched the implemented machine shapes, but setup must continue to verify capabilities and fail closed after provider upgrades rather than assuming compatibility indefinitely.
 3. **Secure MCP Tunnel account provisioning details for this user's account.** The tunnel client and Linux ARM64 runtime are documented, but the actual tunnel ID/runtime key must be operator-supplied and validated live. The plan must not require an admin key to be stored in Zodex.
 4. **Whether a disposable GitHub repo/ref is available for automated live Local push validation.** Deterministic publisher tests can prove policy, but end-to-end write validation needs an explicitly authorized disposable target.

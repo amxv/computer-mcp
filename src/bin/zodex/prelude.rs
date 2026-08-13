@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::fs::OpenOptions;
-use std::io::{self, Read, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::IpAddr;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -18,7 +18,11 @@ use clap::{Parser, Subcommand};
 #[cfg(unix)]
 use nix::errno::Errno;
 #[cfg(unix)]
+use nix::pty::openpty;
+#[cfg(unix)]
 use nix::sys::signal::{Signal, kill};
+#[cfg(unix)]
+use nix::sys::termios::{SetArg, cfmakeraw, tcgetattr, tcsetattr};
 #[cfg(unix)]
 use nix::unistd::{Group, Pid, Uid, User, chown, setsid};
 use rand::distr::{Alphanumeric, SampleString};
