@@ -164,11 +164,8 @@ verify_topology() {
 verify_policy() {
   [[ -r "${RUNTIME_DIR}/policy-version" ]] || fail "policy version marker is missing"
   [[ "$(cat "${RUNTIME_DIR}/policy-version")" == "$POLICY_VERSION" ]] || fail "policy version drifted"
-  nft list table inet "$FILTER_TABLE" > "${RUNTIME_DIR}/filter.current"
-  nft list table ip "$NAT_TABLE" > "${RUNTIME_DIR}/nat.current"
-  cmp -s "${RUNTIME_DIR}/filter.current" "${RUNTIME_DIR}/filter.nft" || fail "filter policy drifted"
-  cmp -s "${RUNTIME_DIR}/nat.current" "${RUNTIME_DIR}/nat.nft" || fail "NAT policy drifted"
-  rm -f "${RUNTIME_DIR}/filter.current" "${RUNTIME_DIR}/nat.current"
+  cmp -s <(nft list table inet "$FILTER_TABLE") "${RUNTIME_DIR}/filter.nft" || fail "filter policy drifted"
+  cmp -s <(nft list table ip "$NAT_TABLE") "${RUNTIME_DIR}/nat.nft" || fail "NAT policy drifted"
 }
 
 verify_all() {

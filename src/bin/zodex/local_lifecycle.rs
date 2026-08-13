@@ -41,6 +41,29 @@ pub(super) trait LocalLifecycleRuntime {
 
 struct SystemLocalLifecycleRuntime;
 
+pub(super) fn local_network_repair_command() -> Vec<String> {
+    vec![
+        "/bin/bash".into(),
+        "-lc".into(),
+        format!(
+            "set -euo pipefail; systemctl stop {tunnel} zodexd.service zodex-prd.service 2>/dev/null || true; systemctl restart zodex-local-network.service; systemctl start zodex-prd.service zodexd.service",
+            tunnel = LOCAL_TUNNEL_SERVICE_NAME,
+        ),
+    ]
+}
+
+pub(super) fn local_service_namespace_verify_command() -> Vec<String> {
+    vec![
+        "/bin/bash".into(),
+        "-lc".into(),
+        format!(
+            "set -euo pipefail; for service in zodex-prd.service zodexd.service {tunnel}; do if systemctl is-active --quiet \"$service\"; then pid=\"$(systemctl show --property MainPID --value \"$service\")\"; test \"$pid\" -gt 0; test \"$(ip netns identify \"$pid\")\" = {namespace}; fi; done",
+            tunnel = LOCAL_TUNNEL_SERVICE_NAME,
+            namespace = LOCAL_NETWORK_NAMESPACE,
+        ),
+    ]
+}
+
 impl LocalLifecycleRuntime for SystemLocalLifecycleRuntime {
     fn now_epoch_seconds(&mut self) -> Result<u64> {
         current_epoch_seconds()
@@ -56,14 +79,7 @@ impl LocalLifecycleRuntime for SystemLocalLifecycleRuntime {
         }
 
         if run_local_machine_exec(&local_root_network_verify_command()).is_err() {
-            run_local_machine_exec(&[
-                "/bin/bash".into(),
-                "-lc".into(),
-                format!(
-                    "set -euo pipefail; systemctl stop {tunnel} zodexd.service zodex-prd.service 2>/dev/null || true; systemctl restart zodex-local-network.service; systemctl start zodex-prd.service zodexd.service",
-                    tunnel = LOCAL_TUNNEL_SERVICE_NAME,
-                ),
-            ])?;
+            run_local_machine_exec(&local_network_repair_command())?;
         } else {
             run_local_machine_exec(&[
                 "/usr/bin/systemctl".into(),
@@ -74,6 +90,7 @@ impl LocalLifecycleRuntime for SystemLocalLifecycleRuntime {
             ])?;
         }
         run_local_machine_exec(&local_root_network_verify_command())?;
+        run_local_machine_exec(&local_service_namespace_verify_command())?;
         run_local_machine_exec(&[
             "/bin/bash".into(),
             "-lc".into(),
@@ -296,12 +313,17 @@ pub(super) fn revoke_local_access_with_runtime<R: LocalLifecycleRuntime>(
 
 pub(super) fn local_revoke_access_before_setup() -> Result<()> {
     let (_, lease_path) = local_state_paths()?;
-    if load_local_access_lease(&lease_path)?.is_none() {
-        return Ok(());
-    }
     let mut runtime = SystemLocalLifecycleRuntime;
     revoke_local_access_with_runtime(&mut runtime, &lease_path, None, true)
         .context("failed to revoke existing Local access before setup")?;
+    Ok(())
+}
+
+pub(super) fn local_revoke_access_before_reset() -> Result<()> {
+    let (_, lease_path) = local_state_paths()?;
+    let mut runtime = SystemLocalLifecycleRuntime;
+    revoke_local_access_with_runtime(&mut runtime, &lease_path, None, true)
+        .context("failed to revoke Local access before reset")?;
     Ok(())
 }
 
@@ -614,4 +636,10 @@ pub(super) fn local_guest_runtime_status() -> Result<(bool, bool, bool)> {
         ])
         .is_ok();
     Ok((daemon_active, daemon_healthy, publisher_active))
+}
+
+pub(super) fn local_runtime_isolation_status() -> Result<()> {
+    run_local_machine_exec(&local_root_network_verify_command())?;
+    run_local_machine_exec(&local_service_namespace_verify_command())?;
+    Ok(())
 }

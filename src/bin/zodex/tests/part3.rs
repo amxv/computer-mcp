@@ -33,6 +33,10 @@
         assert!(script.contains("DNS_FILE=\"${DNS_DIR}/resolv.conf\""));
         assert!(script.contains("nft delete table inet \"$FILTER_TABLE\""));
         assert!(!script.contains("flush ruleset"));
+        assert!(script.contains("cmp -s <(nft list table inet \"$FILTER_TABLE\")"));
+        assert!(script.contains("cmp -s <(nft list table ip \"$NAT_TABLE\")"));
+        assert!(!script.contains("filter.current"));
+        assert!(!script.contains("nat.current"));
     }
 
     #[test]

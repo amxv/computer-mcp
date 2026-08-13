@@ -242,6 +242,7 @@ pub(crate) async fn run() -> Result<()> {
             LocalCommand::Exec { command } => local_setup::local_exec(&command)?,
             LocalCommand::Start { ttl } => local_lifecycle::local_start(&ttl)?,
             LocalCommand::Stop => local_lifecycle::local_stop()?,
+            LocalCommand::Reset => local_recovery::local_reset().await?,
             LocalCommand::Status => print_local_status()?,
             LocalCommand::LeaseWorker { generation } => {
                 local_lifecycle::local_lease_worker(&generation)?;

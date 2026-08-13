@@ -91,7 +91,7 @@ fn zodex_github_mode_local_and_sprite_selectors_are_mutually_exclusive() {
 }
 
 #[test]
-fn zodex_local_help_exposes_phase_three_commands_only() {
+fn zodex_local_help_exposes_reset_and_keeps_worker_hidden() {
     let output = Command::new(env!("CARGO_BIN_EXE_zodex"))
         .args(["local", "--help"])
         .output()
@@ -103,9 +103,36 @@ fn zodex_local_help_exposes_phase_three_commands_only() {
     assert!(stdout.contains("exec"));
     assert!(stdout.contains("start"));
     assert!(stdout.contains("stop"));
+    assert!(stdout.contains("reset"));
+    assert!(stdout.contains("Permanently erase Local machine storage"));
     assert!(stdout.contains("status"));
     assert!(!stdout.contains("lease-worker"));
-    assert!(!stdout.contains("reset"));
+}
+
+#[test]
+fn zodex_local_reset_without_saved_setup_fails_before_state_mutation() {
+    let home = tempfile::tempdir().expect("temp HOME");
+    let output = Command::new(env!("CARGO_BIN_EXE_zodex"))
+        .args(["local", "reset"])
+        .env("HOME", home.path())
+        .output()
+        .expect("run unconfigured local reset");
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("not configured"));
+    assert!(!home.path().join(".config/zodex/local-target.json").exists());
+    assert!(
+        !home
+            .path()
+            .join(".config/zodex/local-access-lease.json")
+            .exists()
+    );
+    assert!(
+        !home
+            .path()
+            .join(".config/zodex/local-last-ready-setup.json")
+            .exists()
+    );
 }
 
 #[test]

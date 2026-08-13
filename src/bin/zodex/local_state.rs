@@ -47,6 +47,19 @@ struct LocalSetupSources {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct LocalReadySetupIntent {
+    version: u32,
+    machine_id: String,
+    image_reference: String,
+    #[serde(default)]
+    requested_cpus: Option<u32>,
+    #[serde(default)]
+    requested_memory: Option<String>,
+    network: LocalNetworkExpectation,
+    setup_sources: LocalSetupSources,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct LocalAccessLease {
     version: u32,
     generation: String,
@@ -65,6 +78,10 @@ fn local_access_lease_path_from_home(home: &Path) -> PathBuf {
     home.join(LOCAL_ACCESS_LEASE_RELATIVE_PATH)
 }
 
+fn local_last_ready_setup_path_from_home(home: &Path) -> PathBuf {
+    home.join(LOCAL_LAST_READY_SETUP_RELATIVE_PATH)
+}
+
 fn local_state_paths() -> Result<(PathBuf, PathBuf)> {
     let home = env::var("HOME").context("HOME must be set to inspect Zodex Local state")?;
     let home = Path::new(&home);
@@ -72,6 +89,11 @@ fn local_state_paths() -> Result<(PathBuf, PathBuf)> {
         local_target_state_path_from_home(home),
         local_access_lease_path_from_home(home),
     ))
+}
+
+fn local_last_ready_setup_path() -> Result<PathBuf> {
+    let home = env::var("HOME").context("HOME must be set to inspect Zodex Local state")?;
+    Ok(local_last_ready_setup_path_from_home(Path::new(&home)))
 }
 
 fn load_local_state_file<T: for<'de> Deserialize<'de>>(path: &Path, label: &str) -> Result<Option<T>> {
@@ -122,6 +144,69 @@ fn load_local_access_lease(path: &Path) -> Result<Option<LocalAccessLease>> {
     Ok(lease)
 }
 
+fn load_local_ready_setup_intent(path: &Path) -> Result<Option<LocalReadySetupIntent>> {
+    let intent: Option<LocalReadySetupIntent> =
+        load_local_state_file(path, "Local last-ready setup intent")?;
+    if let Some(intent) = &intent {
+        if intent.version != 1 {
+            bail!("unsupported Local last-ready setup version {}", intent.version);
+        }
+        if intent.machine_id != LOCAL_MACHINE_NAME {
+            bail!(
+                "Local last-ready setup names machine `{}`; expected `{LOCAL_MACHINE_NAME}`",
+                intent.machine_id
+            );
+        }
+        if intent.image_reference.trim().is_empty() {
+            bail!("Local last-ready setup image reference must not be empty");
+        }
+        if intent.setup_sources.repo.trim().is_empty() {
+            bail!("Local last-ready setup repository must not be empty");
+        }
+    }
+    Ok(intent)
+}
+
+fn local_ready_setup_intent_from_target(record: &LocalTargetRecord) -> Result<LocalReadySetupIntent> {
+    let image_reference = record
+        .image_reference
+        .clone()
+        .ok_or_else(|| anyhow!("Local target state is missing its machine image reference"))?;
+    let network = record
+        .network
+        .clone()
+        .ok_or_else(|| anyhow!("Local target state is missing network policy identity"))?;
+    let setup_sources = record
+        .setup_sources
+        .clone()
+        .ok_or_else(|| anyhow!("Local target state is missing setup source references"))?;
+    Ok(LocalReadySetupIntent {
+        version: 1,
+        machine_id: LOCAL_MACHINE_NAME.to_string(),
+        image_reference,
+        requested_cpus: record.requested_cpus,
+        requested_memory: record.requested_memory.clone(),
+        network,
+        setup_sources,
+    })
+}
+
+fn local_target_record_from_ready_intent(
+    intent: &LocalReadySetupIntent,
+    setup_state: LocalSetupState,
+) -> LocalTargetRecord {
+    LocalTargetRecord {
+        version: 1,
+        machine_id: LOCAL_MACHINE_NAME.to_string(),
+        setup_state,
+        image_reference: Some(intent.image_reference.clone()),
+        requested_cpus: intent.requested_cpus,
+        requested_memory: intent.requested_memory.clone(),
+        network: Some(intent.network.clone()),
+        setup_sources: Some(intent.setup_sources.clone()),
+    }
+}
+
 #[allow(dead_code)]
 fn save_local_state_file<T: Serialize>(path: &Path, value: &T, label: &str) -> Result<()> {
     let parent = path.parent().ok_or_else(|| anyhow!("{label} path has no parent"))?;
@@ -155,4 +240,17 @@ fn save_local_target_record(path: &Path, record: &LocalTargetRecord) -> Result<(
 #[allow(dead_code)]
 fn save_local_access_lease(path: &Path, lease: &LocalAccessLease) -> Result<()> {
     save_local_state_file(path, lease, "Local access lease")
+}
+
+fn save_local_ready_setup_intent(path: &Path, intent: &LocalReadySetupIntent) -> Result<()> {
+    save_local_state_file(path, intent, "Local last-ready setup intent")
+}
+
+fn remove_local_access_lease(path: &Path) -> Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error)
+            .with_context(|| format!("failed to remove Local access lease at {}", path.display())),
+    }
 }

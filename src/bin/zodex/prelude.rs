@@ -82,6 +82,7 @@ const ZODEX_SPRITE_ENV: &str = "ZODEX_SPRITE";
 const OPERATOR_SPRITES_REGISTRY_RELATIVE_PATH: &str = ".config/zodex/sprites.json";
 const LOCAL_TARGET_STATE_RELATIVE_PATH: &str = ".config/zodex/local-target.json";
 const LOCAL_ACCESS_LEASE_RELATIVE_PATH: &str = ".config/zodex/local-access-lease.json";
+const LOCAL_LAST_READY_SETUP_RELATIVE_PATH: &str = ".config/zodex/local-last-ready-setup.json";
 const LOCAL_MACHINE_NAME: &str = "zodex-local";
 const GITHUB_API_BASE: &str = "https://api.github.com";
 const GITHUB_API_VERSION: &str = "2022-11-28";
@@ -311,6 +312,8 @@ enum LocalCommand {
     },
     /// Revoke MCP access and stop the Local machine while preserving its disk.
     Stop,
+    /// Permanently erase Local machine storage and recreate it from the last known-good setup intent.
+    Reset,
     /// Inspect Local configuration and Apple Container machine state without changing it.
     Status,
     #[command(hide = true)]
