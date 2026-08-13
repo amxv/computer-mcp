@@ -42,11 +42,52 @@ fn zodex_github_mode_yolo_help_exposes_expected_flags() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
 
+    assert!(stdout.contains("--local"));
     assert!(stdout.contains("--sprite"));
+    assert!(stdout.contains("--org"));
     assert!(stdout.contains("--repo"));
     assert!(stdout.contains("--ttl"));
     assert!(stdout.contains("--no-ttl"));
     assert!(stdout.contains("[default: 2h]"));
+}
+
+#[test]
+fn zodex_github_mode_default_and_status_expose_local_selector() {
+    for command in ["default", "status"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_zodex"))
+            .args(["github", "mode", command, "--help"])
+            .output()
+            .expect("run github mode subcommand help");
+        assert!(output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("--local"), "missing --local on {command}");
+        assert!(stdout.contains("--sprite"), "missing --sprite on {command}");
+        assert!(stdout.contains("--org"), "missing --org on {command}");
+    }
+}
+
+#[test]
+fn zodex_github_mode_local_and_sprite_selectors_are_mutually_exclusive() {
+    for args in [
+        vec!["github", "mode", "yolo", "--local", "--sprite", "dev"],
+        vec!["github", "mode", "default", "--local", "--sprite", "dev"],
+        vec!["github", "mode", "status", "--local", "--sprite", "dev"],
+        vec!["github", "mode", "status", "--local", "--org", "team"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_zodex"))
+            .args(&args)
+            .output()
+            .expect("run conflicting github mode selectors");
+        assert!(
+            !output.status.success(),
+            "conflicting selectors unexpectedly parsed: {args:?}"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("cannot be used with"),
+            "unexpected clap error: {stderr}"
+        );
+    }
 }
 
 #[test]

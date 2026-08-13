@@ -400,6 +400,9 @@ enum GithubCommand {
 #[derive(Debug, Subcommand)]
 enum GithubModeCommand {
     Yolo {
+        /// Target the configured persistent Local Apple Silicon guest.
+        #[arg(long, default_value_t = false, conflicts_with_all = ["sprite", "org"])]
+        local: bool,
         #[arg(long)]
         sprite: Option<String>,
         #[arg(long)]
@@ -412,12 +415,18 @@ enum GithubModeCommand {
         no_ttl: bool,
     },
     Default {
+        /// Target the configured persistent Local Apple Silicon guest.
+        #[arg(long, default_value_t = false, conflicts_with_all = ["sprite", "org"])]
+        local: bool,
         #[arg(long)]
         sprite: Option<String>,
         #[arg(long)]
         org: Option<String>,
     },
     Status {
+        /// Target the configured persistent Local Apple Silicon guest.
+        #[arg(long, default_value_t = false, conflicts_with_all = ["sprite", "org"])]
+        local: bool,
         #[arg(long)]
         sprite: Option<String>,
         #[arg(long)]

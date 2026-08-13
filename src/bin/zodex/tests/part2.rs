@@ -200,9 +200,12 @@
         let script = github_yolo_agent_git_repair_script();
 
         assert!(script.contains(r#"helper_cmd="/usr/local/bin/zodex-agent --config /etc/zodex/config.toml git-credential-helper""#));
-        assert!(script.contains(r#"sudo -u zodex-agent env HOME="/home/zodex-agent" git config --global --replace-all credential.https://github.com.helper "$helper_cmd""#));
-        assert!(script.contains(r#"sudo -u zodex-agent env HOME="/home/zodex-agent" git config --global credential.https://github.com.useHttpPath true"#));
-        assert!(script.contains(r#"sudo -u zodex-agent env HOME="/home/zodex-agent" git config --global --replace-all url."zodex::https://github.com/".pushInsteadOf "https://github.com/""#));
+        assert!(script.contains(r#"agent_gitconfig="$agent_home/.gitconfig""#));
+        assert!(script.contains(r#"sudo git config --file "$agent_gitconfig" --replace-all credential.https://github.com.helper "$helper_cmd""#));
+        assert!(script.contains(r#"sudo git config --file "$agent_gitconfig" credential.https://github.com.useHttpPath true"#));
+        assert!(script.contains(r#"sudo git config --file "$agent_gitconfig" --replace-all url."zodex::https://github.com/".pushInsteadOf "https://github.com/""#));
+        assert!(script.contains(r#"sudo chown zodex-agent:zodex-agent "$agent_gitconfig""#));
+        assert!(!script.contains("sudo -u zodex-agent"));
         assert!(!script.contains(".insteadOf https://github.com/"));
     }
 
@@ -210,15 +213,14 @@
     fn yolo_agent_git_inspect_script_reads_direct_push_plumbing() {
         let script = github_yolo_agent_git_inspect_script();
 
-        assert!(
-            script.contains(
-                r#"git config --global --get credential.https://github.com.helper || true"#
-            )
-        );
         assert!(script.contains(
-            r#"git config --global --get credential.https://github.com.useHttpPath || true"#
+            r#"sudo git config --file "$agent_gitconfig" --get credential.https://github.com.helper || true"#
         ));
-        assert!(script.contains(r#"git config --global --get-all url."zodex::https://github.com/".pushInsteadOf || true"#));
+        assert!(script.contains(
+            r#"sudo git config --file "$agent_gitconfig" --get credential.https://github.com.useHttpPath || true"#
+        ));
+        assert!(script.contains(r#"sudo git config --file "$agent_gitconfig" --get-all url."zodex::https://github.com/".pushInsteadOf || true"#));
+        assert!(!script.contains("sudo -u zodex-agent"));
         assert!(script.contains(r#"printf 'helper=%s\n' "$helper""#));
         assert!(script.contains(r#"printf 'use_http_path=%s\n' "$use_http_path""#));
         assert!(script.contains(r#"printf 'push_rewrite=%s\n' "$push_rewrite""#));

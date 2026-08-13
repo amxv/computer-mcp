@@ -199,9 +199,14 @@ fn github_yolo_agent_git_repair_script() -> String {
     let helper = expected_zodex_agent_git_helper();
     format!(
         r#"helper_cmd={helper:?}
-sudo -u {user} env HOME={home:?} git config --global --replace-all credential.https://github.com.helper "$helper_cmd"
-sudo -u {user} env HOME={home:?} git config --global credential.https://github.com.useHttpPath true
-sudo -u {user} env HOME={home:?} git config --global --replace-all url.{rewrite_target:?}.pushInsteadOf {rewrite_source:?}
+agent_home={home:?}
+agent_gitconfig="$agent_home/.gitconfig"
+sudo install -d -m 0750 -o {user} -g {user} "$agent_home"
+sudo git config --file "$agent_gitconfig" --replace-all credential.https://github.com.helper "$helper_cmd"
+sudo git config --file "$agent_gitconfig" credential.https://github.com.useHttpPath true
+sudo git config --file "$agent_gitconfig" --replace-all url.{rewrite_target:?}.pushInsteadOf {rewrite_source:?}
+sudo chown {user}:{user} "$agent_gitconfig"
+sudo chmod 0600 "$agent_gitconfig"
 "#,
         user = ZODEX_AGENT_USER,
         home = ZODEX_AGENT_HOME,
@@ -212,14 +217,14 @@ sudo -u {user} env HOME={home:?} git config --global --replace-all url.{rewrite_
 
 fn github_yolo_agent_git_inspect_script() -> String {
     format!(
-        r#"helper="$(sudo -u {user} env HOME={home:?} git config --global --get credential.https://github.com.helper || true)"
-use_http_path="$(sudo -u {user} env HOME={home:?} git config --global --get credential.https://github.com.useHttpPath || true)"
-push_rewrite="$(sudo -u {user} env HOME={home:?} git config --global --get-all url.{rewrite_target:?}.pushInsteadOf || true)"
+        r#"agent_gitconfig={home:?}/.gitconfig
+helper="$(sudo git config --file "$agent_gitconfig" --get credential.https://github.com.helper || true)"
+use_http_path="$(sudo git config --file "$agent_gitconfig" --get credential.https://github.com.useHttpPath || true)"
+push_rewrite="$(sudo git config --file "$agent_gitconfig" --get-all url.{rewrite_target:?}.pushInsteadOf || true)"
 printf 'helper=%s\n' "$helper"
 printf 'use_http_path=%s\n' "$use_http_path"
 printf 'push_rewrite=%s\n' "$push_rewrite"
 "#,
-        user = ZODEX_AGENT_USER,
         home = ZODEX_AGENT_HOME,
         rewrite_target = GITHUB_PUSH_REWRITE_TARGET,
     )
@@ -257,15 +262,15 @@ fn parse_github_yolo_agent_git_status(raw: &str) -> GithubYoloAgentGitStatus {
     status
 }
 
-fn inspect_github_yolo_agent_git_status(
-    resolved: &ResolvedSprite,
+fn inspect_github_yolo_agent_git_status<T: operator_guest::OperatorGuestTransport>(
+    target: &T,
 ) -> Result<GithubYoloAgentGitStatus> {
     let exec_args = vec![
         "bash".to_string(),
         "-lc".to_string(),
         github_yolo_agent_git_inspect_script(),
     ];
-    let raw = run_sprite_exec(&resolved.name, resolved.org.as_deref(), &exec_args, &[])?;
+    let raw = target.exec_privileged(&exec_args)?;
     Ok(parse_github_yolo_agent_git_status(&raw))
 }
 
@@ -300,6 +305,12 @@ fn build_github_yolo_agent_git_status_lines(status: &GithubYoloAgentGitStatus) -
 
 fn print_github_yolo_agent_git_status(status: &GithubYoloAgentGitStatus) {
     for line in build_github_yolo_agent_git_status_lines(status) {
+        println!("{line}");
+    }
+}
+
+fn print_github_mode_target<T: operator_guest::OperatorGuestTransport>(target: &T) {
+    for line in target.identity_lines() {
         println!("{line}");
     }
 }
@@ -348,24 +359,19 @@ fn print_github_yolo_scope(record: &GithubModeRecord, now_epoch_seconds: u64) {
     }
 }
 
-fn enable_github_yolo_mode(
-    resolved: &ResolvedSprite,
+fn enable_github_yolo_mode<T: operator_guest::OperatorGuestTransport>(
+    target: &T,
     repos: &[String],
     active_ttl: Option<Duration>,
 ) -> Result<()> {
     let next_record = build_github_yolo_mode_record(repos, active_ttl)?;
-    let existing_raw = run_sprite_exec(
-        &resolved.name,
-        resolved.org.as_deref(),
-        &[
-            "bash".to_string(),
-            "-lc".to_string(),
-            format!(
-                "if sudo test -f {GITHUB_MODE_STATE_PATH}; then sudo cat {GITHUB_MODE_STATE_PATH}; fi"
-            ),
-        ],
-        &[],
-    )?;
+    let existing_raw = target.exec_privileged(&[
+        "bash".to_string(),
+        "-lc".to_string(),
+        format!(
+            "if sudo test -f {GITHUB_MODE_STATE_PATH}; then sudo cat {GITHUB_MODE_STATE_PATH}; fi"
+        ),
+    ])?;
     let existing_record = if existing_raw.trim().is_empty() {
         None
     } else {
@@ -378,11 +384,7 @@ fn enable_github_yolo_mode(
         merge_github_yolo_mode_records(existing_record, next_record, current_epoch_seconds()?);
     let raw =
         serde_json::to_string_pretty(&record).context("failed to encode GitHub mode state")?;
-    let mut mode_file = NamedTempFile::new().context("failed to create GitHub mode temp file")?;
-    use std::io::Write as _;
-    mode_file
-        .write_all(raw.as_bytes())
-        .context("failed to write GitHub mode temp file")?;
+    target.write_file_atomic(GITHUB_MODE_REMOTE_TMP_PATH, raw.as_bytes())?;
 
     let repair_agent_git = github_yolo_agent_git_repair_script();
     let exec_args = vec![
@@ -395,20 +397,12 @@ fn enable_github_yolo_mode(
             dest = GITHUB_MODE_STATE_PATH
         ),
     ];
-    run_sprite_exec(
-        &resolved.name,
-        resolved.org.as_deref(),
-        &exec_args,
-        &[(mode_file.path(), GITHUB_MODE_REMOTE_TMP_PATH)],
-    )?;
+    target.exec_privileged(&exec_args)?;
 
-    let agent_git_status = inspect_github_yolo_agent_git_status(resolved)?;
+    let agent_git_status = inspect_github_yolo_agent_git_status(target)?;
 
     println!("github-mode: yolo");
-    println!("sprite: {}", resolved.name);
-    if let Some(org) = resolved.org.as_deref() {
-        println!("org: {org}");
-    }
+    print_github_mode_target(target);
     print_github_yolo_scope(&record, current_epoch_seconds()?);
     println!(
         "ttl: {}",
@@ -433,24 +427,21 @@ fn enable_github_yolo_mode(
     Ok(())
 }
 
-fn disable_github_yolo_mode(resolved: &ResolvedSprite) -> Result<()> {
+fn disable_github_yolo_mode<T: operator_guest::OperatorGuestTransport>(target: &T) -> Result<()> {
     let exec_args = vec![
         "bash".to_string(),
         "-lc".to_string(),
         format!("sudo rm -f {GITHUB_MODE_STATE_PATH}"),
     ];
-    run_sprite_exec(&resolved.name, resolved.org.as_deref(), &exec_args, &[])?;
+    target.exec_privileged(&exec_args)?;
     println!("github-mode: default");
-    println!("sprite: {}", resolved.name);
-    if let Some(org) = resolved.org.as_deref() {
-        println!("org: {org}");
-    }
+    print_github_mode_target(target);
     println!("yolo-state: removed");
     println!("push-grants: unchanged");
     Ok(())
 }
 
-fn print_github_mode_status(resolved: &ResolvedSprite) -> Result<()> {
+fn print_github_mode_status<T: operator_guest::OperatorGuestTransport>(target: &T) -> Result<()> {
     let exec_args = vec![
         "bash".to_string(),
         "-lc".to_string(),
@@ -458,11 +449,8 @@ fn print_github_mode_status(resolved: &ResolvedSprite) -> Result<()> {
             "if sudo test -f {GITHUB_MODE_STATE_PATH}; then sudo cat {GITHUB_MODE_STATE_PATH}; fi"
         ),
     ];
-    let raw = run_sprite_exec(&resolved.name, resolved.org.as_deref(), &exec_args, &[])?;
-    println!("sprite: {}", resolved.name);
-    if let Some(org) = resolved.org.as_deref() {
-        println!("org: {org}");
-    }
+    let raw = target.exec_privileged(&exec_args)?;
+    print_github_mode_target(target);
     if raw.trim().is_empty() {
         println!("github-mode: default");
         println!("direct-git-push: disabled");
@@ -492,7 +480,7 @@ fn print_github_mode_status(resolved: &ResolvedSprite) -> Result<()> {
         return Ok(());
     }
 
-    let agent_git_status = inspect_github_yolo_agent_git_status(resolved)?;
+    let agent_git_status = inspect_github_yolo_agent_git_status(target)?;
 
     println!("github-mode: yolo");
     print_github_yolo_scope(&record, now_epoch_seconds);

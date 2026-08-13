@@ -336,13 +336,18 @@ pub(crate) async fn run() -> Result<()> {
                 }
                 GithubCommand::Mode { command } => match command {
                     GithubModeCommand::Yolo {
+                        local,
                         sprite,
                         org,
                         repos,
                         ttl,
                         no_ttl,
                     } => {
-                        let resolved = resolve_remote_sprite(sprite.as_deref(), org.as_deref())?;
+                        let target = operator_guest::resolve_github_mode_target(
+                            local,
+                            sprite.as_deref(),
+                            org.as_deref(),
+                        )?;
                         let ttl = if no_ttl {
                             None
                         } else if ttl == "2h" {
@@ -350,15 +355,23 @@ pub(crate) async fn run() -> Result<()> {
                         } else {
                             Some(parse_push_grant_ttl(&ttl)?)
                         };
-                        enable_github_yolo_mode(&resolved, &repos, ttl)?;
+                        enable_github_yolo_mode(&target, &repos, ttl)?;
                     }
-                    GithubModeCommand::Default { sprite, org } => {
-                        let resolved = resolve_remote_sprite(sprite.as_deref(), org.as_deref())?;
-                        disable_github_yolo_mode(&resolved)?;
+                    GithubModeCommand::Default { local, sprite, org } => {
+                        let target = operator_guest::resolve_github_mode_target(
+                            local,
+                            sprite.as_deref(),
+                            org.as_deref(),
+                        )?;
+                        disable_github_yolo_mode(&target)?;
                     }
-                    GithubModeCommand::Status { sprite, org } => {
-                        let resolved = resolve_remote_sprite(sprite.as_deref(), org.as_deref())?;
-                        print_github_mode_status(&resolved)?;
+                    GithubModeCommand::Status { local, sprite, org } => {
+                        let target = operator_guest::resolve_github_mode_target(
+                            local,
+                            sprite.as_deref(),
+                            org.as_deref(),
+                        )?;
+                        print_github_mode_status(&target)?;
                     }
                 },
             }
