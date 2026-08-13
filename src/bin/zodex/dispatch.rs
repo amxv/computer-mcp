@@ -212,6 +212,9 @@ pub(crate) async fn run() -> Result<()> {
                 }
             }
         }
+        Commands::Local { command } => match command {
+            LocalCommand::Status => print_local_status()?,
+        },
         Commands::Proxy { command } => match command {
             ProxyCommand::Inspect {
                 sprite,

@@ -80,6 +80,9 @@ const GITHUB_PUSH_REWRITE_SOURCE: &str = "https://github.com/";
 const GITHUB_PUSH_REWRITE_TARGET: &str = "zodex::https://github.com/";
 const ZODEX_SPRITE_ENV: &str = "ZODEX_SPRITE";
 const OPERATOR_SPRITES_REGISTRY_RELATIVE_PATH: &str = ".config/zodex/sprites.json";
+const LOCAL_TARGET_STATE_RELATIVE_PATH: &str = ".config/zodex/local-target.json";
+const LOCAL_ACCESS_LEASE_RELATIVE_PATH: &str = ".config/zodex/local-access-lease.json";
+const LOCAL_MACHINE_NAME: &str = "zodex-local";
 const GITHUB_API_BASE: &str = "https://api.github.com";
 const GITHUB_API_VERSION: &str = "2022-11-28";
 const GITHUB_OAUTH_DEVICE_CODE_URL: &str = "https://github.com/login/device/code";
@@ -156,6 +159,10 @@ enum Commands {
     Sprite {
         #[command(subcommand)]
         command: SpriteCommand,
+    },
+    Local {
+        #[command(subcommand)]
+        command: LocalCommand,
     },
     Proxy {
         #[command(subcommand)]
@@ -260,6 +267,12 @@ enum SpriteCommand {
         #[arg(long)]
         url_auth: Option<String>,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum LocalCommand {
+    /// Inspect Local configuration and Apple Container machine state without changing it.
+    Status,
 }
 
 #[derive(Debug, Subcommand)]

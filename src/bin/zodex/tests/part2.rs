@@ -422,6 +422,10 @@
             Duration::from_secs(2 * 60 * 60)
         );
         assert_eq!(
+            parse_push_grant_ttl("2d").expect("2d should parse"),
+            Duration::from_secs(2 * 24 * 60 * 60)
+        );
+        assert_eq!(
             parse_push_grant_ttl("45").expect("bare seconds should parse"),
             Duration::from_secs(45)
         );
@@ -432,6 +436,204 @@
         assert!(parse_push_grant_ttl("").is_err());
         assert!(parse_push_grant_ttl("0m").is_err());
         assert!(parse_push_grant_ttl("30w").is_err());
+    }
+
+    #[test]
+    fn local_platform_support_is_runtime_classified() {
+        assert_eq!(
+            classify_local_platform("macos", "aarch64"),
+            LocalPlatformSupport::Supported
+        );
+        assert!(matches!(
+            classify_local_platform("linux", "aarch64"),
+            LocalPlatformSupport::Unsupported(message) if message.contains("Apple Silicon macOS")
+        ));
+        assert!(matches!(
+            classify_local_platform("macos", "x86_64"),
+            LocalPlatformSupport::Unsupported(message) if message.contains("Apple Silicon")
+        ));
+    }
+
+    #[test]
+    fn local_provider_missing_is_distinct_from_unsupported() {
+        let availability = probe_apple_provider_with(LocalPlatformSupport::Supported, |_program, _args| {
+            Err(io::Error::new(io::ErrorKind::NotFound, "missing"))
+        });
+        assert_eq!(availability, LocalProviderAvailability::Missing);
+
+        let unsupported = probe_apple_provider_with(
+            LocalPlatformSupport::Unsupported("wrong platform".to_string()),
+            |_program, _args| panic!("unsupported platforms must not invoke provider commands"),
+        );
+        assert_eq!(
+            unsupported,
+            LocalProviderAvailability::Unsupported("wrong platform".to_string())
+        );
+    }
+
+    #[test]
+    fn local_provider_version_and_home_mount_capability_are_classified_from_fixtures() {
+        let version_fixture = r#"[{"version":"0.8.0","buildType":"release","commit":"abc123","appName":"container"}]"#;
+        assert_eq!(
+            parse_apple_system_version(version_fixture).expect("version fixture should parse"),
+            "0.8.0"
+        );
+
+        let mut calls = 0;
+        let ready = probe_apple_provider_with(LocalPlatformSupport::Supported, |_program, args| {
+            calls += 1;
+            if args == ["system", "version", "--format", "json"] {
+                Ok(ProviderCommandOutput {
+                    success: true,
+                    stdout: version_fixture.to_string(),
+                    stderr: String::new(),
+                })
+            } else if args == ["machine", "create", "--help"] {
+                Ok(ProviderCommandOutput {
+                    success: true,
+                    stdout: "--home-mount <home-mount> User home mount (ro, rw, none)".to_string(),
+                    stderr: String::new(),
+                })
+            } else {
+                panic!("unexpected provider args: {args:?}");
+            }
+        });
+        assert_eq!(calls, 2);
+        assert_eq!(
+            ready,
+            LocalProviderAvailability::Ready {
+                version: "0.8.0".to_string()
+            }
+        );
+
+        let incompatible = probe_apple_provider_with(LocalPlatformSupport::Supported, |_program, args| {
+            if args == ["system", "version", "--format", "json"] {
+                Ok(ProviderCommandOutput {
+                    success: true,
+                    stdout: version_fixture.to_string(),
+                    stderr: String::new(),
+                })
+            } else {
+                Ok(ProviderCommandOutput {
+                    success: true,
+                    stdout: "machine create help without isolation option".to_string(),
+                    stderr: String::new(),
+                })
+            }
+        });
+        assert!(matches!(
+            incompatible,
+            LocalProviderAvailability::Incompatible(message)
+                if message.contains("--home-mount")
+        ));
+    }
+
+    #[test]
+    fn apple_machine_command_and_inspect_fixture_match_current_contract() {
+        assert_eq!(
+            apple_machine_inspect_args(LOCAL_MACHINE_NAME),
+            vec!["machine", "inspect", "zodex-local"]
+        );
+        assert_eq!(
+            apple_machine_create_help_args(),
+            vec!["machine", "create", "--help"]
+        );
+
+        let machine = parse_apple_machine_inspect(
+            r#"[{"id":"zodex-local","status":"running","cpus":12,"memory":34359738368,"homeMount":"none","diskSize":68719476736,"ipAddress":"192.0.2.2"}]"#,
+        )
+        .expect("current Apple machine inspect fixture should parse");
+        assert_eq!(machine.id, LOCAL_MACHINE_NAME);
+        assert!(machine_status_is_running(&machine.status));
+        assert_eq!(machine.home_mount, "none");
+        assert_eq!(
+            classify_local_home_mount(&machine.home_mount),
+            LocalHomeMountStatus::Isolated
+        );
+        assert_eq!(
+            classify_local_home_mount("rw"),
+            LocalHomeMountStatus::Unsafe("rw".to_string())
+        );
+        assert_eq!(format_bytes(machine.memory), "32 GiB");
+    }
+
+    #[test]
+    fn local_state_round_trips_with_atomic_private_files() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let target_path = local_target_state_path_from_home(temp.path());
+        let lease_path = local_access_lease_path_from_home(temp.path());
+        let target = LocalTargetRecord {
+            version: 1,
+            machine_id: LOCAL_MACHINE_NAME.to_string(),
+            setup_state: LocalSetupState::Provisioning,
+            image_reference: Some("local/zodex-machine:latest".to_string()),
+            requested_cpus: Some(12),
+            requested_memory: Some("32G".to_string()),
+        };
+        save_local_target_record(&target_path, &target).expect("save target");
+        assert_eq!(
+            load_local_target_record(&target_path).expect("load target"),
+            Some(target.clone())
+        );
+
+        let ready = LocalTargetRecord {
+            setup_state: LocalSetupState::Ready,
+            ..target
+        };
+        save_local_target_record(&target_path, &ready).expect("replace target atomically");
+        assert_eq!(
+            load_local_target_record(&target_path).expect("reload target"),
+            Some(ready)
+        );
+
+        let lease = LocalAccessLease {
+            version: 1,
+            generation: "generation-1".to_string(),
+            created_at_epoch_seconds: 100,
+            expires_at_epoch_seconds: 200,
+            active: true,
+        };
+        save_local_access_lease(&lease_path, &lease).expect("save lease");
+        assert_eq!(
+            load_local_access_lease(&lease_path).expect("load lease"),
+            Some(lease)
+        );
+
+        #[cfg(unix)]
+        {
+            let target_mode = fs::metadata(&target_path).expect("target metadata").permissions().mode() & 0o777;
+            let lease_mode = fs::metadata(&lease_path).expect("lease metadata").permissions().mode() & 0o777;
+            assert_eq!(target_mode, 0o600);
+            assert_eq!(lease_mode, 0o600);
+        }
+    }
+
+    #[test]
+    fn local_state_fails_closed_on_wrong_identity_or_invalid_lease() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let target_path = local_target_state_path_from_home(temp.path());
+        let lease_path = local_access_lease_path_from_home(temp.path());
+        fs::create_dir_all(target_path.parent().expect("target parent")).expect("state dir");
+
+        fs::write(
+            &target_path,
+            r#"{"version":1,"machine_id":"other-machine","setup_state":"ready"}"#,
+        )
+        .expect("write wrong target identity");
+        let target_error = load_local_target_record(&target_path)
+            .expect_err("wrong machine identity must fail closed")
+            .to_string();
+        assert!(target_error.contains("expected `zodex-local`"));
+
+        fs::write(
+            &lease_path,
+            r#"{"version":1,"generation":"generation-1","created_at_epoch_seconds":200,"expires_at_epoch_seconds":100,"active":true}"#,
+        )
+        .expect("write invalid lease");
+        let lease_error = load_local_access_lease(&lease_path)
+            .expect_err("backwards lease must fail closed")
+            .to_string();
+        assert!(lease_error.contains("expiration must be after creation"));
     }
 
     #[test]
