@@ -3,10 +3,10 @@
 ## Planning Basis
 
 - **Repository:** `amxv/zodex`
-- **Checkout inspected:** `/workspace/repos/zodex`
+- **Checkout inspected:** `/Users/ashray/code/amxv/zodex`
 - **Approved branch:** `main`
 - **Planning date:** 2026-08-13
-- **Planning coordinate:** `6f35f14866842b6608887937825680231f90bf46` — a coordinate only; implementation agents must treat current remote code as authoritative.
+- **Current planning coordinate:** `7028bcaa48705a045dfc1b8e47af68a55c27c1a1` — Phase 1 is complete and the hidden Phase 2 setup/provider foundation is present at this coordinate; implementation agents must still treat current remote code as authoritative.
 - **Product specification:** [`local-apple-silicon-runtime-spec-2026-08-13.md`](./local-apple-silicon-runtime-spec-2026-08-13.md)
 - **Current-state research:** [`local-apple-silicon-runtime-sweep-2026-08-13.md`](./local-apple-silicon-runtime-sweep-2026-08-13.md)
 - **Planning protocol:** user-supplied Existing Repository Feature Planning Workflow, read in full.
@@ -31,7 +31,7 @@ OpenAI Secure MCP Tunnel:
 - `https://github.com/openai/tunnel-client/blob/master/docs/permissions.md`
 - `https://github.com/openai/tunnel-client/releases`
 
-These sources were checked on 2026-08-13. Apple Container and the tunnel client are evolving products; implementation must re-check the installed/current versions at the phase where behavior becomes load-bearing.
+These sources were checked on 2026-08-13. Apple Container and the tunnel client are evolving products; implementation must re-check the installed/current versions at the phase where behavior becomes load-bearing. The target Mac subsequently verified Apple Container 1.2.2 on macOS 26.3.1.
 
 ## State of Current System
 
@@ -41,11 +41,15 @@ The existing runtime installer already has a provider-friendly split. `ZODEX_INS
 
 The current GitHub architecture also largely fits Local: reader credentials, `git-remote-zodex`, publisher bundles and YOLO policy can remain guest-side so long as model execution remains unprivileged. The part that does not generalize yet is the **operator transport**: `github_mode.rs` directly accepts `ResolvedSprite` and calls `run_sprite_exec`.
 
+Phase 1 is complete. `zodex local status`, Apple provider parsing/capability classification, `LocalTargetRecord`, `LocalAccessLease`, atomic private state and the shared duration grammar are on `main` and have passed the target-Mac Apple Container 1.2.2 live probe.
+
+Commit `7028bcaa48705a045dfc1b8e47af68a55c27c1a1` also contains the completed non-public Phase 2 foundation: an embedded Ubuntu 24.04/systemd machine recipe, no-home-mount create/reconcile command construction, token-preserving privileged provider exec, stdin-based private file transfer, nonsecret setup-source references, runtime-only guest provisioning, loopback-only daemon configuration, explicit agent/publisher/tunnel identities, post-provision checks and a fail-closed placeholder network gate. `local setup` and `local exec` are deliberately not registered in Clap yet.
+
 The main current mismatches are documented in the Sweep:
 
 - `workdir` is not a security boundary; Local must rely on machine isolation, not path filtering ([Landmine 1](./local-apple-silicon-runtime-sweep-2026-08-13.md#1-workdir-is-not-a-filesystem-security-boundary)).
 - Apple container-machine can map the macOS home by default; that contradicts the spec ([Landmine 2](./local-apple-silicon-runtime-sweep-2026-08-13.md#2-apple-container-machines-default-home-mapping-contradicts-the-requested-boundary)).
-- public Internet with host/private-LAN denial is not yet proven by Apple's documented machine surface ([Landmine 3](./local-apple-silicon-runtime-sweep-2026-08-13.md#3-public-internet-without-private-lan-is-not-currently-proven-by-apple-machine-docs)).
+- Apple Container's built-in shared NAT gives the guest public Internet, macOS and private-LAN reachability; Local must therefore constrain the unprivileged agent inside the machine with a trusted root-owned network namespace rather than relying on the provider network alone ([Landmine 3](./local-apple-silicon-runtime-sweep-2026-08-13.md#3-the-provider-network-is-not-the-agent-network-boundary)).
 - the direct Linux systemd unit omits `User=`/`Group=`, while Sprite Services and process mode explicitly run the agent unprivileged ([Landmine 4](./local-apple-silicon-runtime-sweep-2026-08-13.md#4-the-direct-systemd-unit-does-not-specify-the-agent-user)).
 - runtime-only install deliberately leaves provider service lifecycle outside the installer ([Landmine 5](./local-apple-silicon-runtime-sweep-2026-08-13.md#5-runtime-only-install-deliberately-leaves-provider-lifecycle-outside-the-installer)).
 - current GitHub YOLO installation is Sprite-coupled at the transport boundary ([Landmine 7](./local-apple-silicon-runtime-sweep-2026-08-13.md#7-github-mode-policy-code-is-target-independent-in-concept-but-sprite-coupled-in-transport)).
@@ -68,7 +72,13 @@ After all phases, Zodex has two peer execution targets while retaining one agent
              │                             │
      Sprite public proxy          Secure MCP Tunnel
              │                             │
-      Sprite Services             zodex-tunnel service
+      Sprite Services       root-owned agent network namespace
+             │                  │          │          │
+             │               zodexd     zodex-prd   zodex-tunnel
+             │                  └──────────┴──────────┘
+             │                             │
+             │                 public IPv4-only egress
+             │                  through veth + nftables
              │                             │
              └──────────────┬──────────────┘
                             │
@@ -93,7 +103,11 @@ These names are the canonical concepts implementation agents should preserve acr
 
 **Local machine provider** — the Apple Container adapter responsible for machine capability detection, create/inspect/start/stop/remove, root operator exec and safe data transfer. It does not own MCP schemas or GitHub policy.
 
-**Local guest services** — provider-private systemd services installed into the Local machine:
+**Local agent network namespace** — the single root-owned Linux network namespace that contains `zodexd`, `zodex-prd`, `zodex-tunnel` and every child process they launch. It has a dedicated veth into the trusted root namespace, no provider NIC, IPv6 disabled and interface-scoped nftables forwarding/NAT that permits only public IPv4 destinations. The unprivileged agent cannot configure or leave it.
+
+**Local root control plane** — provider-root execution plus the root namespace, systemd units and network policy inside the Apple machine. It is trusted in V1 and is the only guest context allowed to administer packages, identities, service definitions, namespaces, routes or nftables through operator `zodex local exec` and setup/reconcile operations.
+
+**Local guest services** — provider-private systemd services installed into the Local machine and attached to the Local agent network namespace:
 
 - `zodexd` running as `zodex-agent`;
 - `zodex-prd` running as `zodex-publisher`;
@@ -109,6 +123,8 @@ The tunnel service is disabled/inactive by default. Merely booting the Linux mac
 zodex local setup
   ├─ validate Apple Silicon/macOS/container-machine support
   ├─ create/reconcile one persistent machine with no host-home mount
+  ├─ create/reconcile the root-owned agent network namespace
+  ├─ install interface-scoped public-IPv4-only nftables policy
   ├─ provision runtime-only Zodex guest
   ├─ provision reader/publisher credentials and Git setup
   ├─ install provider-private zodexd/zodex-prd/tunnel services
@@ -117,13 +133,13 @@ zodex local setup
 
 zodex local exec -- <command...>
   ├─ boot machine if necessary
-  ├─ execute operator command with provider root authority
+  ├─ execute operator command with provider root authority outside the agent namespace
   └─ never start the MCP tunnel implicitly
 
 zodex local start --ttl 2d
   ├─ require a finite TTL
   ├─ reconcile stale/expired lease state
-  ├─ verify machine + host/network isolation invariants
+  ├─ verify machine + agent-namespace isolation invariants
   ├─ start/repair zodexd + zodex-prd
   ├─ start tunnel service
   ├─ persist a new generation LocalAccessLease
@@ -148,11 +164,15 @@ The final user-understandable claim is:
 
 > Zodex Local owns an isolated persistent Linux computer running on the Mac. ChatGPT can freely work inside that Linux computer and use the public Internet, but it cannot access macOS or the private LAN.
 
-The machine boundary, not `workdir`, enforces that claim. No macOS home or project folder is mounted into the guest. Host SSH agent, Keychain, Git credentials, shell configuration and container sockets are not forwarded.
+Two boundaries enforce that claim. Apple Container's VM and explicit `homeMount == none` enforce the filesystem/ambient-host boundary. Inside the VM, a trusted root-owned network namespace and nftables policy enforce the network boundary against the unprivileged coding agent. Host SSH agent, Keychain, Git credentials, shell configuration and container sockets are not forwarded.
 
-`zodex-agent` remains unprivileged. It can use its home and `/workspace`, run large builds, install user-space tools and access the Internet. Only operator-side `zodex local exec` has privileged guest administration.
+The agent namespace contains `zodexd`, `zodex-prd`, `zodex-tunnel` and all their descendants. It has no direct provider NIC. Root input policy drops traffic arriving from its veth so the namespace cannot reach the trusted root namespace itself. Forwarding permits only publicly routable IPv4 destinations; private, loopback, link-local, carrier-grade NAT, multicast, reserved/documentation/benchmark destinations and all IPv6 are denied. Rules match the namespace veth interface rather than an agent-controlled source address. Public DNS resolvers are used from inside the namespace so blocking the vmnet gateway does not break name resolution.
 
-`zodex-publisher` remains separate and retains the current writer-key isolation. `zodex-tunnel` is a third restricted service identity so model commands cannot read the OpenAI tunnel runtime credential or make access outlive the host lease.
+`zodex-agent` remains unprivileged. It can use its home and `/workspace`, run large builds, install user-space tools and access the Internet. It has no sudo, `CAP_NET_ADMIN`, `CAP_SYS_ADMIN`, or authority over the namespace/veth/nftables lifecycle. Only operator-side `zodex local exec` has privileged guest administration, and that command intentionally runs in the trusted root namespace.
+
+`zodex-publisher` remains separate and retains the current writer-key isolation. `zodex-tunnel` is a third restricted service identity so model commands cannot read the OpenAI tunnel runtime credential or make access outlive the host lease. Both services share the restricted network namespace because their network activity is reachable from or triggered by the model-facing runtime.
+
+V1 explicitly trusts the Apple machine's Linux kernel and root-owned control plane. It does not claim containment after guest-root or guest-kernel compromise. This is the user-approved trade-off that preserves Apple Container performance while keeping the unprivileged coding agent away from macOS and the private LAN.
 
 ### Final MCP identity
 
@@ -200,7 +220,7 @@ Sprite spellings continue unchanged. When target inference would be ambiguous be
 
 The machine image/build recipe must be embedded or otherwise shipped with the macOS operator binary so release users do not require a source checkout merely to run `local setup`.
 
-#### 3. Keep model execution unprivileged; make `local exec` the privileged operator path
+#### 3. Keep model execution unprivileged and namespaced; make `local exec` the privileged operator path
 
 **One-way security boundary for V1.**
 
@@ -209,7 +229,7 @@ The machine image/build recipe must be embedded or otherwise shipped with the ma
 
 **Why A:** root provides no build-performance advantage. The user explicitly prefers the same one-time environment-setup pattern already used with Sprite.
 
-**Selected:** A.
+**Selected:** A. `zodexd` and its descendants additionally run inside the root-owned Local agent network namespace. Operator `local exec` remains outside that namespace in the trusted root control plane.
 
 `zodex local exec -- sudo apt-get ...` remains accepted UX even if the provider transport itself is already executing as root; the command tokens are passed transparently and `sudo` is present in the base machine image.
 
@@ -245,7 +265,7 @@ The Local setup path should accept the same GitHub App material necessary to rep
 
 For the tunnel credential, prefer a **secret file input/reference**, not a literal key argument. The persisted Local setup record keeps only the source reference/path. Setup copies the secret into a guest file owned only by `zodex-tunnel`; logs/status must never print it.
 
-#### 7. Run Secure MCP Tunnel inside the Local Linux machine as `zodex-tunnel`
+#### 7. Run Secure MCP Tunnel inside the Local agent network namespace as `zodex-tunnel`
 
 **Reversible architecture choice, strongly preferred.**
 
@@ -253,7 +273,7 @@ For the tunnel credential, prefer a **secret file input/reference**, not a liter
 - **B. macOS-side tunnel proxying into a guest port.** Requires an additional host-to-machine transport/port boundary and depends on provider reachability not needed by the product.
 - **C. Make `zodexd` publicly reachable.** Violates the Local/private design and current ChatGPT localhost constraint.
 
-**Why A:** OpenAI ships Linux ARM64 tunnel-client releases and the tunnel is outbound. Keeping it in the guest means the Mac does not need to expose a guest daemon port. A separate OS identity preserves lease/secret authority from model commands.
+**Why A:** OpenAI ships Linux ARM64 tunnel-client releases and the tunnel is outbound. Keeping it in the agent namespace means the Mac does not need to expose a guest daemon port and the tunnel uses the same audited public-only egress path as model commands. A separate OS identity preserves lease/secret authority from model commands.
 
 **Selected:** A.
 
@@ -303,15 +323,20 @@ Manual stop and TTL expiry share one authoritative stop/reconcile path:
 
 Repeated stop is idempotent. An old MCP `session_handle` is expected to become invalid after a stop/restart.
 
-#### 11. Private-LAN denial is a hard provider acceptance gate, not a best-effort guest firewall
+#### 11. Trust the machine root control plane; isolate the unprivileged agent in a dedicated network namespace
 
-**One-way security requirement from the spec.**
+**User-approved V1 security/performance trade-off.**
 
-Current Apple docs do not prove the exact network policy. Implementation must establish a host/provider-enforced mechanism and demonstrate it live before `local setup/start` can be considered safe.
+- **A. Root-owned Linux network namespace, veth and interface-scoped nftables inside the Apple machine.** — **Selected**
+- **B. Per-address macOS PF rules.** Live testing proved guest root can add an alternate source address and bypass them.
+- **C. Whole-Apple-network macOS PF rules.** Avoids that bypass but affects unrelated Apple containers and relies on PF, which Apple does not support as a distributed product API.
+- **D. Replace Apple Container with another VM provider or wait for hostless provider networking.** Stronger against guest-root compromise but adds substantial provider/performance uncertainty and is not selected for V1.
 
-If the current Apple Container version cannot enforce the boundary in a maintainable host-controlled way, the phase becomes **blocked** and the plan must receive an Amendment selecting a different host-enforced networking mechanism/provider arrangement. Do not silently weaken the goal and do not treat a guest-only firewall as authoritative.
+The agent namespace contains `zodexd`, `zodex-prd`, `zodex-tunnel` and all descendants. It has only a dedicated veth, no direct provider NIC and no IPv6. Root-owned nftables rules match ingress from that veth, drop root-namespace input, deny all non-public/special IPv4 forwarding destinations, permit only public IPv4 forwarding, and NAT allowed traffic through the Apple machine's provider interface. Public DNS must not depend on the blocked vmnet gateway.
 
-`local start` must fail closed when its known network/isolation invariants are absent or have drifted.
+The root namespace and operator `local exec` remain trusted and may reach provider/macOS/private networks for administration. `zodex-agent` must have no sudo or capabilities that can change or escape the namespace. Setup and start fail closed if the namespace, service attachment, forwarding, IPv6 denial or nftables policy is absent or drifted.
+
+The accepted threat model is the unprivileged coding agent, not a compromised guest kernel or guest root. Product docs must say this precisely rather than presenting the namespace as a hypervisor boundary.
 
 #### 12. GitHub mode gets a narrow operator-target abstraction, not duplicated Local policy
 
@@ -359,26 +384,23 @@ No `target` field is added to `ExecCommandInput`, `WriteStdinInput` or `ApplyPat
 
 #### A1. Apple Container supports the machine lifecycle shapes documented today on the implementation Mac
 
-- **Unknown:** exact installed/current Apple Container version and whether CLI JSON/inspect shapes match the 2026-08-13 docs.
-- **Working assumption:** implementation targets Apple Silicon + macOS 26 with a container release that includes `container machine` create/run/inspect/start/stop/set/rm and explicit no-home-mount support.
-- **Why reasonable:** those are current first-party documented features and the accepted spec is Apple-Silicon-first.
-- **If false:** Phases 1–2 must amend provider/version requirements before exposing Local setup.
-- **Settled by:** live provider preflight on the target Mac plus deterministic fixture/parser tests.
+- **Known on the implementation Mac:** Apple Container 1.2.2 exposes the required `container machine` create/run/inspect/start/stop/set/rm lifecycle and explicit no-home-mount behavior. Phase 1 fixtures and a live read-only provider probe matched the implemented command/parser shapes.
+- **Ongoing constraint:** setup and acceptance must still fail closed if the installed provider is later upgraded or its capabilities/output drift.
+- **If drift appears:** stop before exposing or mutating Local, capture the current provider evidence, obtain any required user decision and rewrite the canonical provider requirement directly.
 
-#### A2. A host-controlled network arrangement can allow public Internet while denying host/private-LAN access
+#### A2. Ubuntu 24.04 supplies the namespace/nftables primitives needed by the selected boundary
 
-- **Unknown:** exact supported Apple Container/vmnet mechanism for this asymmetric egress policy.
-- **Working assumption:** the Apple/macOS provider layer can enforce it without trusting guest root configuration.
-- **Why reasonable:** Apple's stack is built over host networking/vmnet, but the high-level machine CLI does not document this exact policy.
-- **If false:** Phase 2 blocks and adds a plan Amendment; this may change Local provider/network implementation substantially.
-- **Settled by:** live security probe from the actual Local machine against public Internet, macOS host/gateway and reachable private address space.
+- **Known:** the selected machine recipe can install `iproute2`, `nftables` and systemd support; the trusted provider-root transport can create namespaces, veth devices and root-owned policy before model services start.
+- **Working assumption:** the Apple machine kernel enables the required network namespace, veth, nftables forwarding/NAT and capability controls.
+- **If false:** Phase 2 must stop and the user must choose whether to adjust the machine image/kernel or revisit the provider architecture. Do not fall back to a global permissive guest network.
+- **Settled by:** deterministic provisioning/unit tests in Phase 2 and live Phase 7 probes on the actual `zodex-local` machine, including machine reboot/reconcile.
 
 #### A3. Secure MCP Tunnel remains available with a Linux ARM64 client and Streamable HTTP connector
 
 - **Unknown:** exact stable tunnel-client version when Phase 3 lands.
 - **Working assumption:** current capability remains supported.
 - **Why reasonable:** it is current OpenAI-documented functionality and current releases include Linux ARM64.
-- **If false:** Phase 3 must amend only the ingress mechanism; the Local guest/runtime and MCP schemas should remain unchanged.
+- **If false:** stop Phase 3, present the current primary-source/live evidence and obtain a user decision on the ingress mechanism. Preserve the Local guest/runtime and MCP schemas unless the approved design changes them.
 - **Settled by:** re-reading official docs/releases and a live tunnel session in Phase 3.
 
 #### A4. The operator can provide a tunnel ID and restricted runtime key without giving Zodex an OpenAI admin key
@@ -409,13 +431,13 @@ No `target` field is added to `ExecCommandInput`, `WriteStdinInput` or `ApplyPat
 3. The Local Linux machine does not mount the user's macOS home or any arbitrary macOS project directory, and setup/start verify the no-host-home invariant before granting ChatGPT access.
 4. `/workspace`, `/home/zodex-agent`, repositories, build artifacts and language/package caches live on the Local machine's persistent Linux storage rather than a macOS bind mount.
 5. Stopping and restarting the Local machine preserves an agent-created sentinel, Git repository data and build/cache state in `/workspace`/agent home.
-6. `zodexd` executes MCP commands as `zodex-agent`, and the agent has no general sudo/root capability.
+6. `zodexd` executes MCP commands as `zodex-agent` inside the Local agent network namespace, and the agent has no general sudo/root, `CAP_NET_ADMIN`, `CAP_SYS_ADMIN`, or namespace-control capability.
 7. `zodex-prd` executes as `zodex-publisher`, and `zodex-agent` cannot read the publisher private key or otherwise acquire publisher installation credentials.
-8. The Secure MCP Tunnel runs under a separate restricted guest identity, and `zodex-agent` cannot read the tunnel runtime credential or modify the authoritative host access lease.
-9. `zodex local exec -- <command...>` is an operator-only non-interactive path that can run privileged guest maintenance commands, including the documented `sudo apt-get ...` setup pattern, without exposing that privilege through MCP.
+8. The Secure MCP Tunnel runs under a separate restricted guest identity inside the same Local agent network namespace, and `zodex-agent` cannot read the tunnel runtime credential or modify the authoritative host access lease.
+9. `zodex local exec -- <command...>` is an operator-only non-interactive path that runs in the trusted root namespace and can perform privileged guest maintenance, including the documented `sudo apt-get ...` setup pattern, without exposing that privilege or unrestricted root-network path through MCP.
 10. `zodex local exec` can boot/use the persistent Local machine when necessary but never starts or re-enables the Secure MCP Tunnel by itself.
-11. A successful Local setup verifies normal public-Internet egress from the guest for dependencies such as GitHub/package registries.
-12. Before Local access is accepted, live evidence proves guest access to macOS host services and the private LAN is denied by a host/provider-controlled boundary; inability to prove/enforce that boundary blocks the feature rather than weakening it to guest-only firewalling.
+11. A successful Local setup verifies normal public IPv4 Internet egress from the agent namespace for dependencies such as GitHub/package registries using public DNS rather than the vmnet gateway resolver.
+12. Before Local access is accepted, live evidence proves the unprivileged agent namespace cannot reach its root-namespace gateway, Apple vmnet/macOS services or reachable private-LAN addresses; rules are root-owned, match the namespace veth rather than an agent-controlled source IP, deny all IPv6, survive machine restart/reconciliation, and cannot be inspected or changed by `zodex-agent`.
 13. Local `zodexd` is not broadly exposed on the Mac/LAN; the intended MCP ingress is the separate outbound Secure MCP Tunnel.
 14. `zodex local start` requires an explicit finite `--ttl` and accepts the existing Zodex `s/m/h/d` duration grammar, including `2d`.
 15. `zodex local start --ttl ...` starts/repairs the guest runtime, passes isolation preflight, starts the tunnel, records a durable absolute-expiry lease and reports the resulting Local MCP/tunnel identity without printing secret values.
@@ -444,7 +466,7 @@ No `target` field is added to `ExecCommandInput`, `WriteStdinInput` or `ApplyPat
 38. `zodex local reset` preflights all required setup references and secret files before deleting anything; missing reprovisioning inputs cause a fail-closed error that leaves the current machine intact.
 39. A successful `local reset` revokes access, destroys the Local machine and persistent agent filesystem, recreates/reprovisions the target from saved setup references, and proves pre-reset workspace data is gone.
 40. Optional operator CPU/memory overrides are applied through the Apple provider where supported, reported by status and retained as reset/reprovisioning intent; MCP cannot change them.
-41. A representative large Rust project can build inside Local using the configured Mac-backed CPU/RAM, and its build artifacts/cache remain reusable after a Local stop/start cycle; no numeric speedup over Sprite/native macOS is required.
+41. A representative large Rust project can build inside the agent namespace using the configured Mac-backed CPU/RAM and public dependency access, and its build artifacts/cache remain reusable after a Local stop/start cycle; no numeric speedup over Sprite/native macOS is required.
 42. Local setup/start never stores raw GitHub PEM contents or OpenAI runtime keys in operator JSON state, command output, logs, Git-tracked files or process command lines when a file/secret reference mechanism is available.
 43. The macOS operator release/install path continues to produce and install `aarch64-apple-darwin` Zodex successfully; Local does not require a second distribution mechanism.
 44. Existing Sprite setup, upgrade, service sync, status, logs, proxy and health workflows remain first-class and their current tests continue to pass.
@@ -453,17 +475,29 @@ No `target` field is added to `ExecCommandInput`, `WriteStdinInput` or `ApplyPat
 
 ## Plan Phases
 
+### Delivery model
+
+Phases 2 through 6 are cloud implementation phases. They are deliberately structured so an agent without access to the target Apple Silicon Mac can complete them using current primary-source contracts, checked-in provider fixtures, rendered asset assertions, injected clocks/failures and repository regression tests. A cloud phase may be marked complete without executing Apple Container, Secure MCP Tunnel or an authorized live GitHub push.
+
+Phase 7 is the consolidated local integration, repair and acceptance phase. It runs on the target Apple Silicon Mac and owns every deferred live checklist from Phases 2 through 6. Its agent is expected to edit implementation, tests, packaging and docs when live behavior exposes incorrect assumptions; it is not a read-only verifier. The workstream and any production-ready release claim remain incomplete until Phase 7 passes.
+
+This ordering accepts late integration risk in exchange for allowing continuous cloud implementation. Reduce that risk by keeping provider/systemd/nftables/tunnel behavior behind narrow injectable boundaries and by treating generated command lines, service assets, policy sets, state transitions and failure recovery as deterministic test contracts. Do not add a second architecture solely to make cloud tests easier.
+
 ### Execution protocol
 
 Implementation agents must treat the current remote `main` branch as truth. Before each phase, fetch first, fast-forward safely, preserve newer work and re-open the exact symbols named by that phase. Never reset, force-push or discard another agent's work.
 
-A phase is complete only when its observable capability, phase-specific positive evidence, relevant regressions, required live evidence, applicable docs/generated-contract updates, progress-ledger update, coherent commit, normal push, post-push fetch/remote equality and clean-worktree check are complete.
+For Phases 2 through 6, a phase is complete when its implementation boundary, phase-specific deterministic positive evidence, relevant regressions, applicable docs/generated-contract updates, deferred-integration checklist, progress-ledger update, coherent commit, normal push, post-push fetch/remote equality and clean-worktree check are complete. Missing Apple/OpenAI/GitHub live execution is expected and does not block these cloud phases.
 
-If implementation reality invalidates a load-bearing assumption or approach, add an **Amendment** immediately. Amendments may change implementation technique, never weaken the accepted security/product outcomes. In particular, inability to enforce private-LAN denial is a blocker requiring an architecture amendment, not permission to ship a weaker boundary.
+Phase 7 is complete only when all applicable deferred live evidence, current acceptance criteria, broad validation, packaging/docs checks, integration fixes, ledger update, coherent commit/push and clean remote-equality handoff are complete. A live result may force a Phase 7 implementation fix or a user architecture decision, but it does not retroactively make the cloud ordering invalid.
+
+This package is maintained in place. If implementation reality invalidates a load-bearing assumption or approach, stop, present the evidence and obtain any required user decision, then rewrite the affected canonical sections and phases directly. Do not append an overlay that leaves downstream agents reconciling obsolete instructions. Never weaken the accepted product or explicit V1 trust model merely to make a phase pass.
 
 Do not expose planning phase numbers in user-facing docs or CLI output.
 
 ### Phase 1 — Local provider/state seam and truthful read-only status
+
+**Status:** complete and immutable. Retain this phase as the historical contract for the shipped read-only Local status/provider/state seam. Continue at Phase 2.
 
 #### Files to read before starting
 
@@ -537,38 +571,51 @@ Do not put raw secrets into the Local host records. Define future source-referen
 
 ### Phase 2 — Persistent Local machine setup and privileged operator exec
 
+**Execution environment:** cloud-compatible. Complete the implementation and deterministic contract here; Phase 7 owns first execution and repair on the target Apple Silicon Mac.
+
 #### Files to read before starting
 
-**Current guest provisioning to reuse**
+**Completed foundation at `7028bcaa48705a045dfc1b8e47af68a55c27c1a1`**
 
-- `scripts/install.sh` — `run_runtime_install`, `ensure_service_accounts`, `ensure_dirs_and_config`, `configure_agent_git_identity`, `configure_agent_git_reader_helper`; this is the canonical reusable guest foundation.
-- `src/bin/zodex/sprite_proxy.rs` — `sprite_setup`, `build_sprite_setup_script`, `verify_agent_git_identity`, `verify_reader_git_access`, `verify_publisher_socket_permissions`, `verify_publisher_key_isolation`; copy behavior/verification, not Sprite transport.
-- `src/bin/zodex/status.rs` — `expected_sprite_service_definitions`; preserve the explicit `zodex-agent`/`zodex-publisher` identities.
-- `src/bin/zodex/process.rs` — `daemon_launch_command`, agent/publisher ownership helpers; confirms the non-root contract outside Sprite Services.
-- `src/config.rs` — guest defaults and runtime paths.
+- `src/bin/zodex/local_provider.rs` (read in full) — current provider capability parsing, embedded image build, no-home-mount create/set, inspect, literal-argv root exec and stdin transfer; extend this boundary rather than duplicating container command construction.
+- `src/bin/zodex/local_setup.rs` (read in full) — hidden setup/reconcile transaction, fail-closed placeholder `local_host_network_isolation_gate`, guest provisioning and verification. Replace the placeholder with the selected namespace lifecycle and retain the completed foundation.
+- `src/bin/zodex/local_state.rs` (read in full) — `LocalTargetRecord`, `LocalSetupSources`, atomic persistence and ready/provisioning validation. The ready record must carry enough expected-policy identity/version to diagnose namespace drift without storing secrets.
+- `src/bin/zodex/local_machine.Containerfile`, `local_zodexd.service`, `local_zodex_prd.service` (read in full) — embedded Ubuntu/systemd image and provider-private units that must gain namespace prerequisites/attachment.
+- `src/bin/zodex/tests/part2.rs` (Local tests around provider/setup/state) and `tests/zodex_operator_cli.rs` (Local help) — current hidden-foundation and public-surface evidence.
 
-**Current lifecycle path not to copy blindly**
+**Linux authority and service patterns**
 
-- `src/bin/zodex/lifecycle.rs` — `install`, `start_stack`, `ensure_linux`; understand why Local provider lifecycle must remain outside direct guest lifecycle.
-- `src/bin/zodex/status.rs` — `render_systemd_unit`; Landmine 4 explains why this direct unit is not the Local authority model.
+- `scripts/install.sh` (`run_runtime_install`, service accounts, `/workspace`, Git helper setup) — canonical runtime installation behavior already reused by `local_setup.rs`.
+- `src/bin/zodex/sprite_proxy.rs` (post-provision identity/reader/publisher checks only) — verification depth to preserve without copying Sprite transport.
+- `src/bin/zodex/status.rs` (`expected_sprite_service_definitions`) and `src/bin/zodex/process.rs` (`daemon_launch_command`) — existing explicit agent/publisher identities.
+- `src/config.rs` (bind/workdir/runtime paths) — the daemon remains loopback-bound inside the agent namespace and `/workspace` remains persistent native guest storage.
+- Installed Ubuntu 24.04 `ip-netns`, `nft`, systemd service and sandboxing manuals — confirm the exact available namespace attachment mechanism and boot ordering before finalizing embedded units. Use one root-owned service/script responsibility for namespace/veth/nftables reconciliation; do not scatter commands across every service.
 
-**Provider/state foundation**
+**Research and regressions**
 
-- Current Phase 1 Local provider/state modules and tests — read in full; they are now the provider truth.
-- Sweep sections **Authentication and secret handling**, **External / provider / platform boundaries**, **Existing patterns worth copying**, and Landmines 1–5, 10–12.
-
-**Packaging / runtime availability**
-
-- `.github/workflows/release.yml` — Linux ARM64 runtime and macOS ARM64 operator artifacts.
-- `tests/install_script.rs`, `tests/sprite_scripts.rs` — installer/Sprite regression contracts.
-
-**External provider facts**
-
-- Re-check Apple machine image/create/run documentation, especially `/sbin/init`, home-mount disabling, persistent machine storage, root exec and CPU/memory flags.
+- Sweep sections **Phase 1 and hidden Phase 2 foundation**, **Live Apple Container 1.2.2 network findings**, **Authentication and secret handling**, **Existing patterns worth copying**, and Landmines 1–5, 10–14.
+- `.github/workflows/release.yml`, `tests/install_script.rs`, `tests/sprite_scripts.rs`, `tests/source_file_size.rs` — portable operator build, installer/Sprite behavior and module-size contracts.
+- Re-check installed Apple machine create/run/inspect/start/stop/set/rm shapes before live mutation; Phase 1's observed version is evidence, not permission to assume later upgrades are identical.
 
 #### What to do
 
-Implement `zodex local setup` and `zodex local exec` as the first complete Local machine slice.
+Finish `zodex local setup` and `zodex local exec` as the first complete public Local machine slice. Treat the provider/setup/state work in `7028bcaa48705a045dfc1b8e47af68a55c27c1a1` as completed foundation. Do not rebuild it or retain the placeholder network gate beside the selected implementation.
+
+Add one coherent Local agent-network responsibility, separate from provider command construction and setup orchestration. It owns a stable named Linux network namespace, veth pair, namespace addressing, IPv4 forwarding/NAT, public resolver configuration, IPv6 denial, nftables policy identity/version, systemd boot reconciliation and verification. The substantial area should be split by responsibility rather than growing `local_setup.rs` or `local_provider.rs` toward the source-size limit.
+
+The final topology must satisfy all of these constraints:
+
+- the namespace contains `zodexd`, `zodex-prd`, `zodex-tunnel` and every child process they launch;
+- the namespace has only the Zodex veth and loopback, never the Apple provider `eth0`;
+- the root namespace and `zodex local exec` remain outside the restriction and are trusted;
+- nftables rules are root-owned, live in dedicated Zodex tables/chains, match the Zodex veth interface rather than source address, drop input from that interface to the root namespace and never flush unrelated guest rules;
+- only publicly routable IPv4 forwarding is allowed; deny private, loopback, link-local, carrier-grade NAT, multicast, benchmark/documentation, reserved and other non-public destination space before the allow/NAT path;
+- all IPv6 is disabled or dropped in the agent namespace for V1;
+- DNS from model-facing services resolves through public IPv4 resolvers, not the blocked vmnet gateway;
+- `zodex-agent` has no sudo, network/namespace administration capabilities or writable policy/service assets;
+- the network service is reconciled before any model-facing service starts after machine boot, and readiness fails closed on missing/drifted topology or rules.
+
+Represent destination policy as one reviewed, versioned Zodex non-public IPv4 set rather than scattered shell predicates. At minimum it must cover `0.0.0.0/8`, RFC1918, `100.64.0.0/10`, `127.0.0.0/8`, `169.254.0.0/16`, IETF protocol/special-use blocks, TEST-NET ranges, `198.18.0.0/15`, multicast and `240.0.0.0/4`; compare the final set against the current IANA IPv4 Special-Purpose Address Registry during implementation. Keep nftables default-forward behavior fail closed for traffic arriving from the Zodex veth, with explicit established return traffic and public-destination egress rules. Filter provider-supplied resolvers to globally routable IPv4 addresses; if none remain, use the documented embedded public IPv4 resolver defaults. Policy version, namespace identity and expected interface names belong in nonsecret ready-state verification so drift is diagnosable.
 
 `local setup` must:
 
@@ -579,16 +626,17 @@ Implement `zodex local setup` and `zodex local exec` as the first complete Local
 - apply optional CPU/memory overrides while preserving provider defaults when omitted;
 - reuse the runtime-only Zodex installer for users, binaries, `/workspace`, Git helpers and TLS;
 - provision the same reader/publisher GitHub App model as Sprite using operator-supplied source PEM paths;
-- install **provider-private** Local guest service units with `zodexd` explicitly running as `zodex-agent` and `zodex-prd` explicitly running as `zodex-publisher`;
+- install/reconcile the root-owned Local agent network before enabling model-facing services;
+- install **provider-private** Local guest service units with `zodexd` explicitly running as `zodex-agent` and `zodex-prd` explicitly running as `zodex-publisher`, both ordered after and attached to that namespace;
 - bind Local `zodexd` only to guest-local/loopback addresses needed by the future tunnel, not the host/LAN;
 - create/provision the restricted `zodex-tunnel` identity and required directories so Phase 3 can install/start ingress without widening agent privileges;
-- verify workspace ownership, Git identity, reader access, publisher socket modes and publisher-key isolation using Local provider exec rather than Sprite exec;
-- atomically mark the Local setup record ready only after those checks and the network/isolation gate below pass;
+- verify workspace ownership, Git identity, reader access, publisher socket modes, publisher-key isolation, service namespace attachment and the complete agent network policy using Local provider exec rather than Sprite exec;
+- atomically mark the Local setup record ready only after those checks and live public/private network probes pass;
 - leave ChatGPT/tunnel access inactive.
 
-`local exec -- <tokens...>` must execute operator-controlled commands through the Apple machine provider with privileged/root guest authority. Preserve argument boundaries; do not construct an avoidable shell string that can change caller intent. It may boot a stopped persistent machine as part of provider exec. It must not start the future tunnel or mark Local access active.
+`local exec -- <tokens...>` must execute operator-controlled commands through the Apple machine provider with privileged/root guest authority in the trusted root namespace. Preserve argument boundaries; do not construct an avoidable shell string that can change caller intent. It may boot a stopped persistent machine as part of provider exec. It must not start the future tunnel or mark Local access active. Its broader network access is deliberate operator authority and must never be reused by MCP execution.
 
-Setup should be idempotent/reconciling when rerun on a ready machine: refresh Zodex-owned runtime/service/Git configuration and requested resource settings without deleting `/workspace`, language caches, installed development packages or build outputs.
+Setup should be idempotent/reconciling when rerun on a ready machine: refresh Zodex-owned network/runtime/service/Git configuration and requested resource settings without deleting `/workspace`, language caches, installed development packages or build outputs. Once the complete deterministic implementation and fail-closed preflight/verification contracts pass, register `setup` and `exec` in Clap and update their help/tests. These commands may land on `main` before live acceptance, but the workstream is not release-ready until Phase 7 exercises and repairs them on the target Mac. Do not expose later start/stop/reset or GitHub-Local commands in this phase.
 
 #### Validation strategy
 
@@ -596,23 +644,31 @@ Setup should be idempotent/reconciling when rerun on a ready machine: refresh Zo
 
 - Tests prove machine creation always requests no home mount and never includes a macOS workspace/home bind.
 - Tests prove setup record writes are atomic/permission-controlled and interrupted state cannot be mistaken for ready.
-- Tests prove Local service definitions run `zodexd` as `zodex-agent` and `zodex-prd` as `zodex-publisher`, with tunnel identity separate.
+- Tests prove Local service definitions run `zodexd` as `zodex-agent` and `zodex-prd` as `zodex-publisher`, retain a separate tunnel identity, require the network service and join the same named namespace.
+- Tests prove generated namespace/nftables assets are root-owned in intent, use stable Zodex-only names, match the veth interface, allow only public IPv4 forwarding, deny all IPv6/non-public ranges and never flush unrelated rules.
+- Tests prove failure to create/reconcile/verify the namespace leaves setup non-ready and prevents model-facing service startup.
+- Tests prove public resolver configuration does not depend on the Apple vmnet gateway.
 - Tests prove `local exec` preserves command-token boundaries and cannot be reached through MCP.
 - Tests prove setup/reconcile retains existing ready-workspace state in mocked/provider-fixture paths.
 
-**Required live Apple evidence — hard gate**
+**Deferred Apple integration checklist, owned by Phase 7**
+
+Do not require Apple-machine access to complete Phase 2. Preserve this exact checklist for the Phase 7 local agent and make the deterministic provider/network seams easy to diagnose and repair when it runs.
 
 On a real supported Apple Silicon Mac:
 
 1. provision Local from a clean state;
 2. inspect machine configuration and prove the macOS home is not mounted;
-3. as `zodex-agent`, prove `/workspace` is writable and publisher/tunnel secrets are unreadable;
-4. prove public Internet egress to at least GitHub/package infrastructure works;
-5. prove macOS host services/gateway and the reachable private LAN are denied by a host/provider-controlled boundary;
-6. create an agent-owned persistence sentinel and/or small repository/build artifact, stop the machine through the provider, boot via `local exec`, and prove it remains;
-7. run `zodex local exec -- sudo ...` with a harmless privileged command/package-query smoke and prove operator administration works while agent sudo does not.
+3. prove `zodexd`/publisher and a representative child command share the agent network namespace while provider-root exec uses a different root namespace;
+4. as `zodex-agent`, prove `/workspace` is writable, publisher/tunnel secrets are unreadable, sudo fails and namespace/network administration commands fail for lack of authority;
+5. from the agent namespace, prove public IPv4 DNS and HTTPS access to GitHub and representative package infrastructure work;
+6. from the agent namespace, prove the namespace gateway/root namespace, Apple vmnet gateway/native Mac, reachable private-LAN addresses and IPv6 are unreachable; attempt to add an alternate address/route and prove the unprivileged agent cannot do so;
+7. inspect root-owned topology/rules and prove policy is interface-scoped, not dependent on an agent-controlled source IP;
+8. create an agent-owned persistence sentinel and/or small repository/build artifact, stop the machine through the provider, boot via `local exec`, and prove both the data and network policy are restored before model-facing services;
+9. run `zodex local exec -- sudo ...` with a harmless privileged command/package-query smoke and prove operator administration works outside the agent namespace while agent sudo does not;
+10. rerun setup and prove it reconciles Zodex-owned network/service state without deleting workspace data, packages or caches.
 
-If item 5 cannot be enforced/proven with the current provider architecture, mark Phase 2 **blocked**, update the progress ledger, and add a Plan Amendment before later access phases. Do not mark setup complete with a guest-only firewall workaround.
+If Phase 7 finds that the installed Apple machine kernel lacks namespace/veth/nftables primitives or model-facing services cannot be reliably contained before startup, its local agent must first attempt an in-scope implementation/image/service repair. If the approved architecture is genuinely incompatible, stop and return evidence for a user architecture decision. Never silently expose the provider NIC to model processes.
 
 **Regression evidence**
 
@@ -626,10 +682,12 @@ If item 5 cannot be enforced/proven with the current provider architecture, mark
 - Sprite setup/upgrade scripts and provider lifecycle ownership.
 - Runtime installer behavior for existing Linux/Sprite users.
 - `/workspace` persistence across ordinary Local lifecycle.
-- No-host-mount and private-LAN security acceptance boundary.
+- No-host-mount boundary and the explicit V1 trust model: unprivileged agent isolated, Linux kernel/root control plane trusted.
 - No model-facing privileged Local tool.
 
 ### Phase 3 — Secure MCP ingress and durable TTL start/stop lifecycle
+
+**Execution environment:** cloud-compatible. Implement against injected Local provider/service/tunnel/clock boundaries and current tunnel primary-source contracts. Phase 7 owns live tunnel setup, connection and repair.
 
 #### Files to read before starting
 
@@ -643,7 +701,7 @@ If item 5 cannot be enforced/proven with the current provider architecture, mark
 
 **Local provider/setup state**
 
-- Current Local provider/setup/exec/status modules from Phases 1–2 — read the lifecycle and ready-state symbols in full.
+- Current Local provider/setup/exec/status/network modules from Phases 1–2 — read the lifecycle, ready-state, namespace attachment and policy-verification symbols in full.
 - Sweep sections **Current data / event / control flow**, **Concurrency / ordering / recovery**, and Landmines 9–12, 16.
 
 **External tunnel facts**
@@ -655,15 +713,15 @@ If item 5 cannot be enforced/proven with the current provider architecture, mark
 
 Complete the Local access lifecycle with `zodex local start --ttl`, `zodex local stop` and full access/status reporting.
 
-Extend Local setup/reconcile to install a **pinned reviewed stable** Linux ARM64 tunnel client and a provider-owned tunnel configuration/service. Do not fetch an unversioned “latest” executable on every start. Store the OpenAI runtime key in a guest secret file readable only by `zodex-tunnel`; the tunnel configuration references the file rather than embedding the key in argv/logs. The `zodex-agent` account must not be able to read or control that secret/service directly.
+Extend Local setup/reconcile to install a **pinned reviewed stable** Linux ARM64 tunnel client and a root-owned tunnel configuration/service. Do not fetch an unversioned “latest” executable on every start. Store the OpenAI runtime key in a guest secret file readable only by `zodex-tunnel`; the tunnel configuration references the file rather than embedding the key in argv/logs. The `zodex-agent` account must not be able to read or control that secret/service directly.
 
-Configure the tunnel connector to the existing guest-local Zodex MCP endpoint. Keep `zodexd`'s tool surface and auth unchanged.
+Attach the tunnel service to the same Local agent network namespace as `zodexd` and `zodex-prd`, and configure it to the namespace-local Zodex MCP endpoint. Its outbound connection therefore uses the same public-IPv4-only policy. Keep `zodexd`'s tool surface and auth unchanged.
 
 `local start` must require `--ttl`. Its ordered behavior is:
 
 1. reconcile any expired/stale previous lease before exposing anything;
-2. boot/reconcile the machine and provider-private `zodexd`/`zodex-prd` services;
-3. re-check no-host-mount/network/security preconditions;
+2. boot/reconcile the machine, root-owned network namespace and provider-private `zodexd`/`zodex-prd` services;
+3. re-check no-host-mount, namespace membership, veth/nftables/public-DNS policy and service-identity preconditions;
 4. verify guest MCP health locally;
 5. start the tunnel service and prove readiness;
 6. atomically persist a new generation `LocalAccessLease` with absolute expiry;
@@ -687,11 +745,15 @@ The lease worker must be generation-aware. A renewed `local start` cannot be sto
 - Tests prove machine boot/operator exec alone never starts the tunnel.
 - Tests prove stop ordering revokes tunnel before machine stop and status truthfully represents intermediate failures.
 - Tests prove tunnel secret material is not serialized into Local host records or emitted by status/error rendering.
+- Tests prove the tunnel service joins the same agent namespace, cannot start before its network policy is verified and never receives the provider interface directly.
 - MCP contract snapshot/registration tests prove exactly the existing three tools and schemas/annotations remain unchanged.
 
-**Required live evidence**
+**Deferred Apple/OpenAI integration checklist, owned by Phase 7**
+
+Do not require a target Mac, live tunnel credential or ChatGPT connection to complete Phase 3. Preserve these scenarios as final local integration obligations:
 
 - Start a Local access window with a short safe TTL and connect ChatGPT through the dedicated Local tunnel/app identity.
+- While access is active, prove the tunnel, daemon, publisher and representative agent child share the expected namespace inode; prove public tunnel/GitHub traffic works while macOS, the vmnet gateway, private LAN and IPv6 remain unreachable from that namespace.
 - Through MCP, run `id`/`pwd`, a long-running command followed by `write_stdin` polling, and a targeted patch; prove identity/path/output parity with Sprite expectations.
 - Manually stop while a long-running process exists; prove the endpoint becomes unavailable and the pre-stop session handle cannot resume after the next start.
 - Run a short TTL to actual expiry; prove the tunnel becomes unreachable and the machine stops without the initiating CLI process remaining open.
@@ -707,12 +769,15 @@ The lease worker must be generation-aware. A renewed `local start` cannot be sto
 
 - Exact model-facing tool names/schemas/descriptions/annotations.
 - `zodex-agent` authority boundary.
+- Root-owned namespace policy and the requirement that every model-reachable service and descendant stays inside it.
 - No automatic Local MCP access from boot or `local exec`.
 - Persistent `/workspace` across stop/expiry.
 - Manual stop and expiry sharing one authority/order.
 - Stable separation between Sprite and Local endpoint identity.
 
 ### Phase 4 — GitHub mode target parity with `--local`
+
+**Execution environment:** cloud-compatible. Complete target abstraction, policy reuse, CLI and deterministic transport tests without requiring a live Local machine or GitHub write target.
 
 #### Files to read before starting
 
@@ -758,7 +823,7 @@ Implement target resolution rules:
 - if Local and Sprite are both eligible/plausible, fail closed with guidance to pass `--local` or `--sprite`;
 - never write YOLO state to both targets from one command.
 
-Do not have `github mode --local` implicitly call `local start`, extend the Local access TTL or otherwise couple GitHub authority to MCP/machine access. It may use operator provider exec to modify the stopped/running Local machine as required by the provider, but it must not enable the tunnel.
+Do not have `github mode --local` implicitly call `local start`, extend the Local access TTL or otherwise couple GitHub authority to MCP/machine access. It may use trusted provider-root exec outside the agent namespace to modify the stopped/running Local machine as required, but it must not enable the tunnel, start model-facing services or weaken/reconfigure the agent network policy.
 
 Scope this phase to the **user-approved GitHub mode** Local selector. Do not broaden every grant/list/revoke command merely for symmetry unless current code proves a shared refactor is required to keep one correct path; any such scope consequence must be recorded in the ledger and remain behavior-compatible.
 
@@ -771,14 +836,17 @@ Scope this phase to the **user-approved GitHub mode** Local selector. Do not bro
 - Shared target tests prove mode JSON/agent Git repair is installed equivalently through Sprite and Local transports without duplicated policy.
 - Existing merge/expiry tests prove repo TTL behavior remains unchanged.
 - Tests prove GitHub mode operations do not alter the Local access lease/tunnel state.
+- Tests prove Local GitHub mode transport does not alter namespace/nftables state or run an agent command through the trusted root namespace.
 
-**Live evidence**
+**Deferred Local/GitHub integration checklist, owned by Phase 7**
+
+Do not require live Local/GitHub authority to complete Phase 4. Phase 7 must run the following only with explicitly authorized disposable scope:
 
 - On a configured Local target, enable repo-scoped YOLO, verify `status --local`, then return to default and verify only YOLO state is removed.
 - With an explicitly authorized disposable GitHub branch/ref, prove a normal agent `git push` succeeds while scoped Local YOLO is active and fails once default/expiry closes it.
 - With Sprite and Local both configured, prove explicit mode operations affect only the named target and an omitted selector fails as ambiguous.
 
-If no disposable GitHub write target is explicitly authorized, record that precise live-evidence gap rather than pushing to an arbitrary repository/ref.
+If no disposable GitHub write target is explicitly authorized during Phase 7, record that precise final acceptance gap rather than pushing to an arbitrary repository/ref.
 
 **Regression evidence**
 
@@ -795,6 +863,8 @@ If no disposable GitHub write target is explicitly authorized, record that preci
 - No host `gh`, SSH agent or Git credential forwarding.
 
 ### Phase 5 — Reset, reprovisioning and lifecycle recovery hardening
+
+**Execution environment:** cloud-compatible. Implement reset/recovery through injected provider, filesystem, clock and service failures. Phase 7 owns destructive-but-authorized disposable Local-machine execution and repair.
 
 #### Files to read before starting
 
@@ -824,7 +894,7 @@ Reset must load the last ready setup intent and **preflight everything necessary
 - reader/publisher source PEM paths;
 - tunnel runtime-key source file/reference and tunnel identity;
 - resource overrides;
-- any other nonsecret setup reference introduced by Amendments.
+- the expected Local agent-network policy version/topology and any other nonsecret setup reference required by the current canonical setup contract.
 
 If any required source is missing/unreadable, fail without stopping/destroying an otherwise healthy machine unless the user separately requested `stop`.
 
@@ -835,6 +905,7 @@ Harden setup and status around:
 - machine exists but operator record is missing/incomplete;
 - record says ready but provider machine is missing;
 - partial guest provisioning/service failure;
+- missing namespace/veth/nftables state, policy-version drift or a model-facing service found outside the namespace;
 - tunnel process dies during an active lease;
 - machine is externally stopped during a lease;
 - stale lease worker/state after manual provider actions;
@@ -852,13 +923,17 @@ Prefer truthful repairable states over automatic destructive recovery. Setup can
 - Tests prove reset reuses the canonical setup path and leaves access inactive.
 - Tests prove setup repair does not erase existing `/workspace`, while reset does.
 - Tests prove optional CPU/memory intent is preserved/reapplied and status reflects drift where provider inspection differs.
+- Tests prove missing/drifted namespace policy is reported fail closed, repaired through the one network reconciler and verified before model-facing services can restart.
 
-**Live evidence**
+**Deferred lifecycle integration checklist, owned by Phase 7**
+
+Do not require a live reset or machine fault to complete Phase 5. Preserve these checks for the target Mac:
 
 - Create a clear pre-reset sentinel/repo/build cache, run reset with valid inputs, and prove the old state is gone while guest identities/Git/tunnel isolation are re-established.
 - Temporarily make a reprovisioning source unavailable, run reset, and prove the original machine/storage was not deleted.
 - Externally stop the machine during an active short lease and prove `local status`/next `stop`/`start` reconciles rather than reporting false active access.
 - Re-run setup on a machine containing user-installed development packages and workspace data and prove those survive reconciliation.
+- Remove or corrupt one Zodex-owned namespace/policy component, reboot or rerun setup, and prove reconciliation restores the exact topology before agent/tunnel services become active.
 
 **Regression evidence**
 
@@ -872,9 +947,11 @@ Prefer truthful repairable states over automatic destructive recovery. Setup can
 - No destructive reset before all recreation inputs are proven available.
 - Access stays off after reset until explicit start.
 - Setup remains non-destructive/idempotent for a ready machine.
-- Host/network/secret isolation is re-proven after recreation.
+- No-host-mount, namespace/network and secret isolation are re-proven after recreation.
 
 ### Phase 6 — Public docs, packaging and Sprite-preserving product integration
+
+**Execution environment:** cloud-compatible. Complete the public command surface, documentation, embedded assets and packaging contracts from current code. Phase 7 performs clean-artifact installation on the real Mac and fixes any platform-specific packaging drift.
 
 #### Files to read before starting
 
@@ -908,14 +985,15 @@ Integrate Local into the supported public product story without turning Sprite i
 
 Add task-oriented Local documentation that explains:
 
-- Apple Silicon/macOS/container-machine prerequisites;
+- Apple Silicon/macOS/container-machine prerequisites plus required Linux namespace/veth/nftables capability in the Local machine;
 - one-time `local setup` and required GitHub/tunnel inputs;
 - optional CPU/memory sizing;
 - `local exec` as operator-only environment administration;
 - persistent `/workspace`/caches and the no-host-mount boundary;
 - `local start --ttl`, `local stop`, truthful status and `local reset`;
 - separate `Zodex Local` vs `Zodex Sprite` ChatGPT MCP app identities;
-- Internet egress vs host/private-LAN isolation;
+- public IPv4 Internet egress vs macOS/private-LAN/IPv6 isolation through the root-owned agent network namespace;
+- the explicit V1 trust model: the unprivileged coding agent is isolated, while the Local machine kernel and root control plane are trusted;
 - `github mode --local` as a separate permission from Local machine access;
 - recovery/troubleshooting for unsupported provider, interrupted setup, expired access and missing reprovisioning inputs.
 
@@ -933,8 +1011,15 @@ Do not edit the changelog solely as implementation diary; follow `AGENTS.md` rel
 
 - CLI help tests cover the complete final Local command surface and `github mode --local`.
 - Docs build/check proves all added pages/navigation/references resolve.
-- A clean macOS operator installation from the release artifact can run `zodex local status` and reconstruct any embedded Local setup assets without a repo checkout.
+- Deterministic package/manifest tests prove the macOS operator artifact includes or can reconstruct every embedded Local setup asset without repository-relative runtime reads.
 - Task-oriented docs are reviewed against the actual current CLI output, not planned names.
+- Security docs and help do not imply containment of compromised guest root/kernel, and describe operator `local exec` as intentionally outside the restricted namespace.
+
+**Deferred packaging integration checklist, owned by Phase 7**
+
+- Install a clean macOS operator artifact without a repo checkout.
+- Run `zodex local status` and prove the installed binary can reconstruct/use every embedded Local setup asset.
+- Exercise the documented Local quickstart against the actual accepted CLI and repair stale wording or packaging paths before release readiness.
 
 **Regression evidence**
 
@@ -949,15 +1034,17 @@ Do not edit the changelog solely as implementation diary; follow `AGENTS.md` rel
 - No planning/phase terminology leaks into product docs.
 - No secret examples contain real credential material.
 - One operator install/release path remains sufficient.
-- Local docs do not imply host-folder access, agent root or automatic GitHub permission.
+- Local docs do not imply host-folder access, agent root, hostile-kernel containment or automatic GitHub permission.
 
-### Phase 7 — Independent end-to-end acceptance, security and performance hardening
+### Phase 7 — Apple Silicon integration, live repair and final acceptance
+
+**Execution environment:** target Apple Silicon Mac required. This is an implementation phase as well as the final acceptance gate.
 
 #### Files to read before starting
 
 **Acceptance contract**
 
-- This implementation plan — read in full including all Amendments and all 46 acceptance criteria.
+- This implementation plan — read the current canonical document in full, including all 46 acceptance criteria.
 - `gg/local-apple-silicon-runtime/local-apple-silicon-runtime-spec-2026-08-13.md` — re-check approved product/security decisions.
 - `gg/local-apple-silicon-runtime/local-apple-silicon-runtime-progress.md` — read Current handoff and all workstream entries, but treat claims as evidence to verify rather than proof.
 
@@ -969,19 +1056,34 @@ Do not edit the changelog solely as implementation diary; follow `AGENTS.md` rel
 
 **Research risks**
 
-- Sweep Landmines 1–18 and factual gaps 1–5.
+- Sweep Landmines 1–18 and the current factual gaps.
 - Re-check current Apple Container and OpenAI tunnel primary documentation/version notes before live acceptance.
+- Re-read every **Deferred ... integration checklist, owned by Phase 7** in Phases 2 through 6 and turn it into the working run order. Do not assume a cloud phase's deterministic success proves its live behavior.
 
 #### What to do
 
-Perform an independent Crucible-style acceptance/hardening pass against the **current code**, not the progress ledger. Map every acceptance criterion to actual deterministic/live evidence and close missing defect-class regressions before declaring the workstream complete.
+Integrate the cloud-completed implementation against the real Apple provider, machine, tunnel and authorized external state. This phase must diagnose and edit the code when commands, parser assumptions, Linux assets, systemd ordering, namespace/nftables behavior, tunnel lifecycle, packaging or docs fail live. It is explicitly not limited to running a checklist or reporting failures.
+
+Proceed in dependency order so failures remain easy to localize:
+
+1. install/build the current operator artifact and reconcile provider prerequisites;
+2. complete the Phase 2 deferred checklist for setup, namespace isolation, `local exec`, persistence and idempotent repair;
+3. fix all discovered Phase 2 defects and rerun its deterministic plus live evidence before enabling ingress;
+4. complete and repair the Phase 3 tunnel/start/stop/TTL checklist;
+5. complete and repair the Phase 4 Local GitHub-mode checklist using only explicitly authorized write scope;
+6. complete and repair the Phase 5 reset/recovery checklist using disposable/reprovisionable Local state;
+7. complete the Phase 6 clean-artifact/docs/packaging checklist;
+8. map the final current branch to all 46 acceptance criteria and run the broad regression/security/performance pass.
+
+Do not keep going past a failed network or privilege boundary merely to collect later evidence. Repair it, add a deterministic regression test where practical, and repeat the affected live slice first. If live reality invalidates the approved architecture rather than exposing an implementation defect, stop with evidence for a user decision and rewrite the canonical package after that decision.
 
 On a supported Apple Silicon Mac, exercise the product from a clean or safely reset state through the real operator CLI and real provider. Acceptance must include:
 
 - clean setup with no macOS home/project mounts;
 - agent/publisher/tunnel OS identity and secret-read barriers;
-- public Internet allowed while macOS/private LAN denied;
-- operator `local exec` administration without agent root;
+- public IPv4 Internet allowed from the agent namespace while its root-namespace gateway, Apple vmnet/macOS, private LAN and IPv6 are denied;
+- verified namespace membership for daemon, publisher, tunnel and representative descendants, plus proof that the unprivileged agent lacks sudo and namespace/network administration capability;
+- operator `local exec` administration in the trusted root namespace without exposing that authority to MCP;
 - persistent workspace/cache behavior across stop/start;
 - Secure MCP Tunnel connection through the actual Zodex Local ChatGPT app;
 - exact three-tool schema/behavior parity, including long-running session polling and patching;
@@ -992,18 +1094,19 @@ On a supported Apple Silicon Mac, exercise the product from a clean or safely re
 - simultaneous Sprite and Local target identity with no cross-routing;
 - representative large Rust build using the configured Local resources and reuse of build artifacts after stop/start.
 
-Run the repository's broad validation gate and any docs/package checks introduced by the implementation. Review the final source for leaked keys, PEMs, tunnel configuration secrets, local host paths/private test data and temporary security probes. Remove temporary migration/compatibility paths that are not part of the one intended final architecture.
+Run the repository's broad validation gate and any docs/package checks introduced by the implementation after the final live fixes. Review the final source for leaked keys, PEMs, tunnel configuration secrets, local host paths/private test data and temporary security probes. Remove temporary migration/compatibility paths and integration-only diagnostics that are not part of the one intended final architecture.
 
-Record a workstream-local acceptance matrix/evidence summary if it materially helps map all 46 criteria. A criterion dependent on unavailable provider/authorized live state must be recorded truthfully as unproven rather than silently marked PASS.
+Record a workstream-local acceptance matrix/evidence summary if it materially helps map all 46 criteria. A criterion dependent on unavailable provider/authorized live state must be recorded truthfully as unproven rather than silently marked PASS. Test the approved V1 boundary against an unprivileged coding agent; do not claim that it contains a compromised guest kernel or trusted guest root control plane.
 
 #### Validation strategy
 
 **Positive evidence**
 
-- Every acceptance criterion has explicit current deterministic or live evidence, or a truthful unresolved/unsupported result that matches a Plan Amendment.
+- Every acceptance criterion has explicit current deterministic or live evidence. Any unresolved/unsupported result is recorded truthfully and prevents the workstream from being declared complete unless the criterion itself explicitly allows an authorized-environment gap.
+- Every deferred integration checklist from Phases 2 through 6 has a recorded outcome against the final code, including fixes made during this phase.
 - `bash scripts/check.sh` passes on the final branch.
 - Relevant docs build/check and macOS release/install smoke pass.
-- Security probes demonstrate the actual host boundary rather than only inspecting configuration strings.
+- Security probes demonstrate the actual namespace boundary, including service attachment, denied non-public routes and lack of agent capability, rather than only inspecting configuration strings.
 - Representative Rust build/persistence evidence proves the motivating large-build workflow without asserting an invented benchmark target.
 
 **Regression evidence**
@@ -1022,4 +1125,4 @@ Record a workstream-local acceptance matrix/evidence summary if it materially he
 
 ## Amendments
 
-None yet.
+None. By user direction, this package is maintained by rewriting canonical sections in place after a decision rather than appending overlay instructions.

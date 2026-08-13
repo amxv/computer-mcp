@@ -19,7 +19,7 @@ Zodex Local should feel to ChatGPT almost exactly like the existing Sprite-backe
 - same persistent agent-owned Linux filesystem model
 - same GitHub reader/publisher/YOLO behavior wherever possible
 
-The important difference is infrastructure: instead of running the agent computer on Sprites.dev, Zodex Local runs a persistent isolated Linux machine on the user's Apple Silicon Mac and uses the Mac's CPU, RAM, and local storage performance.
+The important difference is infrastructure: instead of running the agent computer on Sprites.dev, Zodex Local runs a persistent isolated Linux machine on the user's Apple Silicon Mac and uses the Mac's CPU, RAM, and local storage performance. Inside that machine, model-facing services run in a root-owned restricted network namespace so they retain normal public Internet access without receiving a route to macOS or the private LAN.
 
 The primary motivation is large local builds, especially Rust projects, where remote Sprite resources are insufficient but the user still wants the same ChatGPT-native Zodex workflow.
 
@@ -360,7 +360,18 @@ Mac credentials/Keychain    denied
 private LAN                 denied by default
 ```
 
-Critical host/network restrictions should be enforced outside the untrusted guest, not merely by firewall configuration that guest processes could potentially influence.
+For V1, the explicit trust boundary is:
+
+- `zodex-agent` and every model-launched process are untrusted;
+- `zodex-publisher` and `zodex-tunnel` retain separate identities and secrets;
+- the Apple Container Linux kernel and root-owned Local control plane are trusted;
+- macOS and Apple Container remain responsible for the VM/filesystem boundary.
+
+The root-owned Local control plane must place `zodexd`, `zodex-prd`, `zodex-tunnel`, and every process they launch inside one dedicated Linux network namespace. That namespace has only a private veth connection to the trusted root namespace. Root-owned nftables rules match traffic arriving from the veth, drop access to the root namespace itself in an input chain, allow forwarding only to publicly routable IPv4 destinations, NAT that allowed traffic through the machine's provider interface, and deny macOS/vmnet addresses, private, loopback, link-local, carrier-grade NAT, multicast, documentation/benchmark, reserved, and other non-public ranges. V1 disables IPv6 in the agent namespace rather than allowing a second path whose macOS/global-address policy is harder to audit.
+
+`zodex-agent` must have no sudo, `CAP_NET_ADMIN`, `CAP_SYS_ADMIN`, or authority to enter, replace, reconfigure, or tear down the namespace, veth pair, forwarding policy, or nftables table. Operator commands through `zodex local exec` deliberately execute in the trusted root namespace and retain privileged administration/network access.
+
+This is intentionally weaker than treating a compromised guest kernel or guest root as hostile. V1 promises isolation from the unprivileged coding agent, not containment after a Linux kernel exploit or compromise of the trusted root control plane.
 
 ### 12. No macOS ambient authority
 
@@ -378,7 +389,7 @@ The Local Zodex machine must not automatically receive:
 - host localhost access
 - broad LAN access
 
-The clean security statement should remain easy to understand:
+The clean user-facing security statement should remain easy to understand, with the trusted-root qualification documented in the detailed security model:
 
 > Zodex Local owns an isolated persistent Linux computer running on the Mac. ChatGPT can freely work inside that Linux computer and use the Internet, but it cannot access macOS.
 
@@ -484,7 +495,7 @@ Also note: current `main` does not expose a public `zodex sprite exec` subcomman
 6. **Persistent by default** — stop/start must not discard repos, caches, packages, or build artifacts.
 7. **Reset really resets** — reset destroys agent-controlled persistent state rather than attempting an in-place cleanup.
 8. **No macOS mounts/secrets** — isolation must not depend on the model behaving nicely.
-9. **Internet egress without host authority** — downloads/build dependencies work while macOS/private-host surfaces remain inaccessible.
+9. **Internet egress without host authority** — model-facing processes run inside the root-owned Local network namespace, so downloads/build dependencies work while macOS/private-host surfaces remain inaccessible to the unprivileged agent.
 10. **GitHub authority is independent** — Local access does not imply GitHub push access.
 11. **Sprite remains first-class** — Local is an additional target, not a rewrite that harms Sprite.
 12. **Ambiguity fails closed** — where a command could affect multiple targets, require an explicit selector.
@@ -564,7 +575,7 @@ For Local specifically, the user should be able to:
 4. stop/restart the machine without losing repositories, packages, caches, or build outputs;
 5. reset it completely with one explicit command;
 6. run large Rust builds using the Mac's CPU/RAM while keeping build data on Linux-native persistent storage;
-7. allow normal Internet dependency access while preventing access to macOS and the private LAN;
+7. allow normal IPv4 Internet dependency access while the root-owned Local network namespace prevents the unprivileged agent from accessing macOS and the private LAN;
 8. grant GitHub push independently through the existing YOLO model with an explicit `--local` selector when necessary;
 9. preserve existing Sprite behavior and keep Sprite usable simultaneously through a separate MCP endpoint;
 10. expose the exact same ChatGPT-facing `exec_command`, `write_stdin`, and `apply_patch` experience on both targets.

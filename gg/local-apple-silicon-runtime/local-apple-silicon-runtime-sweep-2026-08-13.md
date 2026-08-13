@@ -3,14 +3,15 @@
 ## Coordinates and scope
 
 - **Repository:** `amxv/zodex`
-- **Checkout:** `/workspace/repos/zodex`
+- **Checkout:** `/Users/ashray/code/amxv/zodex`
 - **Branch inspected:** `main`
-- **Planning baseline:** `6f35f14866842b6608887937825680231f90bf46`
+- **Original planning baseline:** `6f35f14866842b6608887937825680231f90bf46`
+- **Current implementation coordinate:** `7028bcaa48705a045dfc1b8e47af68a55c27c1a1`
 - **Sweep date:** 2026-08-13
 - **Requested capability basis:** [`local-apple-silicon-runtime-spec-2026-08-13.md`](./local-apple-silicon-runtime-spec-2026-08-13.md)
 - **Planning workflow:** user-supplied Existing Repository Feature Planning Workflow, read in full before this sweep.
 
-This sweep maps the current implementation relevant to adding an Apple Silicon Local execution target while preserving Sprite behavior. It is intentionally current-state only: it records what exists, what owns it, what tests prove, and where the current boundaries are surprising. It does not prescribe the future implementation or phase sequence.
+This sweep maps the implementation relevant to adding an Apple Silicon Local execution target while preserving Sprite behavior. It now includes the completed Phase 1 surface, the hidden Phase 2 foundation at `7028bcaa48705a045dfc1b8e47af68a55c27c1a1`, and live Apple Container 1.2.2 network findings that constrain the remaining implementation. The implementation plan remains the authoritative phase sequence.
 
 Repository Markdown outside the explicitly supplied specification and required repository instructions was not used as planning-history evidence. Current product documentation under `src/content/docs/` was read as part of the public contract; old neighboring `gg/` planning artifacts were deliberately not consumed.
 
@@ -24,6 +25,8 @@ operator machine
 │ zodex                                                       │
 │  ├─ direct Linux service lifecycle                         │
 │  ├─ Sprite setup / services / proxy operations             │
+│  ├─ truthful read-only Local status                         │
+│  ├─ hidden Local provider/setup/state foundation            │
 │  └─ operator-side GitHub grant / YOLO controls             │
 │                                                             │
 │ zodex-client                                                │
@@ -52,6 +55,15 @@ Sprite guest
 │ /workspace                                                  │
 │  └─ persistent agent-owned workspace                        │
 └─────────────────────────────────────────────────────────────┘
+
+Apple Container Local machine, foundation present but setup not public
+┌─────────────────────────────────────────────────────────────┐
+│ persistent Ubuntu/systemd machine, home mount disabled      │
+│  ├─ provider-root command/data-transfer seam                │
+│  ├─ zodex-agent / zodex-publisher / zodex-tunnel identities │
+│  ├─ loopback daemon and provider-private service assets     │
+│  └─ fail-closed placeholder network-isolation gate          │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ### Operator CLI module shape
@@ -68,6 +80,10 @@ Sprite guest
 - `src/bin/zodex/process.rs` — non-systemd process-mode daemons and ownership.
 - `src/bin/zodex/status.rs` — direct/Sprite status rendering, Sprite service definitions, direct systemd unit rendering.
 - `src/bin/zodex/system_tls.rs` — TLS setup helpers.
+- `src/bin/zodex/local_provider.rs` — Apple provider capability parsing, machine/image lifecycle, literal-argv root exec and bounded stdin-based transfer.
+- `src/bin/zodex/local_state.rs` — Local target/setup-source/lease records and atomic host-state persistence.
+- `src/bin/zodex/local_setup.rs` — hidden setup/reconcile transaction, embedded guest provisioning and post-provision verification; its network gate is deliberately fail closed until the selected namespace boundary is implemented.
+- `src/bin/zodex/local_machine.Containerfile`, `local_zodexd.service`, `local_zodex_prd.service` — embedded Ubuntu/systemd image and provider-private guest service assets.
 
 The module split is recent organizational work, but the underlying operator responsibilities predate it.
 
@@ -109,9 +125,10 @@ tls
 sprite
 proxy
 github
+local
 ```
 
-There is no `local` command namespace.
+`local` currently exposes only truthful read-only `status`. Hidden setup/provider code exists, but `local setup` and `local exec` are intentionally absent from the public Clap tree until the remaining Phase 2 vertical slice is safe and complete.
 
 `SpriteCommand` exposes:
 
@@ -136,6 +153,22 @@ The installer itself already distinguishes an **operator install** from a **runt
 - runtime mode is Linux-only and creates service identities/runtime files.
 
 This matters because the macOS `zodex` binary already exists as a supported operator binary even though it cannot directly host `zodexd` service management.
+
+### Phase 1 and hidden Phase 2 foundation
+
+Phase 1 is complete. The public `zodex local status` path detects platform/provider support, inspects the fixed `zodex-local` machine identity and distinguishes not-configured, provider-ready/missing, machine state and inactive MCP access without mutating host or guest state. Provider output parsing and CLI help/status behavior have deterministic coverage.
+
+Commit `7028bcaa48705a045dfc1b8e47af68a55c27c1a1` also landed a coherent but deliberately hidden Phase 2 foundation:
+
+- an embedded Ubuntu 24.04/systemd machine recipe and provider-private service assets;
+- explicit no-home-mount machine create/resource reconciliation;
+- provider-root execution that preserves argv boundaries plus bounded stdin-based file transfer;
+- durable nonsecret setup-source records and ready/provisioning validation;
+- runtime-installer-based guest provisioning for `/workspace`, identities, Git helpers and TLS;
+- loopback daemon configuration, explicit agent/publisher service users and a separate restricted tunnel identity;
+- post-provision checks and a fail-closed placeholder network-isolation gate.
+
+The next implementation must extend these responsibilities. It must not rebuild them as a second Local provider or expose partial public commands around the placeholder gate.
 
 ### Sprite setup
 
@@ -342,13 +375,13 @@ Sprite Services are treated as lifecycle authority once the guest is recognized 
 
 ### Apple container/container-machine — current external facts
 
-Current Apple documentation describes `container machine` as a persistent Linux environment whose filesystem survives stop/start. Current command documentation exposes machine creation, start/stop, run/exec and removal, along with CPU and memory controls.
+Apple documentation describes `container machine` as a persistent Linux environment whose filesystem survives stop/start. Apple Container 1.2.2 on the implementation Mac exposes the machine creation, start/stop, run/exec, inspect, set and removal shapes used by the Phase 1/hidden Phase 2 foundation.
 
 The current default is security-relevant: container-machine creation can mount the macOS user's home read/write unless home mounting is disabled. The CLI supports disabling the home mount explicitly.
 
 Current Apple machine docs also describe `container machine run` as booting a stopped machine when necessary, and expose privileged/root execution for operator control. Machine removal deletes the persistent machine state.
 
-Apple's normal container network documentation supports isolated user-defined networks and an `--internal` mode that prevents public Internet access. The current `container machine create` surface does not document an equivalent single switch for the requested combination “public Internet allowed, host/private LAN denied.” That stronger boundary remains a factual platform gap requiring a live Mac probe.
+Apple's normal container network documentation supports isolated user-defined networks and an `--internal` mode that prevents public Internet access. Apple Container 1.2.2 does not expose a machine network selector for the inverse combination “public Internet allowed, host/private LAN denied.” Its built-in shared NAT therefore cannot itself be treated as the agent network boundary.
 
 Primary references inspected on 2026-08-13:
 
@@ -357,6 +390,19 @@ Primary references inspected on 2026-08-13:
 - `https://github.com/apple/container/blob/main/docs/how-to.md`
 - `https://github.com/apple/container/blob/main/docs/technical-overview.md`
 - `https://github.com/apple/container/blob/main/docs/network.md`
+
+### Live Apple Container 1.2.2 network findings
+
+Live disposable probes on the implementation Mac established the following:
+
+- the built-in machine network used `192.168.64.0/24` and gave the guest public GitHub HTTPS plus reachability to its `192.168.64.1` vmnet gateway, the native Mac and the physical private-LAN gateway;
+- an exact-source PF anchor on `bridge100` could preserve public IPv4/DNS/HTTPS while denying tested private destinations, and did not affect a second Apple container;
+- guest root with `NET_ADMIN` added another source address in the built-in subnet and bypassed that exact-source PF rule;
+- matching the full bridge/subnet would affect unrelated Apple containers, and PF is not a supported distributed Apple Container policy API.
+
+Those findings rule out per-address PF, whole-shared-network PF and an unrestricted provider interface as the final model-facing boundary. They do not require replacing Apple Container. The selected V1 design instead trusts the Linux machine kernel/root control plane and places all model-facing services and descendants in one root-owned network namespace with only loopback plus a dedicated veth. Interface-scoped nftables in the trusted root namespace drops input arriving from that veth, permits/NATs only public IPv4 forwarding, denies non-public IPv4 and all IPv6, and uses public IPv4 DNS. Operator `zodex local exec` remains in the trusted root namespace. The unprivileged `zodex-agent` receives no sudo, network-administration, system-administration or namespace-control capability.
+
+This is a deliberately narrower threat model than hostile guest root or kernel containment. The design protects the workspace host/private network from the unprivileged coding agent while preserving Apple Container performance and persistence.
 
 ### OpenAI Secure MCP Tunnel — current external facts
 
@@ -491,6 +537,9 @@ The systemd-unit test only verifies `ExecStart`, restart policy and sections. It
 
 Representative coverage includes:
 
+- Apple provider command construction/inspect fixtures and capability classification;
+- Local host-state load/save/readiness and no-home-mount behavior;
+- hidden Local setup/provider service and transfer foundations;
 - YOLO default scope and TTL;
 - no-TTL and repo scoping;
 - expiration cutoff;
@@ -518,7 +567,7 @@ Checks installer structure, runtime binaries and expected agent-facing guidance.
 
 ### `tests/zodex_operator_cli.rs`
 
-Checks the current operator GitHub command/help surface.
+Checks the current operator GitHub command/help surface plus the public Local status/help surface.
 
 ### `tests/source_file_size.rs`
 
@@ -572,6 +621,7 @@ History was inspected only where current behavior was surprising.
 - `620ed1f` split the previously large operator CLI into responsibility modules; it preserved existing systemd-unit behavior rather than introducing it.
 - The direct systemd unit's lack of `User=`/`Group=` predates the module split. No later history inspected established that running the agent daemon as root is an intentional supported security model.
 - `dd5cd84` improved non-root operator installation, confirming macOS/non-root operator usage is a maintained path.
+- `7028bcaa` completed the Phase 1 Local status/provider/state seam and added the hidden Phase 2 machine/setup/service foundation while retaining a fail-closed network gate.
 
 ## Landmines
 
@@ -583,9 +633,9 @@ History was inspected only where current behavior was surprising.
 
 A default machine can share the macOS user's home. Merely creating an Apple container machine is insufficient evidence of host isolation. Home mounting must be inspected, not assumed.
 
-### 3. Public-Internet-without-private-LAN is not currently proven by Apple machine docs
+### 3. The provider network is not the agent network boundary
 
-Apple documents isolated networks and “internal/no public Internet,” but not the exact inverse policy the feature requires for container machines. A guest firewall alone would not be an authoritative boundary against a future privileged guest process. This remains the highest-regret factual platform gap.
+Live Apple Container 1.2.2 probes proved that the built-in shared NAT provides public Internet together with macOS/vmnet/private-LAN reachability. Per-address PF is bypassable by guest root changing its source address, while full bridge/subnet PF affects unrelated containers. The selected V1 boundary must therefore be created inside the persistent Linux machine by its trusted root control plane: all model-facing services and descendants join one dedicated namespace with no provider NIC, and interface-scoped root-owned nftables allows only public IPv4 through a veth. The unprivileged agent must be unable to change or leave that topology.
 
 ### 4. The direct systemd unit does not specify the agent user
 
@@ -617,7 +667,7 @@ Current Apple `container machine run` can boot a stopped machine to execute an o
 
 ### 11. Tunnel authority must not collapse into `zodex-agent`
 
-A Secure MCP Tunnel runtime credential is an authority-bearing secret. If the same unprivileged account that executes model commands can read or restart the tunnel arbitrarily, host-side TTL revocation becomes harder to make authoritative.
+A Secure MCP Tunnel runtime credential is an authority-bearing secret. If the same unprivileged account that executes model commands can read or restart the tunnel arbitrarily, host-side TTL revocation becomes harder to make authoritative. The tunnel still belongs in the restricted agent namespace because it is model-reachable ingress and must not gain a separate provider-network bypass.
 
 ### 12. `zodexd` currently requires TLS artifacts even when a plain HTTP listener is used
 
@@ -659,6 +709,8 @@ Mapped deeply:
 - operator Sprite registry and target inference;
 - relevant tests, packaging and user-facing docs;
 - current Apple container-machine and OpenAI Secure MCP Tunnel capabilities needed to identify provider boundaries.
+- Phase 1 Local status/provider/state plus the hidden Phase 2 setup/service foundation at `7028bcaa`;
+- live Apple Container 1.2.2 shared-NAT and PF-bypass evidence, and the resulting namespace trust boundary.
 
 Checked at the seam rather than exhaustively:
 
@@ -677,8 +729,8 @@ Deliberately out of scope:
 
 ## Factual gaps / things not proven
 
-1. **Private-network isolation on a real Apple container machine.** Current primary documentation does not prove a supported host-enforced configuration that allows public Internet egress while denying macOS/private-LAN access. A live Apple Silicon/macOS 26 probe is required before the security claim can be accepted.
-2. **Exact Apple CLI/version present on the implementation Mac.** The machine feature is current but Apple Container is evolving. Implementation must verify the installed version's machine create/run/inspect/set/remove shapes rather than assuming today's docs indefinitely.
+1. **Namespace primitives and boot ordering on the final Local image.** The selected root-owned namespace/veth/nftables design is implementation-ready, but the actual `zodex-local` Ubuntu machine has not yet live-proven kernel support, systemd ordering, public-DNS behavior, reboot reconciliation and fail-closed service attachment. Phase 2 must implement and test these contracts deterministically; Phase 7 must prove and repair them live before the workstream is accepted or released.
+2. **Future Apple CLI/version drift.** Apple Container 1.2.2 on the implementation Mac matched the implemented machine shapes, but setup must continue to verify capabilities and fail closed after provider upgrades rather than assuming compatibility indefinitely.
 3. **Secure MCP Tunnel account provisioning details for this user's account.** The tunnel client and Linux ARM64 runtime are documented, but the actual tunnel ID/runtime key must be operator-supplied and validated live. The plan must not require an admin key to be stored in Zodex.
 4. **Whether a disposable GitHub repo/ref is available for automated live Local push validation.** Deterministic publisher tests can prove policy, but end-to-end write validation needs an explicitly authorized disposable target.
 5. **Representative Rust-build performance on the user's Mac.** Architecture supports local CPU/RAM and persistent Linux storage, but no performance ratio versus Sprite or native macOS has been measured. Acceptance should prove resource/persistence behavior, not invent a speed target.

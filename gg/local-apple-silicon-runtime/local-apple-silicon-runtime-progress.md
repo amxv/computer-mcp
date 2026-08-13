@@ -11,23 +11,24 @@ Add Zodex Local as a persistent isolated Apple Silicon Linux execution target wh
 - [Accepted specification](./local-apple-silicon-runtime-spec-2026-08-13.md)
 - [Current-state Sweep](./local-apple-silicon-runtime-sweep-2026-08-13.md)
 - [Authoritative implementation plan](./local-apple-silicon-runtime-implementation-plan-2026-08-13.md)
-- [First implementation agent prompt](./first-agent-prompt.md)
-- [Subsequent implementation agent prompt](./subsequent-agent-prompt.md)
+- [Retired Phase 1 implementation prompt](./first-agent-prompt.md)
+- [Cloud implementation agent prompt](./subsequent-agent-prompt.md)
+- [Local integration agent prompt](./local-integration-agent-prompt.md)
 
-There is no separate repository-wide live harness file for this workstream. Phases 1–7 name their required real Apple/OpenAI/GitHub evidence directly. Never infer destructive GitHub authorization; use only an explicitly authorized disposable repository/ref when a live push is required.
+Phases 2 through 6 are cloud implementation phases. Their Apple/OpenAI/GitHub live checklists are intentionally deferred to Phase 7, which is the consolidated Apple Silicon integration, repair and acceptance phase. Never infer destructive GitHub authorization; use only an explicitly authorized disposable repository/ref when a live push is required.
 
 ## Repository policy for this workstream
 
 - Repository: `amxv/zodex`
 - Approved branch: `main`
-- Expected checkout on this Sprite: `/workspace/repos/zodex`
+- Current Apple Silicon checkout: `/Users/ashray/code/amxv/zodex`
 - Always fetch first and fast-forward safely.
 - Current remote code is authoritative; the planning SHA is only provenance.
 - Never force-push, hard reset away newer work, rewrite shared history, clean another agent's files, or stage unrelated changes.
 - If the worktree contains another agent's uncommitted work, preserve it and restrict your edits/staging accordingly.
-- The canonical broad repository validation is `bash scripts/check.sh`; phase-specific positive evidence is still required before a phase can be complete.
+- The canonical broad repository validation is `bash scripts/check.sh`; phase-specific deterministic positive evidence is required before a cloud implementation phase can be complete.
 - Update user-facing docs only when the corresponding capability actually exists on the branch.
-- If a load-bearing plan assumption fails, add a plan Amendment immediately. Never weaken the accepted Local isolation/authority goals to get a phase green.
+- If a load-bearing plan assumption fails, stop, capture evidence and obtain any required user decision. Then rewrite the affected canonical spec/sweep/plan/prompt sections in place. Never weaken the accepted Local isolation/authority goals to get a phase green.
 
 ## Status vocabulary
 
@@ -38,29 +39,30 @@ Use only:
 - `blocked`
 - `complete`
 
-A phase is `complete` only when its observable outcome, phase-specific positive evidence, relevant regression evidence, applicable live evidence, docs/generated-contract work, ledger update, coherent commit, normal push, post-push fetch/remote equality and clean-worktree verification are complete.
+For Phases 2 through 6, `complete` means the cloud implementation boundary, deterministic positive evidence, relevant regressions, applicable docs/generated-contract work and an explicit deferred-integration checklist are complete and pushed cleanly. It does not claim live Apple/OpenAI/GitHub acceptance. Phase 7 alone requires the consolidated live evidence, integration fixes and all final acceptance criteria before it can be `complete`.
 
 ## Phase table
 
-| Phase | Capability | Status | Completion commit | Evidence / next boundary |
+| Phase | Capability | Status | Commit coordinate | Evidence / next boundary |
 | ---: | --- | --- | --- | --- |
 | 1 | Local provider/state seam and truthful read-only status | complete | `a8a710846d71705dcb9a329ac6059290a8d42434` | Apple Silicon/macOS 26.3.1 with Apple Container 1.2.2 proved the real version, capability, machine-not-found and read-only status shapes match the implementation. |
-| 2 | Persistent Local machine setup and privileged operator exec | in_progress | — | Provider/provisioning/identity/exec foundations are implemented behind an unexposed fail-closed network gate. Apple Container 1.2.2 hard-wires machines to its built-in NAT network; prove a host-controlled public-Internet-without-macOS/private-LAN policy on the target Mac before exposing setup/exec or marking ready. |
-| 3 | Secure MCP ingress and durable TTL start/stop lifecycle | pending | — | Requires a Phase 2-ready safe Local machine and official current Secure MCP Tunnel compatibility. |
-| 4 | GitHub mode target parity with `--local` | pending | — | Requires Local privileged guest transport; preserve one canonical YOLO policy and Sprite behavior. |
-| 5 | Reset, reprovisioning and lifecycle recovery hardening | pending | — | Requires setup/start/target paths to exist; reset must preflight before deletion. |
-| 6 | Public docs, packaging and Sprite-preserving product integration | pending | — | Document only behavior present on the current branch; preserve Sprite-first-class guidance. |
-| 7 | Independent end-to-end acceptance, security and performance hardening | pending | — | Re-read full current plan/Amendments and prove all acceptance criteria from current code/live systems. |
+| 2 | Persistent Local machine setup and privileged operator exec | in_progress | `7028bcaa48705a045dfc1b8e47af68a55c27c1a1` (foundation) | Cloud: finish namespace/veth/nftables setup, deterministic verification and public setup/exec wiring. Defer real-machine execution to Phase 7. |
+| 3 | Secure MCP ingress and durable TTL start/stop lifecycle | pending | — | Cloud: implement with injected provider/tunnel/clock failures; defer live tunnel connection and TTL behavior to Phase 7. |
+| 4 | GitHub mode target parity with `--local` | pending | — | Cloud: preserve one canonical YOLO policy and prove Local/Sprite transport behavior deterministically; defer authorized live push to Phase 7. |
+| 5 | Reset, reprovisioning and lifecycle recovery hardening | pending | — | Cloud: implement preflight/recovery through injected failures; defer destructive Local-machine exercise to Phase 7. |
+| 6 | Public docs, packaging and Sprite-preserving product integration | pending | — | Cloud: complete final command/help/docs/embedded-asset/package contracts; defer clean Mac artifact smoke to Phase 7. |
+| 7 | Apple Silicon integration, live repair and final acceptance | pending | — | Local: execute every deferred checklist in dependency order, fix live defects, and prove all acceptance criteria. |
 
 ## Current handoff
 
 - **Last completed phase:** Phase 1.
 - **Earliest incomplete phase:** Phase 2.
 - **Phase title:** `Persistent Local machine setup and privileged operator exec`.
-- **Observable boundary:** Phase 2 has a tested internal foundation for an embedded Ubuntu/systemd Local image, no-home-mount machine create/reconcile, token-preserving privileged provider exec/data transfer, nonsecret durable setup-source references, provider-private agent/publisher service units, loopback daemon configuration and a separate `zodex-tunnel` identity. The public `local setup`/`local exec` commands remain intentionally unregistered while network isolation is unproven.
-- **Current blockers:** Apple Container 1.2.2 machine source attaches every container machine to the built-in default network, and that built-in network is `nat`/vmnet shared mode; the machine CLI exposes no alternate network selector. A target-Mac live investigation must prove a maintainable **host-controlled** policy that allows public Internet but denies macOS/private-LAN access before setup may mutate a machine or mark it ready. Guest-only firewalling is not acceptable. If no such host policy can be proven, Phase 2 must be marked `blocked` and the plan amended before later phases.
-- **Plan Amendments affecting next phase:** none.
+- **Observable boundary:** Phase 2 has the tested foundation at `7028bcaa48705a045dfc1b8e47af68a55c27c1a1`: embedded Ubuntu/systemd image, no-home-mount machine create/reconcile, literal-argv privileged provider exec/data transfer, nonsecret durable setup-source references, provider-private agent/publisher service assets, loopback daemon configuration and a separate `zodex-tunnel` identity. Public `local setup`/`local exec` remain intentionally unregistered. Live Apple Container 1.2.2/PF research already established that the shared provider network is not the final agent boundary.
+- **Current blockers:** none. A cloud agent can finish Phase 2 by replacing the placeholder gate with the approved trusted-root Linux network namespace, veth and interface-scoped nftables policy, proving generated/runtime contracts deterministically and wiring setup/exec. Actual machine execution and repair are deferred to Phase 7.
+- **Canonical plan status:** the namespace decision is folded directly into the spec, sweep, implementation plan and continuation prompt. There are no overlay amendments to reconcile.
 - **Prompt to use:** [`subsequent-agent-prompt.md`](./subsequent-agent-prompt.md).
+- **Final local prompt:** after Phases 2 through 6 are cloud-complete, use [`local-integration-agent-prompt.md`](./local-integration-agent-prompt.md) for Phase 7.
 
 ## Durable ledger rules
 
@@ -69,11 +71,11 @@ After every completed or blocked phase:
 1. update that phase's row immediately;
 2. update **Current handoff** to the earliest genuinely incomplete boundary;
 3. append a full progress entry using the format below;
-4. if implementation invalidated a load-bearing assumption/approach, add the plan Amendment before handoff;
+4. if implementation invalidated a load-bearing assumption/approach, capture the evidence and required user decision, then update the canonical package in place before handoff;
 5. commit/push coherent safe work and record full pushed SHA(s);
 6. fetch after push, prove local HEAD equals remote `main`, and verify the worktree is clean except for preserved pre-existing work belonging to another agent.
 
-If a session stops partway through a phase, leave the phase `in_progress`. Record exactly what slice is pushed, what evidence actually exists and the next action. Do not call a partial vertical slice complete merely because it compiles.
+If a session stops partway through a phase, leave the phase `in_progress`. Record exactly what slice is pushed, what evidence actually exists and the next action. A cloud phase may complete without live access, but not merely because it compiles: its deterministic positive/failure contracts, regressions and deferred checklist must all be complete.
 
 ### Progress entry format
 
@@ -87,10 +89,10 @@ If a session stops partway through a phase, leave the phase `in_progress`. Recor
 - **Files/areas changed:** concise paths and major boundaries.
 - **Positive evidence:** phase-specific proof.
 - **Regression evidence:** existing behavior re-proven.
-- **Live evidence:** real-system evidence, or a concrete reason it was not applicable.
+- **Deferred integration evidence:** exact Phase 7 live scenarios carried forward, plus any real-system evidence already available.
 - **Documentation:** help/docs/generated-contract work and validation, or a concrete not-applicable reason.
-- **Decisions made:** local implementation judgments that do not amend the plan.
-- **Amendments:** plan Amendment link/reference or `none`.
+- **Decisions made:** local implementation judgments and any approved canonical-plan update.
+- **Plan updates:** canonical package sections changed, or `none`.
 - **Known defects/risks:** exact remaining problems.
 - **Next handoff:** earliest incomplete boundary and what the next agent should inspect first.
 ```
@@ -99,21 +101,23 @@ Never put API keys, GitHub tokens, PEM contents, OpenAI tunnel runtime keys, pri
 
 ## Progress entries
 
+Phase 1 entries below are immutable historical records. Their forward-looking Phase 2 predictions are superseded by **Current handoff**, the current Phase 2 entry and the canonical implementation plan.
+
 ### 2026-08-13 — Phase 2 — `in_progress`
 
 - **Agent/session:** subsequent implementation agent on the Zodex Sprite checkout.
 - **Starting state:** fetched and fast-forwarded clean `main` to `d17bfe2d0882cccbf94a65f019b54930be001ba2`, incorporating the Mac agent's completed Phase 1 live evidence.
-- **Ending commit(s):** the Phase 2 foundation commit containing this entry follows; its full pushed SHA is reported in the AgentBox/final handoff because a commit cannot truthfully contain its own SHA.
-- **Outcome:** implemented a coherent, non-user-visible Phase 2 foundation while keeping the security gate fail-closed. Added an embedded Ubuntu 24.04/systemd machine recipe, deterministic no-home-mount create/resource reconciliation, root `container machine run` command construction that preserves argument tokens, stdin-based bounded file transfer, durable nonsecret setup-source references, runtime-installer-based guest provisioning, loopback-only Zodex daemon configuration, explicit `zodex-agent` and `zodex-publisher` systemd identities, a separate restricted `zodex-tunnel` identity/directories, post-provision verification logic and setup/reconcile classification that refuses unmanaged machine adoption. `zodex local setup` and `zodex local exec` are not registered in the public Clap tree yet because the required host network policy is not proven.
+- **Ending commit(s):** Phase 2 foundation commit `7028bcaa48705a045dfc1b8e47af68a55c27c1a1`.
+- **Outcome:** implemented a coherent, non-user-visible Phase 2 foundation while keeping the security gate fail closed. Added an embedded Ubuntu 24.04/systemd machine recipe, deterministic no-home-mount create/resource reconciliation, root `container machine run` command construction that preserves argument tokens, stdin-based bounded file transfer, durable nonsecret setup-source references, runtime-installer-based guest provisioning, loopback-only Zodex daemon configuration, explicit `zodex-agent` and `zodex-publisher` systemd identities, a separate restricted `zodex-tunnel` identity/directories, post-provision verification logic and setup/reconcile classification that refuses unmanaged machine adoption. `zodex local setup` and `zodex local exec` remain unregistered until the cloud Phase 2 implementation replaces the placeholder network gate and its deterministic fail-closed contracts pass.
 - **Files/areas changed:** `src/bin/zodex/local_provider.rs`, `local_state.rs`, new `local_setup.rs`, embedded `local_machine.Containerfile`, provider-private `local_zodexd.service`/`local_zodex_prd.service`, module wiring and Local unit tests.
 - **Positive evidence:** `cargo test --bin zodex local_ -- --nocapture` passed 11 Local tests. New tests prove machine creation always passes `--home-mount none` and no mount/volume flags, resource reconciliation retains that invariant, operator exec keeps literal token boundaries, owned targets reconcile while unmanaged machines are rejected, the embedded guest setup uses runtime-only install/loopback binding/separate agent-publisher-tunnel identities without host PEM paths, conservative setup input validation, fail-closed ready-state source requirements and the network gate refusing progression while host isolation is unproven.
 - **Regression evidence:** `cargo clippy --all-targets -- -D warnings`, the 1000-LOC source guard, Sprite registry tests, `tests/zodex_operator_cli.rs`, `tests/install_script.rs`, `tests/sprite_scripts.rs` and the full `bash scripts/check.sh` gate all passed. Existing Local help still exposes only `status`, so no incomplete setup/exec promise leaked into the CLI.
-- **Live evidence:** no Phase 2 machine mutation was performed from this Linux Sprite. Current Apple Container source was re-checked at the exact 1.2.2 tag (`3c4c59cf6a1099c334f1ad6d485f79969e09f4b9`): `MachinesService` attaches machine configuration to `NetworkClient().builtin`, the built-in network is configured as `nat` with `container-network-vmnet`, and vmnet NAT maps to shared mode. The public machine create/run surface has no network selector. The real target-Mac host filtering mechanism and item-5 denial proof therefore remain outstanding and are not claimed.
-- **Documentation:** no user docs or model-facing contracts changed. That is intentional because Phase 2's public setup/exec behavior is not yet safe to expose. The embedded machine/service artifacts are runtime implementation inputs, not user documentation.
-- **Decisions made:** put the host-network isolation gate before setup state writes, image builds, machine creation or reconciliation, so an unproven network boundary cannot leave an apparently configured Local target. Preserve PEMs as operator source-path references only; transfer contents over provider stdin into private guest temp files and never persist them in host JSON. Keep setup/exec implementation internal until the live host boundary passes.
-- **Amendments:** none yet. Apple Container's lack of a machine network selector narrows the search to a macOS/provider-side host filter but does not by itself prove the accepted network outcome impossible. Add an Amendment immediately if the target-Mac investigation disproves a viable host-controlled mechanism or selects a materially different provider arrangement.
-- **Known defects/risks:** Phase 2 is not complete and no public setup/exec command exists yet. The hard unknown is whether Apple Container's shared NAT traffic can be reliably filtered on macOS per Local machine (including reboot/IP-change reconciliation) without trusting guest root and without breaking unrelated host/container traffic. The embedded machine image and full guest provisioning path also still require first live execution on the target Mac after that network mechanism is selected.
-- **Next handoff:** continue Phase 2 on the Apple Silicon Mac. First investigate and live-prove a host-controlled network filter for the Apple Container 1.2.2 machine path: public GitHub/package egress must succeed while the macOS host/gateway and reachable private-LAN addresses fail. It must be enforceable/reconcilable before future tunnel activation and survive machine IP changes safely. If proven, implement that gate, expose `local setup`/`local exec`, run the complete Phase 2 live checklist and mark complete. If not provable, block Phase 2 and add the required architecture Amendment instead of using a guest firewall.
+- **Deferred integration evidence:** Apple Container source at the exact 1.2.2 tag (`3c4c59cf6a1099c334f1ad6d485f79969e09f4b9`) and target-Mac probes already confirmed machines use built-in shared NAT and rejected PF as the final boundary. Phase 7 still owns first live provisioning of the namespace implementation, service membership/root separation, public/private/IPv6 probes, unprivileged bypass attempts, reboot reconciliation, `local exec`, persistence and idempotent setup.
+- **Documentation:** no user docs or model-facing contracts changed in the foundation commit. The cloud continuation may wire setup/exec and their help after the complete deterministic Phase 2 boundary passes; production readiness remains gated by Phase 7.
+- **Decisions made:** preserve the fail-closed gate before setup can become ready. Replace its mechanism with one root-owned Linux network namespace containing daemon, publisher, tunnel and descendants; give it only loopback plus a dedicated veth; drop root-namespace input from that veth; allow/NAT only public IPv4 forwarding with interface-scoped nftables; deny all IPv6/non-public IPv4; use public IPv4 DNS; keep provider-root `local exec` outside the namespace; trust the guest kernel/root control plane while denying the unprivileged agent sudo and network/namespace capabilities. Preserve PEMs as operator source-path references only and transfer contents over provider stdin into private guest temp files.
+- **Plan updates:** the namespace decision is folded directly into the canonical specification, sweep, implementation plan, progress handoff and continuation prompt. No amendment overlay is used.
+- **Known defects/risks:** Phase 2 is not complete and no public setup/exec command exists yet. The namespace/veth/nftables lifecycle, systemd attachment/order, public DNS, restart reconciliation and unprivileged bypass contracts still require cloud implementation. Their real behavior remains intentionally unaccepted until Phase 7 runs and repairs them on `zodex-local`.
+- **Next handoff:** continue Phase 2 in a cloud checkout at `7028bcaa48705a045dfc1b8e47af68a55c27c1a1` or newer `main`. Read the current Local provider/setup/state/service foundation, implement one root-owned agent-network responsibility in place of `local_host_network_isolation_gate`, attach every model-facing service to it, run the full deterministic Phase 2 positive/failure/regression contract, wire `local setup`/`local exec`, record the deferred Phase 7 checklist, and then continue to Phase 3 without waiting for Apple-machine access.
 
 ### 2026-08-13 - Phase 1 - `complete`
 
