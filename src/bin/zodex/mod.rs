@@ -25,4 +25,5 @@ mod tests {
     include!("tests/part4.rs");
     include!("tests/part5.rs");
     include!("tests/part6.rs");
+    include!("tests/part7.rs");
 }
