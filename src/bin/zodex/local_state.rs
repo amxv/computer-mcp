@@ -16,6 +16,20 @@ struct LocalTargetRecord {
     requested_cpus: Option<u32>,
     #[serde(default)]
     requested_memory: Option<String>,
+    #[serde(default)]
+    setup_sources: Option<LocalSetupSources>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct LocalSetupSources {
+    repo: String,
+    reader_app_id: u64,
+    reader_pem_path: String,
+    reader_installation_id: u64,
+    publisher_app_id: u64,
+    publisher_pem_path: String,
+    publisher_installation_id: u64,
+    default_base: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -65,6 +79,9 @@ fn load_local_target_record(path: &Path) -> Result<Option<LocalTargetRecord>> {
                 "Local target state names machine `{}`; expected `{LOCAL_MACHINE_NAME}`",
                 record.machine_id
             );
+        }
+        if record.setup_state == LocalSetupState::Ready && record.setup_sources.is_none() {
+            bail!("ready Local target state is missing setup source references");
         }
     }
     Ok(record)

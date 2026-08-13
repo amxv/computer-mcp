@@ -3,6 +3,8 @@ include!("dispatch.rs");
 include!("credentials.rs");
 include!("local_state.rs");
 include!("local_provider.rs");
+#[allow(dead_code)]
+mod local_setup;
 include!("sprite_proxy.rs");
 include!("github_device.rs");
 include!("github_mode.rs");

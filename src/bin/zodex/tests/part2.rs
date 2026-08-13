@@ -558,6 +558,136 @@
     }
 
     #[test]
+    fn local_machine_creation_is_no_home_mount_and_resource_scoped() {
+        let args = local_machine_create_args(Some(12), Some("32G"));
+        assert_eq!(
+            args,
+            vec![
+                "machine",
+                "create",
+                "--no-boot",
+                "--name",
+                "zodex-local",
+                "--home-mount",
+                "none",
+                "--cpus",
+                "12",
+                "--memory",
+                "32G",
+                "local/zodex-machine:1",
+            ]
+        );
+        assert!(!args.iter().any(|arg| matches!(arg.as_str(), "--mount" | "--volume" | "-v")));
+
+        assert_eq!(
+            local_machine_set_args(Some(8), Some("16G")),
+            vec![
+                "machine",
+                "set",
+                "--name",
+                "zodex-local",
+                "home-mount=none",
+                "cpus=8",
+                "memory=16G",
+            ]
+        );
+    }
+
+    #[test]
+    fn local_operator_exec_preserves_command_token_boundaries() {
+        let command = vec![
+            "sudo".to_string(),
+            "printf".to_string(),
+            "%s\\n".to_string(),
+            "a b".to_string(),
+            "$(not-a-shell)".to_string(),
+        ];
+        let args = local_machine_run_args(&command);
+        assert_eq!(
+            &args[..6],
+            ["machine", "run", "--root", "--name", "zodex-local", "--"]
+        );
+        assert_eq!(&args[6..], command.as_slice());
+    }
+
+    #[test]
+    fn local_setup_reconciles_owned_targets_and_rejects_unmanaged_machine() {
+        let machine = parse_apple_machine_inspect(
+            r#"[{"id":"zodex-local","status":"stopped","cpus":8,"memory":17179869184,"homeMount":"none"}]"#,
+        )
+        .expect("machine fixture");
+        let state = LocalTargetRecord {
+            version: 1,
+            machine_id: LOCAL_MACHINE_NAME.to_string(),
+            setup_state: LocalSetupState::Provisioning,
+            image_reference: Some("local/zodex-machine:1".to_string()),
+            requested_cpus: None,
+            requested_memory: None,
+            setup_sources: None,
+        };
+
+        assert_eq!(classify_local_setup_action(None, None), LocalSetupAction::Create);
+        assert_eq!(
+            classify_local_setup_action(None, Some(&machine)),
+            LocalSetupAction::RejectUnmanaged
+        );
+        assert_eq!(
+            classify_local_setup_action(Some(&state), Some(&machine)),
+            LocalSetupAction::Reconcile
+        );
+        assert_eq!(
+            classify_local_setup_action(Some(&state), None),
+            LocalSetupAction::Create
+        );
+    }
+
+    #[test]
+    fn local_guest_setup_uses_runtime_installer_loopback_and_separate_identities() {
+        let sources = LocalSetupSources {
+            repo: "amxv/zodex".to_string(),
+            reader_app_id: 11,
+            reader_pem_path: "/Users/operator/reader.pem".to_string(),
+            reader_installation_id: 12,
+            publisher_app_id: 21,
+            publisher_pem_path: "/Users/operator/publisher.pem".to_string(),
+            publisher_installation_id: 22,
+            default_base: "main".to_string(),
+        };
+        let script = build_local_guest_setup_script(&sources);
+
+        assert!(script.contains("ZODEX_INSTALL_MODE=runtime"));
+        assert!(script.contains("ZODEX_INSTALL_OPERATOR_CLI=0"));
+        assert!(script.contains("bind_host = \\\"127.0.0.1\\\""));
+        assert!(script.contains("User=zodex-agent"));
+        assert!(script.contains("User=zodex-publisher"));
+        assert!(script.contains("useradd --system --gid zodex-tunnel"));
+        assert!(script.contains("/etc/zodex/tunnel"));
+        assert!(!script.contains("/Users/operator/reader.pem"));
+        assert!(!script.contains("/Users/operator/publisher.pem"));
+        assert!(!script.contains("--volume"));
+        assert!(!script.contains("--mount"));
+    }
+
+    #[test]
+    fn local_setup_input_validation_is_conservative() {
+        assert_eq!(validate_local_repo("amxv/zodex").unwrap(), "amxv/zodex");
+        assert!(validate_local_repo("amxv/zodex;rm -rf /").is_err());
+        assert!(validate_local_default_base("main").is_ok());
+        assert!(validate_local_default_base("release/next").is_ok());
+        assert!(validate_local_default_base("bad\"branch").is_err());
+        assert!(validate_local_default_base("../escape").is_err());
+    }
+
+    #[test]
+    fn local_setup_network_gate_fails_closed_until_host_policy_is_proven() {
+        let error = local_host_network_isolation_gate()
+            .expect_err("unproven host networking must block setup")
+            .to_string();
+        assert!(error.contains("public Internet"));
+        assert!(error.contains("private-LAN"));
+    }
+
+    #[test]
     fn local_state_round_trips_with_atomic_private_files() {
         let temp = tempfile::tempdir().expect("temp dir");
         let target_path = local_target_state_path_from_home(temp.path());
@@ -569,6 +699,16 @@
             image_reference: Some("local/zodex-machine:latest".to_string()),
             requested_cpus: Some(12),
             requested_memory: Some("32G".to_string()),
+            setup_sources: Some(LocalSetupSources {
+                repo: "amxv/zodex".to_string(),
+                reader_app_id: 1,
+                reader_pem_path: "/tmp/reader.pem".to_string(),
+                reader_installation_id: 2,
+                publisher_app_id: 3,
+                publisher_pem_path: "/tmp/publisher.pem".to_string(),
+                publisher_installation_id: 4,
+                default_base: "main".to_string(),
+            }),
         };
         save_local_target_record(&target_path, &target).expect("save target");
         assert_eq!(
@@ -634,6 +774,16 @@
             .expect_err("backwards lease must fail closed")
             .to_string();
         assert!(lease_error.contains("expiration must be after creation"));
+
+        fs::write(
+            &target_path,
+            r#"{"version":1,"machine_id":"zodex-local","setup_state":"ready"}"#,
+        )
+        .expect("write incomplete ready target");
+        let ready_error = load_local_target_record(&target_path)
+            .expect_err("ready target without setup sources must fail closed")
+            .to_string();
+        assert!(ready_error.contains("missing setup source references"));
     }
 
     #[test]
