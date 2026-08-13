@@ -62,6 +62,10 @@ are owned by `zodex-agent:zodex`; `sprite` can see the worktree but cannot read
 `.git/config`. Git may therefore report `not a git repository` when run as
 `sprite`. Run Git checks as the agent account:
 
+The top-level `/workspace` directory is owned by `zodex-agent:zodex` (mode
+`750`), as are its immediate directories, including `/workspace/repos` (mode
+`755`).
+
 ```bash
 sprite exec -s <sprite> -- sudo -n -u zodex-agent -H \
   git -C /workspace/repos/zodex status --short --branch
