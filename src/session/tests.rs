@@ -666,7 +666,7 @@ async fn yielded_child_is_reaped_without_a_follow_up_poll() {
             ExecCommandInput {
                 cmd: "sleep 0.15; printf 'reaped-without-poll\\n'".to_string(),
                 yield_time_ms: Some(20),
-                workdir: None,
+                workdir: test_workdir(),
                 timeout_ms: None,
             },
             &cfg,
@@ -719,7 +719,7 @@ async fn background_reaper_and_poll_share_the_terminal_status() {
             ExecCommandInput {
                 cmd: "sleep 0.1; printf 'reaper-race-complete\\n'".to_string(),
                 yield_time_ms: Some(20),
-                workdir: None,
+                workdir: test_workdir(),
                 timeout_ms: None,
             },
             &cfg,
