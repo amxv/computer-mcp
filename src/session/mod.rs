@@ -1,7 +1,9 @@
 use std::collections::HashMap;
+use std::io::Read as _;
 use std::process::Stdio;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex as StdMutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -12,10 +14,10 @@ use nix::pty::openpty;
 #[cfg(unix)]
 use nix::sys::signal::{Signal, killpg};
 #[cfg(unix)]
-use nix::unistd::{Pid, setpgid};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use nix::unistd::Pid;
+use tokio::io::AsyncWriteExt;
 use tokio::process::{Child, Command};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, Notify, RwLock};
 use tracing::{info, warn};
 
 use crate::config::Config;
@@ -27,8 +29,7 @@ use crate::workdir::validate_absolute_existing_workdir;
 const POLL_INTERVAL_MS: u64 = 30;
 const TIMEOUT_NOTICE: &str = "\n[zodexd] process timed out and was terminated\n";
 const TERMINATE_GRACE_PERIOD_MS: u64 = 5_000;
-const EXIT_OUTPUT_DRAIN_RETRIES: usize = 4;
-const EXIT_OUTPUT_DRAIN_DELAY_MS: u64 = 10;
+const EXIT_OUTPUT_DRAIN_TIMEOUT_MS: u64 = 500;
 const SESSION_HANDLE_LEN: usize = 8;
 const HANDLE_LOG_PREFIX_LEN: usize = 4;
 const COMMAND_SUMMARY_MAX_CHARS: usize = 120;
@@ -89,23 +90,30 @@ struct OutputState {
 
 #[derive(Debug)]
 struct OutputBuffer {
-    inner: Mutex<OutputState>,
+    inner: StdMutex<OutputState>,
     max_chars: usize,
+    reader_done: AtomicBool,
+    reader_done_notify: Notify,
 }
 
 impl OutputBuffer {
     fn new(max_chars: usize) -> Self {
         Self {
-            inner: Mutex::new(OutputState {
+            inner: StdMutex::new(OutputState {
                 text: String::new(),
                 dropped_bytes: 0,
             }),
             max_chars,
+            reader_done: AtomicBool::new(false),
+            reader_done_notify: Notify::new(),
         }
     }
 
-    async fn append(&self, chunk: &str) {
-        let mut state = self.inner.lock().await;
+    fn append(&self, chunk: &str) {
+        let mut state = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.text.push_str(chunk);
 
         if state.text.len() <= self.max_chars {
@@ -118,8 +126,11 @@ impl OutputBuffer {
         state.dropped_bytes += cut;
     }
 
-    async fn snapshot(&self) -> String {
-        let state = self.inner.lock().await;
+    fn snapshot(&self) -> String {
+        let state = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.dropped_bytes == 0 {
             return state.text.clone();
         }
@@ -128,6 +139,24 @@ impl OutputBuffer {
             "[... {} bytes truncated ...]\n{}",
             state.dropped_bytes, state.text
         )
+    }
+
+    fn mark_reader_done(&self) {
+        self.reader_done.store(true, Ordering::Release);
+        self.reader_done_notify.notify_waiters();
+    }
+
+    async fn wait_for_reader_done(&self, timeout: Duration) {
+        if self.reader_done.load(Ordering::Acquire) {
+            return;
+        }
+
+        let notified = self.reader_done_notify.notified();
+        if self.reader_done.load(Ordering::Acquire) {
+            return;
+        }
+
+        let _ = tokio::time::timeout(timeout, notified).await;
     }
 }
 
@@ -231,8 +260,7 @@ impl SessionRuntime {
 
         if input.kill_process.unwrap_or(false) {
             self.output
-                .append("\n[zodexd] process terminated by kill_process\n")
-                .await;
+                .append("\n[zodexd] process terminated by kill_process\n");
             info!(
                 event = "session_killed",
                 internal_session_id = self.internal_session_id,
@@ -329,7 +357,7 @@ impl SessionRuntime {
             }
 
             if timeout_notice {
-                self.output.append(TIMEOUT_NOTICE).await;
+                self.output.append(TIMEOUT_NOTICE);
             }
 
             if let Some((exit_code, cwd, termination_reason)) = finished {
@@ -354,7 +382,7 @@ impl SessionRuntime {
             }
 
             if let Some(cwd) = running_cwd {
-                let text = strip_ansi_codes(self.output.snapshot().await);
+                let text = strip_ansi_codes(self.output.snapshot());
                 let elapsed = self.started_at.elapsed();
                 return Ok(ToolOutput {
                     summary: command_result_summary(
@@ -443,13 +471,7 @@ impl SessionManager {
             .stderr(Stdio::from(slave_file));
 
         #[cfg(unix)]
-        unsafe {
-            command.pre_exec(|| {
-                setpgid(Pid::from_raw(0), Pid::from_raw(0))
-                    .map_err(|e| std::io::Error::other(e.to_string()))?;
-                Ok(())
-            });
-        }
+        command.process_group(0);
 
         command.current_dir(&command_cwd);
         if !cfg.agent_home.trim().is_empty() {
@@ -463,9 +485,6 @@ impl SessionManager {
         command.env("MANPAGER", "cat");
         command.env("SYSTEMD_PAGER", "cat");
 
-        let child = command
-            .spawn()
-            .with_context(|| format!("failed to spawn command: {}", input.cmd))?;
         let output = Arc::new(OutputBuffer::new(self.max_output_chars));
 
         #[cfg(unix)]
@@ -475,11 +494,13 @@ impl SessionManager {
         #[cfg(unix)]
         let master_writer_std = master_file;
         #[cfg(unix)]
-        let master_reader = tokio::fs::File::from_std(master_reader_std);
-        #[cfg(unix)]
         let master_writer = tokio::fs::File::from_std(master_writer_std);
         #[cfg(unix)]
-        spawn_reader(master_reader, output.clone());
+        spawn_reader(master_reader_std, output.clone())?;
+
+        let child = command
+            .spawn()
+            .with_context(|| format!("failed to spawn command: {}", input.cmd))?;
 
         let internal_session_id = self
             .next_internal_session_id
@@ -745,16 +766,15 @@ fn request_termination(inner: &mut SessionInner) {
 }
 
 async fn snapshot_output_after_exit(output: &Arc<OutputBuffer>) -> String {
-    let mut snapshot = output.snapshot().await;
-    for _ in 0..EXIT_OUTPUT_DRAIN_RETRIES {
-        tokio::time::sleep(Duration::from_millis(EXIT_OUTPUT_DRAIN_DELAY_MS)).await;
-        let refreshed = output.snapshot().await;
-        if refreshed == snapshot {
-            break;
-        }
-        snapshot = refreshed;
-    }
-    snapshot
+    // Child exit can race the asynchronous PTY reader. Wait for the reader's
+    // terminal EOF/EIO signal before taking the final snapshot so trailing
+    // command output is not lost merely because one short sample was quiet.
+    // A bounded fallback preserves existing behavior for descendants that keep
+    // the PTY slave open after the shell leader exits.
+    output
+        .wait_for_reader_done(Duration::from_millis(EXIT_OUTPUT_DRAIN_TIMEOUT_MS))
+        .await;
+    output.snapshot()
 }
 
 fn maybe_force_kill(inner: &mut SessionInner) {
@@ -790,23 +810,25 @@ fn signal_process_group(pid: i32, signal: Signal) -> Result<()> {
     }
 }
 
-fn spawn_reader<R>(mut reader: R, output: Arc<OutputBuffer>)
-where
-    R: AsyncRead + Unpin + Send + 'static,
-{
-    tokio::spawn(async move {
-        let mut buf = [0_u8; 8192];
-        loop {
-            let read = match reader.read(&mut buf).await {
-                Ok(0) => break,
-                Ok(n) => n,
-                Err(_) => break,
-            };
+fn spawn_reader(mut reader: std::fs::File, output: Arc<OutputBuffer>) -> Result<()> {
+    std::thread::Builder::new()
+        .name("zodex-pty-reader".to_string())
+        .spawn(move || {
+            let mut buf = [0_u8; 8192];
+            loop {
+                let read = match reader.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => n,
+                    Err(_) => break,
+                };
 
-            let chunk = String::from_utf8_lossy(&buf[..read]);
-            output.append(&chunk).await;
-        }
-    });
+                let chunk = String::from_utf8_lossy(&buf[..read]);
+                output.append(&chunk);
+            }
+            output.mark_reader_done();
+        })
+        .context("failed to start PTY output reader thread")?;
+    Ok(())
 }
 
 fn unknown_session_handle(session_handle: &str) -> anyhow::Error {
