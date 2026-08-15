@@ -1,11 +1,10 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 #[cfg(unix)]
 use nix::errno::Errno;
 #[cfg(unix)]
@@ -23,6 +22,7 @@ use crate::config::Config;
 use crate::protocol::{
     CommandStatus, ExecCommandInput, TerminationReason, ToolOutput, WriteStdinInput,
 };
+use crate::workdir::validate_absolute_existing_workdir;
 
 const POLL_INTERVAL_MS: u64 = 30;
 const TIMEOUT_NOTICE: &str = "\n[zodexd] process timed out and was terminated\n";
@@ -382,6 +382,7 @@ impl SessionRuntime {
 #[derive(Debug)]
 pub struct SessionManager {
     sessions: RwLock<HashMap<String, Arc<SessionRuntime>>>,
+    admission_lock: Mutex<()>,
     next_internal_session_id: AtomicU64,
     max_sessions: usize,
     max_output_chars: usize,
@@ -392,6 +393,7 @@ impl SessionManager {
     pub fn new(max_sessions: usize, max_output_chars: usize) -> Self {
         Self {
             sessions: RwLock::new(HashMap::new()),
+            admission_lock: Mutex::new(()),
             next_internal_session_id: AtomicU64::new(1),
             max_sessions,
             max_output_chars,
@@ -405,6 +407,8 @@ impl SessionManager {
         cfg: &Config,
         origin: SessionOrigin,
     ) -> Result<ToolOutput> {
+        let command_cwd = validate_absolute_existing_workdir(&input.workdir)?;
+        let _admission_guard = self.admission_lock.lock().await;
         self.evict_if_needed().await?;
 
         let timeout_ms = cfg.clamp_exec_timeout_ms(input.timeout_ms);
@@ -412,7 +416,6 @@ impl SessionManager {
         let now = Instant::now();
         let now_system = SystemTime::now();
 
-        let command_cwd = resolve_command_cwd(input.workdir.as_deref(), cfg)?;
         let command_cwd_display = command_cwd.display().to_string();
 
         #[cfg(unix)]
@@ -516,6 +519,7 @@ impl SessionManager {
             let mut sessions = self.sessions.write().await;
             sessions.insert(session_handle.clone(), runtime.clone());
         }
+        drop(_admission_guard);
 
         info!(
             event = "session_created",
@@ -594,19 +598,10 @@ impl SessionManager {
                     .collect::<Vec<_>>()
             };
 
-            let mut oldest_any: Option<(String, SystemTime, Arc<SessionRuntime>)> = None;
             let mut oldest_exited: Option<(String, SystemTime, Arc<SessionRuntime>)> = None;
 
             for (handle, runtime) in candidates {
                 let last_used = runtime.last_used_at().await;
-                if oldest_any
-                    .as_ref()
-                    .map(|(_, ts, _)| last_used < *ts)
-                    .unwrap_or(true)
-                {
-                    oldest_any = Some((handle.clone(), last_used, runtime.clone()));
-                }
-
                 if runtime.is_exited().await?
                     && oldest_exited
                         .as_ref()
@@ -617,14 +612,13 @@ impl SessionManager {
                 }
             }
 
-            let evict = oldest_exited
-                .map(|(handle, _, _)| handle)
-                .or_else(|| oldest_any.map(|(handle, _, _)| handle));
-
-            if let Some(handle) = evict {
+            if let Some((handle, _, _)) = oldest_exited {
                 self.remove_session(&handle).await;
             } else {
-                return Ok(());
+                bail!(
+                    "session capacity reached ({} running sessions); finish or kill one before starting another command",
+                    self.max_sessions
+                );
             }
         }
     }
@@ -682,28 +676,6 @@ fn system_time_epoch_ms(t: SystemTime) -> u128 {
     t.duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis()
-}
-
-fn resolve_command_cwd(requested_workdir: Option<&str>, cfg: &Config) -> Result<PathBuf> {
-    if let Some(workdir) = requested_workdir {
-        return Ok(PathBuf::from(workdir));
-    }
-
-    if !cfg.default_workdir.trim().is_empty() {
-        let path = PathBuf::from(&cfg.default_workdir);
-        if path.is_dir() {
-            return Ok(path);
-        }
-    }
-
-    if !cfg.agent_home.trim().is_empty() {
-        let path = PathBuf::from(&cfg.agent_home);
-        if path.is_dir() {
-            return Ok(path);
-        }
-    }
-
-    std::env::current_dir().context("failed to resolve current directory")
 }
 
 fn request_termination(inner: &mut SessionInner) {

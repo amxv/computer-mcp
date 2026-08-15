@@ -341,6 +341,13 @@ mod tests {
         resolve_connection_precedence, save_profile,
     };
 
+    fn test_workdir() -> String {
+        std::env::current_dir()
+            .expect("test current directory")
+            .to_string_lossy()
+            .to_string()
+    }
+
     #[test]
     fn tls_certificate_message_detection_is_narrow() {
         assert!(is_tls_certificate_error_message(
@@ -515,7 +522,7 @@ mod tests {
             .exec_command(ExecCommandInput {
                 cmd: "echo client-smoke".to_string(),
                 yield_time_ms: Some(2_000),
-                workdir: None,
+                workdir: test_workdir(),
                 timeout_ms: None,
             })
             .await

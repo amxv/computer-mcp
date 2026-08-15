@@ -2,12 +2,15 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
 
+use crate::workdir::validate_absolute_existing_workdir;
+
 const ADD_FILE_PREFIX: &str = "*** Add File: ";
 const UPDATE_FILE_PREFIX: &str = "*** Update File: ";
 const DELETE_FILE_PREFIX: &str = "*** Delete File: ";
 const MOVE_TO_PREFIX: &str = "*** Move to: ";
 
 pub fn apply_patch(patch: &str, workdir: &str) -> Result<String> {
+    validate_absolute_existing_workdir(workdir)?;
     let rewritten_patch = rewrite_patch_paths(patch, workdir)?;
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
@@ -79,13 +82,6 @@ fn resolve_patch_path(
     let workdir = validated_workdir
         .get_or_insert_with(|| PathBuf::from(workdir))
         .clone();
-    if !workdir.exists() || !workdir.is_dir() {
-        return Err(anyhow!(
-            "apply_patch received relative patch path '{}' but workdir '{}' is invalid or not a directory",
-            path.display(),
-            workdir.display()
-        ));
-    }
 
     Ok(workdir.join(path))
 }
@@ -93,7 +89,6 @@ fn resolve_patch_path(
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::path::Path;
 
     use tempfile::tempdir;
 
@@ -196,7 +191,7 @@ mod tests {
     }
 
     #[test]
-    fn absolute_paths_ignore_invalid_workdir() {
+    fn absolute_paths_still_require_valid_workdir() {
         let dir = tempdir().expect("tempdir");
         let absolute = dir.path().join("absolute.txt");
         let patch = format!(
@@ -204,13 +199,10 @@ mod tests {
             absolute.display()
         );
 
-        let output = apply_patch(&patch, "/definitely/not/a/real/workdir")
-            .expect("absolute path patch should still apply");
-        assert!(output.contains(&format!("A {}", absolute.display())));
-        assert_eq!(
-            fs::read_to_string(absolute).expect("read added file"),
-            "ok\n"
-        );
+        let err = apply_patch(&patch, "/definitely/not/a/real/workdir")
+            .expect_err("declared workdir is always validated");
+        assert!(err.to_string().contains("workdir does not exist"));
+        assert!(!absolute.exists(), "patch side effect must not occur");
     }
 
     #[test]
@@ -219,15 +211,15 @@ mod tests {
         let err = apply_patch(patch, "/definitely/not/a/real/workdir")
             .expect_err("relative patch should fail with invalid workdir");
         let message = err.to_string();
-        assert!(message.contains("relative patch path"));
-        assert!(message.contains("invalid or not a directory"));
+        assert!(message.contains("workdir does not exist"));
     }
 
     #[test]
     fn invalid_patch_returns_error() {
         let patch = "*** Begin Patch\n*** Add File: bad.txt\nbad-line\n*** End Patch\n";
+        let workdir = std::env::current_dir().expect("test current directory");
 
-        let err = apply_patch(patch, Path::new(".").to_string_lossy().as_ref())
+        let err = apply_patch(patch, workdir.to_string_lossy().as_ref())
             .expect_err("invalid patch should fail");
         let message = err.to_string();
         assert!(

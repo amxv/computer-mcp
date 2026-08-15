@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 pub struct ExecCommandInput {
     pub cmd: String,
     pub yield_time_ms: Option<u64>,
-    pub workdir: Option<String>,
+    pub workdir: String,
     pub timeout_ms: Option<u64>,
 }
 
@@ -63,7 +63,20 @@ pub struct ToolOutput {
 mod tests {
     use serde_json::json;
 
-    use super::{ApplyPatchInput, WriteStdinInput};
+    use super::{ApplyPatchInput, ExecCommandInput, WriteStdinInput};
+
+    #[test]
+    fn exec_command_requires_workdir() {
+        let err = serde_json::from_value::<ExecCommandInput>(json!({
+            "cmd": "pwd"
+        }))
+        .expect_err("workdir should be required");
+
+        assert!(
+            err.to_string().contains("workdir"),
+            "unexpected error: {err}"
+        );
+    }
 
     #[test]
     fn apply_patch_requires_workdir() {

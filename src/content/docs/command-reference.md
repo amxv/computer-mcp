@@ -95,7 +95,7 @@ zodex-agent github revoke-push --repo amxv/zodex --forget-local-auth
 
 ```bash
 zodex-client --url https://dev-zodex.example.net --key secret-runtime-key connect
-zodex-client --url https://dev-zodex.example.net --key secret-runtime-key exec-command --cmd "pwd"
+zodex-client --url https://dev-zodex.example.net --key secret-runtime-key exec-command "pwd" --workdir /workspace/zodex
 zodex-client --url https://dev-zodex.example.net --key secret-runtime-key write-stdin --session-handle session-token --chars "yes
 "
 zodex-client --url https://dev-zodex.example.net --key secret-runtime-key apply-patch --workdir /workspace/zodex --patch-file /tmp/change.patch

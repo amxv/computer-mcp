@@ -60,7 +60,7 @@ Input:
 Fields:
 
 - `cmd`: shell command string
-- `workdir`: optional working directory; defaults to configured `default_workdir`
+- `workdir`: required absolute path to an existing directory; there is no daemon-cwd/default-workdir fallback
 - `yield_time_ms`: how long to wait before returning partial output
 - `timeout_ms`: command timeout, capped by `max_exec_timeout_ms`
 
@@ -126,7 +126,7 @@ Input:
 }
 ```
 
-`workdir` is required. Relative paths in the patch are resolved against `workdir`.
+`workdir` is required and must be an absolute path to an existing directory. Relative paths in the patch are resolved against that explicit workdir. The workdir is an execution anchor, not a sandbox: commands and patches can still reference other absolute paths.
 
 ## Output model
 
