@@ -2,6 +2,7 @@ pub mod apply_patch;
 pub mod client;
 pub mod config;
 pub mod http_api;
+pub mod local;
 pub mod protocol;
 pub mod publisher;
 pub mod redaction;

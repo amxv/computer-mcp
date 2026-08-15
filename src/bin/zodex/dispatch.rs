@@ -328,6 +328,9 @@ pub(crate) async fn run() -> Result<()> {
                 },
             }
         }
+        Commands::Local { command } => {
+            handle_local_command(command)?;
+        }
     }
 
     Ok(())
