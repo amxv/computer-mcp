@@ -1,6 +1,7 @@
 use super::{
-    McpServerPolicy, ProviderMetadata, ZodexMcpService, build_mcp_service_with_policy,
-    extract_provider_metadata, key_from_query, rewrite_mcp_transport_root_uri,
+    McpServerPolicy, ProviderMetadata, ProviderMetadataObserver, ZodexMcpService,
+    build_mcp_service_with_policy, extract_provider_metadata, key_from_query,
+    rewrite_mcp_transport_root_uri,
 };
 use crate::config::Config;
 use crate::protocol::{
@@ -32,9 +33,7 @@ fn test_workdir() -> String {
         .to_string()
 }
 
-fn stateless_policy(
-    observer: Option<Arc<dyn Fn(&ProviderMetadata) + Send + Sync>>,
-) -> McpServerPolicy {
+fn stateless_policy(observer: Option<ProviderMetadataObserver>) -> McpServerPolicy {
     McpServerPolicy {
         legacy_session_mode: false,
         json_response: true,
