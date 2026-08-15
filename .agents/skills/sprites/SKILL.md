@@ -1,9 +1,9 @@
 ---
-name: sprites-system
-description: Use when operating Sprites from the CLI, including auth/context setup, command execution, networking, persistence behavior, checkpoints, and day-to-day workflows with an existing Sprite.
+name: sprites
+description: Use when operating Sprites from the CLI, including auth/context setup, command execution, networking, persistence behavior, checkpoints, day-to-day workflows with an existing Sprite, or diagnosing access differences between the default sprite guest user and the separate zodex-agent account used by coding agents.
 ---
 
-# Sprites System
+# Sprites
 
 Supported framing for this repo:
 - use `zodex` for operator-facing commands and product naming
@@ -30,6 +30,46 @@ A Sprite is a persistent cloud Linux environment.
 - Each Sprite has a URL and supports local-to-remote port forwarding
 
 Treat it like a remote dev box with automatic hibernation.
+
+## Guest identities and agent access
+
+`sprite exec` runs non-interactive commands as the `sprite` Linux user by
+default. On the zodex Sprite this is UID 1001 with home `/home/sprite`; it is
+not root. The `sprite` user may have passwordless sudo for operator tasks, but
+commands run as `sprite` do not prove what a coding agent can access.
+
+Coding agents use the separate `zodex-agent` Linux account. On the zodex
+Sprite this is UID 997 with home `/home/zodex-agent` and its own `PATH`, local
+installations, files, and configuration. For example, AgentBox is resolved
+from `/home/zodex-agent/.local/bin/agentbox` and its profile is read from
+`/home/zodex-agent/.config/agentbox/profiles.json`.
+
+When checking agent-visible tools, credentials, or configuration, run the
+command explicitly as `zodex-agent`:
+
+```bash
+sprite exec -s <sprite> -- sudo -n -iu zodex-agent -- /bin/bash -lc \
+  'id; whoami; printf "HOME=%s\\n" "$HOME"; command -v <command>; <command>'
+```
+
+Check both identities when diagnosing a discrepancy. A successful command as
+the default `sprite` user is not evidence that the same command succeeds for
+`zodex-agent`.
+
+Repository permissions can differ even when the default user can list a
+workspace. On the zodex Sprite, `/workspace/repos/zodex` and its Git metadata
+are owned by `zodex-agent:zodex`; `sprite` can see the worktree but cannot read
+`.git/config`. Git may therefore report `not a git repository` when run as
+`sprite`. Run Git checks as the agent account:
+
+The top-level `/workspace` directory is owned by `zodex-agent:zodex` (mode
+`750`), as are its immediate directories, including `/workspace/repos` (mode
+`755`).
+
+```bash
+sprite exec -s <sprite> -- sudo -n -u zodex-agent -H \
+  git -C /workspace/repos/zodex status --short --branch
+```
 
 ## CLI Command Groups
 
