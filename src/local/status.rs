@@ -156,7 +156,7 @@ mod tests {
         LocalObservabilityDiscovery, LocalRuntimeDiscovery, LocalRuntimeLifecycle,
         LocalRuntimeState, LocalStatusDocument, LocalStatusState, ensure_offline_mutation,
     };
-    use crate::local::{LocalConfig, LocalPaths};
+    use crate::local::{LocalConfig, LocalPaths, ManagedTunnelClientRelease};
 
     fn test_paths() -> (tempfile::TempDir, LocalPaths) {
         let dir = tempdir().unwrap();
@@ -240,8 +240,22 @@ mod tests {
         config.save(&paths.config_file()).unwrap();
         assert!(!LocalStatusDocument::inspect(&paths).unwrap().configured);
 
-        config.set("tunnel.id", "tunnel_123").unwrap();
+        config
+            .set("tunnel.id", "tunnel_0123456789abcdef0123456789abcdef")
+            .unwrap();
         config.tunnel.client_path = Some(paths.managed_tunnel_client());
+        config.save(&paths.config_file()).unwrap();
+        assert!(!LocalStatusDocument::inspect(&paths).unwrap().configured);
+
+        config.tunnel.release = Some(ManagedTunnelClientRelease {
+            version: "v0.0.11".to_string(),
+            asset_name: "tunnel-client-v0.0.11-darwin-arm64.zip".to_string(),
+            archive_sha256: "a".repeat(64),
+            binary_sha256: "b".repeat(64),
+            cloudflared_sha256: "c".repeat(64),
+            cloudflared_manifest_sha256: "d".repeat(64),
+            source_url: "https://example.invalid/archive.zip".to_string(),
+        });
         config.save(&paths.config_file()).unwrap();
         let status = LocalStatusDocument::inspect(&paths).unwrap();
         assert!(status.configured);

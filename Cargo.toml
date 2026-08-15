@@ -39,6 +39,7 @@ nix = { version = "0.31", features = ["fs", "signal", "process", "term", "user"]
 rand = "0.10"
 rcgen = "0.14"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots-no-provider"] }
+rpassword = "7.5"
 rmcp = { version = "3.1.2", features = [
     "server",
     "macros",
@@ -49,6 +50,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 schemars = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+sha2 = "0.10"
 strip-ansi-escapes = "0.2.1"
 tempfile = "3.14"
 time = { version = "0.3", features = ["formatting", "local-offset"] }
@@ -58,6 +60,9 @@ toml = "1.0"
 tower = { version = "0.5", features = ["util"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3.7"
 
 [dev-dependencies]
 pretty_assertions = "1.4"

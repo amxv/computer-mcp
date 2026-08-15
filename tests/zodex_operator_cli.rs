@@ -80,6 +80,19 @@ fn zodex_local_help_exposes_complete_public_family_and_inspection_examples() {
 fn zodex_local_subcommand_help_exposes_scriptable_contract() {
     let cases: &[(&[&str], &[&str])] = &[
         (
+            &["local", "setup", "--help"],
+            &[
+                "--tunnel-id",
+                "--runtime-key-stdin",
+                "--runtime-key-env",
+                "--runtime-key-fd",
+                "--rotate-observability-bearer",
+                "never put the secret itself on argv",
+                "does not bypass or configure TCC",
+                "Full Disk Access",
+            ],
+        ),
+        (
             &["local", "start", "--help"],
             &["PATH", "--ttl", "30min", "4h", "2d"],
         ),
@@ -119,6 +132,18 @@ fn zodex_local_subcommand_help_exposes_scriptable_contract() {
             );
         }
     }
+}
+
+#[test]
+fn zodex_local_setup_help_never_exposes_a_raw_runtime_key_argument() {
+    let output = Command::new(env!("CARGO_BIN_EXE_zodex"))
+        .args(["local", "setup", "--help"])
+        .output()
+        .expect("run zodex local setup --help");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("--runtime-key <"), "{stdout}");
+    assert!(!stdout.contains("--runtime-key="), "{stdout}");
 }
 
 #[test]

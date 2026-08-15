@@ -44,6 +44,14 @@ impl LocalPaths {
         self.data_root.join("zodex/bin/tunnel-client")
     }
 
+    pub fn managed_cloudflared(&self) -> PathBuf {
+        self.data_root.join("zodex/bin/cloudflared")
+    }
+
+    pub fn managed_cloudflared_manifest(&self) -> PathBuf {
+        self.data_root.join("zodex/bin/cloudflared-manifest.json")
+    }
+
     pub fn local_state_root(&self) -> PathBuf {
         self.state_root.join("zodex/local")
     }
@@ -153,6 +161,16 @@ mod tests {
             paths
                 .managed_tunnel_client()
                 .ends_with("zodex/bin/tunnel-client")
+        );
+        assert!(
+            paths
+                .managed_cloudflared()
+                .ends_with("zodex/bin/cloudflared")
+        );
+        assert!(
+            paths
+                .managed_cloudflared_manifest()
+                .ends_with("zodex/bin/cloudflared-manifest.json")
         );
         assert!(
             paths

@@ -1,13 +1,49 @@
+use std::io::IsTerminal as _;
+
 use zodex::local::{
-    LocalConfig, LocalPaths, LocalStatusDocument, LocalStatusState, ensure_offline_mutation,
-    parse_human_duration,
+    LocalConfig, LocalPaths, LocalStatusDocument, LocalStatusState, RuntimeKey,
+    ensure_offline_mutation, parse_human_duration, validate_tunnel_id,
+};
+
+#[cfg(target_os = "macos")]
+use zodex::local::{
+    LocalSetupRequest, LocalSetupService, MacDittoArchiveExtractor, MacKeychainRuntimeKeyStore,
+    OfficialTunnelReleaseClient, ProcessTunnelMetadataValidator, TunnelArchitecture,
 };
 
 #[derive(Debug, Subcommand)]
 #[command(after_help = "Agent inspection examples:\n  zodex local status --json\n  zodex local history --last 20\n  zodex local history --since 30min\n  zodex local watch --agent k7m2")]
 enum LocalCommand {
     /// Provision Local configuration, credentials, and the managed tunnel client.
-    Setup,
+    #[command(after_help = "Examples:\n  zodex local setup\n  printf '%s\\n' \"$OPENAI_TUNNEL_RUNTIME_KEY\" | zodex local setup --tunnel-id tunnel_<id> --runtime-key-stdin\n  zodex local setup --tunnel-id tunnel_<id> --runtime-key-env OPENAI_TUNNEL_RUNTIME_KEY\n\nThe OpenAI tunnel runtime key is read from a hidden terminal prompt by default. For automation, pass it via stdin, an environment variable name, or an already-open file descriptor; never put the secret itself on argv.\n\nmacOS privacy: setup does not bypass or configure TCC. Protected folders or app data may later require a normal user-approved Files & Folders or Full Disk Access grant for the effective Zodex runtime identity. Ordinary unprotected workspaces do not require blanket Full Disk Access.")]
+    Setup {
+        /// Existing OpenAI tunnel ID. If omitted, setup prompts interactively.
+        #[arg(long, value_name = "TUNNEL_ID")]
+        tunnel_id: Option<String>,
+        /// Read the OpenAI tunnel runtime key from standard input.
+        #[arg(
+            long,
+            conflicts_with_all = ["runtime_key_env", "runtime_key_fd"]
+        )]
+        runtime_key_stdin: bool,
+        /// Read the OpenAI tunnel runtime key from the named environment variable.
+        #[arg(
+            long,
+            value_name = "ENV",
+            conflicts_with_all = ["runtime_key_stdin", "runtime_key_fd"]
+        )]
+        runtime_key_env: Option<String>,
+        /// Read the OpenAI tunnel runtime key from an already-open file descriptor.
+        #[arg(
+            long,
+            value_name = "FD",
+            conflicts_with_all = ["runtime_key_stdin", "runtime_key_env"]
+        )]
+        runtime_key_fd: Option<u32>,
+        /// Generate a new localhost observability bearer instead of reusing the current one.
+        #[arg(long)]
+        rotate_observability_bearer: bool,
+    },
     /// Start the one Mac-wide Local runtime from a repository or workspace.
     #[command(after_help = "Examples:\n  cd ~/code/amxv/zodex && zodex local start\n  zodex local start ~/code/amxv/zodex --ttl 4h\n\nPATH is startup guidance only. Every exec_command/apply_patch still supplies an explicit absolute workdir.")]
     Start {
@@ -90,12 +126,31 @@ enum LocalHistoryCommand {
     },
 }
 
-fn handle_local_command(command: LocalCommand) -> Result<()> {
+async fn handle_local_command(command: LocalCommand) -> Result<()> {
     let paths = LocalPaths::discover()?;
     match command {
-        LocalCommand::Setup => {
+        LocalCommand::Setup {
+            tunnel_id,
+            runtime_key_stdin,
+            runtime_key_env,
+            runtime_key_fd,
+            rotate_observability_bearer,
+        } => {
             ensure_local_runtime_host()?;
-            bail!("`zodex local setup` provisioning is not available until the managed-setup phase")
+            ensure_offline_mutation(&paths, "run Local setup")?;
+            let (tunnel_id, runtime_key) = resolve_local_setup_inputs(
+                tunnel_id,
+                runtime_key_stdin,
+                runtime_key_env.as_deref(),
+                runtime_key_fd,
+            )?;
+            run_native_local_setup(
+                &paths,
+                tunnel_id,
+                runtime_key,
+                rotate_observability_bearer,
+            )
+            .await
         }
         LocalCommand::Start { path, ttl } => {
             let start_dir = resolve_local_start_directory(path.as_deref())?;
@@ -157,6 +212,163 @@ fn handle_local_command(command: LocalCommand) -> Result<()> {
             bail!("`zodex local stop` lifecycle is not available until the launchd lifecycle phase")
         }
     }
+}
+
+fn resolve_local_setup_inputs(
+    tunnel_id: Option<String>,
+    runtime_key_stdin: bool,
+    runtime_key_env: Option<&str>,
+    runtime_key_fd: Option<u32>,
+) -> Result<(String, RuntimeKey)> {
+    if tunnel_id.is_none() && runtime_key_stdin {
+        bail!(
+            "--runtime-key-stdin requires --tunnel-id so setup does not mix an interactive tunnel-ID prompt with secret stdin"
+        );
+    }
+
+    let tunnel_id = match tunnel_id {
+        Some(value) => value,
+        None => prompt_line("OpenAI tunnel ID: ")?,
+    };
+    let tunnel_id = tunnel_id.trim().to_string();
+    validate_tunnel_id(&tunnel_id)?;
+
+    let raw_key = if runtime_key_stdin {
+        read_secret_limited(&mut io::stdin().lock(), "standard input")?
+    } else if let Some(variable) = runtime_key_env {
+        if variable.is_empty() || variable.contains('=') || variable.contains('\0') {
+            bail!("--runtime-key-env must name one environment variable");
+        }
+        env::var(variable)
+            .with_context(|| format!("environment variable `{variable}` is not set or is not valid UTF-8"))?
+    } else if let Some(fd) = runtime_key_fd {
+        read_runtime_key_from_fd(fd)?
+    } else {
+        if !io::stdin().is_terminal() || !io::stderr().is_terminal() {
+            bail!(
+                "non-interactive setup must choose --runtime-key-stdin, --runtime-key-env <ENV>, or --runtime-key-fd <FD>"
+            );
+        }
+        rpassword::prompt_password("OpenAI tunnel runtime key: ")
+            .context("failed to read OpenAI tunnel runtime key from terminal")?
+    };
+
+    Ok((tunnel_id, RuntimeKey::new(trim_one_line_ending(raw_key))?))
+}
+
+fn prompt_line(prompt: &str) -> Result<String> {
+    if !io::stdin().is_terminal() || !io::stderr().is_terminal() {
+        bail!("non-interactive setup requires --tunnel-id <TUNNEL_ID>");
+    }
+    eprint!("{prompt}");
+    io::stderr().flush().context("failed to flush setup prompt")?;
+    let mut value = String::new();
+    io::stdin()
+        .read_line(&mut value)
+        .context("failed to read setup input")?;
+    Ok(value)
+}
+
+fn read_secret_limited(reader: &mut impl Read, source: &str) -> Result<String> {
+    const LIMIT: u64 = 16 * 1024 + 2;
+    let mut bytes = Vec::new();
+    reader
+        .take(LIMIT)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("failed to read OpenAI tunnel runtime key from {source}"))?;
+    if bytes.len() as u64 == LIMIT {
+        bail!("OpenAI tunnel runtime key from {source} is unexpectedly large");
+    }
+    String::from_utf8(bytes)
+        .with_context(|| format!("OpenAI tunnel runtime key from {source} is not valid UTF-8"))
+}
+
+#[cfg(unix)]
+fn read_runtime_key_from_fd(fd: u32) -> Result<String> {
+    use std::os::fd::BorrowedFd;
+
+    use nix::fcntl::{FcntlArg, FdFlag, fcntl};
+
+    let raw_fd = i32::try_from(fd).context("runtime-key file descriptor is out of range")?;
+    // SAFETY: the caller asserts this is an already-open descriptor by choosing
+    // --runtime-key-fd. BorrowedFd does not take ownership or close it.
+    let borrowed = unsafe { BorrowedFd::borrow_raw(raw_fd) };
+    fcntl(borrowed, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))
+        .with_context(|| format!("failed to mark runtime-key file descriptor {fd} close-on-exec"))?;
+    let path = PathBuf::from(format!("/dev/fd/{fd}"));
+    let mut file = fs::File::open(&path)
+        .with_context(|| format!("failed to open runtime-key file descriptor {fd}"))?;
+    read_secret_limited(&mut file, &format!("file descriptor {fd}"))
+}
+
+#[cfg(not(unix))]
+fn read_runtime_key_from_fd(_fd: u32) -> Result<String> {
+    bail!("--runtime-key-fd is only supported on Unix hosts")
+}
+
+fn trim_one_line_ending(mut value: String) -> String {
+    if value.ends_with('\n') {
+        value.pop();
+        if value.ends_with('\r') {
+            value.pop();
+        }
+    }
+    value
+}
+
+#[cfg(target_os = "macos")]
+async fn run_native_local_setup(
+    paths: &LocalPaths,
+    tunnel_id: String,
+    runtime_key: RuntimeKey,
+    rotate_observability_bearer: bool,
+) -> Result<()> {
+    let releases = OfficialTunnelReleaseClient::new()?;
+    let extractor = MacDittoArchiveExtractor;
+    let validator = ProcessTunnelMetadataValidator::new();
+    let secrets = MacKeychainRuntimeKeyStore;
+    let service = LocalSetupService::new(paths, &releases, &extractor, &validator, &secrets);
+    let result = service
+        .run(LocalSetupRequest {
+            tunnel_id,
+            runtime_key,
+            architecture: TunnelArchitecture::current_macos()?,
+            rotate_observability_bearer,
+        })
+        .await?;
+
+    println!("Zodex Local setup complete.");
+    println!("Tunnel: {}", result.tunnel_id);
+    println!(
+        "Tunnel client: {} ({}, {})",
+        result.managed_binary.display(),
+        result.release_version,
+        if result.binary_updated { "updated" } else { "verified/reused" }
+    );
+    println!("OpenAI runtime key: stored in macOS Keychain");
+    println!("Tunnel metadata: read access verified; Tunnels Use/readiness is verified by `zodex local start`");
+    println!(
+        "Observability bearer: {}",
+        if result.observability_bearer_rotated {
+            "generated/rotated"
+        } else {
+            "verified/reused"
+        }
+    );
+    println!(
+        "macOS privacy: setup does not change TCC. Protected folders/app data may later require a normal user-approved Files & Folders or Full Disk Access grant; ordinary unprotected workspaces do not require blanket Full Disk Access."
+    );
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn run_native_local_setup(
+    _paths: &LocalPaths,
+    _tunnel_id: String,
+    _runtime_key: RuntimeKey,
+    _rotate_observability_bearer: bool,
+) -> Result<()> {
+    bail!("Zodex Local setup is only available on macOS")
 }
 
 fn handle_local_config(paths: &LocalPaths, command: LocalConfigCommand) -> Result<()> {
@@ -251,7 +463,15 @@ fn ensure_local_runtime_host() -> Result<()> {
 
 #[cfg(test)]
 mod local_cli_tests {
-    use super::{resolve_local_start_directory, validate_agent_id};
+    use std::env;
+    use std::io::{Seek as _, Write as _};
+    #[cfg(unix)]
+    use std::os::fd::AsRawFd as _;
+
+    use super::{
+        read_runtime_key_from_fd, resolve_local_setup_inputs, resolve_local_start_directory,
+        trim_one_line_ending, validate_agent_id,
+    };
 
     #[test]
     fn agent_id_validation_matches_public_contract() {
@@ -274,5 +494,47 @@ mod local_cli_tests {
         std::fs::write(&file, "x").unwrap();
         assert!(resolve_local_start_directory(Some(&file)).is_err());
         assert!(resolve_local_start_directory(Some(&dir.path().join("missing"))).is_err());
+    }
+
+    #[test]
+    fn setup_secret_line_endings_are_trimmed_once_only() {
+        assert_eq!(trim_one_line_ending("secret\n".to_string()), "secret");
+        assert_eq!(trim_one_line_ending("secret\r\n".to_string()), "secret");
+        assert_eq!(trim_one_line_ending("secret\n\n".to_string()), "secret\n");
+    }
+
+    #[test]
+    fn setup_env_input_is_scriptable_without_secret_argv() {
+        let variable = format!("ZODEX_LOCAL_TEST_KEY_{}", std::process::id());
+        // SAFETY: this unit test uses a process-unique variable and does not run
+        // concurrent code that reads or mutates it.
+        unsafe { env::set_var(&variable, "fixture-runtime-key\n") };
+        let result = resolve_local_setup_inputs(
+            Some("tunnel_0123456789abcdef0123456789abcdef".to_string()),
+            false,
+            Some(&variable),
+            None,
+        )
+        .unwrap();
+        // SAFETY: matching cleanup for the process-unique test variable above.
+        unsafe { env::remove_var(&variable) };
+        assert_eq!(result.0, "tunnel_0123456789abcdef0123456789abcdef");
+        assert_eq!(result.1.expose(), "fixture-runtime-key");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn setup_fd_input_marks_original_descriptor_close_on_exec() {
+        use nix::fcntl::{FcntlArg, FdFlag, fcntl};
+
+        let mut file = tempfile::tempfile().unwrap();
+        file.write_all(b"fd-runtime-key\n").unwrap();
+        file.rewind().unwrap();
+        let fd = u32::try_from(file.as_raw_fd()).unwrap();
+
+        let value = read_runtime_key_from_fd(fd).unwrap();
+        assert_eq!(trim_one_line_ending(value), "fd-runtime-key");
+        let flags = fcntl(&file, FcntlArg::F_GETFD).unwrap();
+        assert!(FdFlag::from_bits_truncate(flags).contains(FdFlag::FD_CLOEXEC));
     }
 }

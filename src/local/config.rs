@@ -22,6 +22,19 @@ pub struct LocalConfig {
 pub struct LocalTunnelConfig {
     pub id: Option<String>,
     pub client_path: Option<PathBuf>,
+    pub release: Option<ManagedTunnelClientRelease>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct ManagedTunnelClientRelease {
+    pub version: String,
+    pub asset_name: String,
+    pub archive_sha256: String,
+    pub binary_sha256: String,
+    pub cloudflared_sha256: String,
+    pub cloudflared_manifest_sha256: String,
+    pub source_url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -86,6 +99,7 @@ impl LocalConfig {
             .as_deref()
             .is_some_and(|value| !value.trim().is_empty())
             && self.tunnel.client_path.is_some()
+            && self.tunnel.release.is_some()
     }
 
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
@@ -94,9 +108,7 @@ impl LocalConfig {
             "history.max-size" => self.history.max_size = value.parse()?,
             "tunnel.id" => {
                 let value = value.trim();
-                if value.is_empty() {
-                    bail!("tunnel.id must not be empty");
-                }
+                super::validate_tunnel_id(value)?;
                 self.tunnel.id = Some(value.to_owned());
             }
             _ => bail!(
@@ -145,7 +157,19 @@ mod tests {
 
         config.set("history.max-age", "2d").unwrap();
         config.set("history.max-size", "1gb").unwrap();
-        config.set("tunnel.id", "tunnel_123").unwrap();
+        config
+            .set("tunnel.id", "tunnel_0123456789abcdef0123456789abcdef")
+            .unwrap();
+        config.tunnel.client_path = Some(dir.path().join("tunnel-client"));
+        config.tunnel.release = Some(super::ManagedTunnelClientRelease {
+            version: "v0.0.11".to_string(),
+            asset_name: "tunnel-client-v0.0.11-darwin-arm64.zip".to_string(),
+            archive_sha256: "a".repeat(64),
+            binary_sha256: "b".repeat(64),
+            cloudflared_sha256: "c".repeat(64),
+            cloudflared_manifest_sha256: "d".repeat(64),
+            source_url: "https://example.invalid/archive.zip".to_string(),
+        });
         config.save(&path).unwrap();
 
         let raw = std::fs::read_to_string(&path).unwrap();
@@ -153,6 +177,7 @@ mod tests {
         assert!(raw.contains("max_size = \"1gb\""));
         assert!(!raw.contains("api_key"));
         assert!(!raw.contains("runtime_key"));
+        assert!(config.is_provider_configured());
 
         let loaded = LocalConfig::load(&path).unwrap();
         assert_eq!(loaded, config);
