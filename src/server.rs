@@ -25,12 +25,17 @@ use tracing::info;
 
 use crate::config::Config;
 use crate::http_api;
+use crate::invocation::{InvocationContext, ProviderCallMetadata};
 use crate::protocol::{ApplyPatchInput, ExecCommandInput, ToolOutput, WriteStdinInput};
 use crate::service::{ServiceRequest, ZodexService};
 use crate::session::SessionOrigin;
 
 type McpHttpService = StreamableHttpService<ZodexMcpService, LocalSessionManager>;
 const DEFAULT_MCP_INSTRUCTIONS: &str = "zodex remote execution tools";
+
+mod local;
+
+pub use local::{LocalMcpServer, LocalMcpServerConfig, start_local_mcp_server};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct ProviderMetadata {
@@ -44,6 +49,16 @@ fn extract_provider_metadata(meta: &RequestMetaObject) -> ProviderMetadata {
             .and_then(Value::as_str)
             .map(str::to_owned),
     }
+}
+
+fn invocation_context(meta: &RequestMetaObject) -> InvocationContext {
+    let provider = extract_provider_metadata(meta);
+    let mut context = InvocationContext::default()
+        .with_correlation_id(format!("{:032x}", rand::random::<u128>()));
+    if let Some(session_key) = provider.openai_session {
+        context = context.with_provider(ProviderCallMetadata::new("openai/session", session_key));
+    }
+    context
 }
 
 type ProviderMetadataObserver = Arc<dyn Fn(&ProviderMetadata) + Send + Sync>;
@@ -105,18 +120,23 @@ impl ZodexMcpService {
     async fn execute_tool_output(
         &self,
         request: ServiceRequest,
+        invocation: InvocationContext,
     ) -> Result<McpJson<ToolOutput>, String> {
         self.zodex_service
-            .execute(request)
+            .execute_with_context(request, invocation)
             .await
             .and_then(|response| response.into_tool_output())
             .map(McpJson)
             .map_err(|e| e.to_string())
     }
 
-    async fn execute_apply_patch(&self, input: ApplyPatchInput) -> Result<String, String> {
+    async fn execute_apply_patch(
+        &self,
+        input: ApplyPatchInput,
+        invocation: InvocationContext,
+    ) -> Result<String, String> {
         self.zodex_service
-            .execute(ServiceRequest::ApplyPatch { input })
+            .execute_with_context(ServiceRequest::ApplyPatch { input }, invocation)
             .await
             .and_then(|response| response.into_apply_patch_output())
             .map(|output| output.output)
@@ -141,10 +161,14 @@ impl ZodexMcpService {
         request_meta: RequestMetaObject,
     ) -> Result<McpJson<ToolOutput>, String> {
         self.observe_provider_metadata(&request_meta);
-        self.execute_tool_output(ServiceRequest::ExecCommand {
-            input,
-            origin: SessionOrigin::mcp(None),
-        })
+        let invocation = invocation_context(&request_meta);
+        self.execute_tool_output(
+            ServiceRequest::ExecCommand {
+                input,
+                origin: SessionOrigin::mcp(None),
+            },
+            invocation,
+        )
         .await
     }
 
@@ -163,7 +187,8 @@ impl ZodexMcpService {
         request_meta: RequestMetaObject,
     ) -> Result<McpJson<ToolOutput>, String> {
         self.observe_provider_metadata(&request_meta);
-        self.execute_tool_output(ServiceRequest::WriteStdin { input })
+        let invocation = invocation_context(&request_meta);
+        self.execute_tool_output(ServiceRequest::WriteStdin { input }, invocation)
             .await
     }
 
@@ -182,7 +207,8 @@ impl ZodexMcpService {
         request_meta: RequestMetaObject,
     ) -> Result<String, String> {
         self.observe_provider_metadata(&request_meta);
-        self.execute_apply_patch(input).await
+        let invocation = invocation_context(&request_meta);
+        self.execute_apply_patch(input, invocation).await
     }
 }
 
@@ -392,5 +418,7 @@ fn key_from_query(query: Option<&str>) -> Option<String> {
     None
 }
 
+#[cfg(test)]
+mod local_tests;
 #[cfg(test)]
 mod tests;

@@ -4,10 +4,13 @@ use anyhow::{Result, anyhow};
 
 use crate::apply_patch;
 use crate::config::Config;
+use crate::invocation::InvocationContext;
 use crate::protocol::{
     ApplyPatchInput, ApplyPatchOutput, ExecCommandInput, ToolOutput, WriteStdinInput,
 };
-use crate::session::{SessionManager, SessionOrigin};
+use crate::session::{
+    RuntimeShutdownResult, SessionCounts, SessionManager, SessionOrigin, SessionRuntimePolicy,
+};
 
 #[derive(Debug, Clone)]
 pub enum ServiceRequest {
@@ -57,23 +60,37 @@ pub struct ZodexService {
 
 impl ZodexService {
     pub fn new(config: Arc<Config>) -> Self {
-        let sessions = Arc::new(SessionManager::new(
+        Self::with_session_policy(config, SessionRuntimePolicy::sprite())
+    }
+
+    pub fn with_session_policy(config: Arc<Config>, policy: SessionRuntimePolicy) -> Self {
+        let sessions = Arc::new(SessionManager::with_policy(
             config.max_sessions,
             config.max_output_chars,
+            policy,
         ));
         Self { config, sessions }
     }
 
     pub async fn execute(&self, request: ServiceRequest) -> Result<ServiceResponse> {
+        self.execute_with_context(request, InvocationContext::default())
+            .await
+    }
+
+    pub async fn execute_with_context(
+        &self,
+        request: ServiceRequest,
+        invocation: InvocationContext,
+    ) -> Result<ServiceResponse> {
         match request {
             ServiceRequest::ExecCommand { input, origin } => self
                 .sessions
-                .exec_command(input, &self.config, origin)
+                .exec_command_with_context(input, &self.config, origin, invocation)
                 .await
                 .map(ServiceResponse::ToolOutput),
             ServiceRequest::WriteStdin { input } => self
                 .sessions
-                .write_stdin(input, &self.config)
+                .write_stdin_with_context(input, &self.config, invocation)
                 .await
                 .map(ServiceResponse::ToolOutput),
             ServiceRequest::ApplyPatch { input } => self
@@ -105,6 +122,18 @@ impl ZodexService {
 
     pub fn apply_patch(&self, input: ApplyPatchInput) -> Result<String> {
         apply_patch::apply_patch(&input.patch, &input.workdir)
+    }
+
+    pub fn accepting_new_sessions(&self) -> bool {
+        self.sessions.accepting_new_sessions()
+    }
+
+    pub async fn session_counts(&self) -> Result<SessionCounts> {
+        self.sessions.session_counts().await
+    }
+
+    pub async fn shutdown_sessions(&self) -> Result<RuntimeShutdownResult> {
+        self.sessions.shutdown_all().await
     }
 }
 

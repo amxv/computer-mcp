@@ -88,6 +88,10 @@ impl LocalPaths {
         self.runtime_dir().join("discovery.json")
     }
 
+    pub fn owned_process_registry_file(&self) -> PathBuf {
+        self.runtime_dir().join("owned-processes.json")
+    }
+
     pub fn ensure_persistent_dirs(&self) -> Result<()> {
         for path in [self.credentials_dir(), self.history_dir(), self.logs_dir()] {
             fs::create_dir_all(&path)
@@ -184,6 +188,11 @@ mod tests {
         );
         assert!(paths.logs_dir().ends_with("local/logs"));
         assert!(paths.runtime_dir().ends_with("local/runtime"));
+        assert!(
+            paths
+                .owned_process_registry_file()
+                .ends_with("local/runtime/owned-processes.json")
+        );
         assert!(!paths.history_dir().starts_with(paths.runtime_dir()));
         assert!(!paths.credentials_dir().starts_with(paths.runtime_dir()));
     }
