@@ -1,9 +1,9 @@
 ---
 title: Runtime architecture
-description: Understand how ChatGPT, the operator CLI, Sprite services, server routes, HTTP API, agent helper, GitHub Apps, and publisher daemon fit together.
+description: Understand how ChatGPT, the operator CLI, Sprite and Local Linux targets, server routes, agent identity, GitHub Apps, and publisher daemon fit together.
 order: 3
 category: Architecture
-summary: The component map for the Rust binaries and services that make ChatGPT-backed zodex work.
+summary: The component map for the shared Zodex runtime and the distinct Sprite and Local infrastructure around it.
 ---
 
 ## Component overview
@@ -18,7 +18,7 @@ zodexd        MCP and HTTP daemon
 zodex-prd     internal push-grant support daemon
 ```
 
-The operator machine uses `zodex`. The Sprite guest uses `zodex-agent`, `zodexd`, and `zodex-prd`. The `zodex-client` binary exists for direct HTTP API testing and automation.
+The operator machine uses `zodex`. A Sprite guest uses `zodex-agent`, `zodexd`, and `zodex-prd`. Zodex Local installs the same agent/daemon/publisher roles into its persistent Linux machine and adds a restricted tunnel service for Local MCP ingress. The `zodex-client` binary exists for direct HTTP API testing and automation.
 
 ## ChatGPT-first tool shape
 
@@ -42,6 +42,9 @@ zodex sprite status --sprite dev-sprite
 zodex sprite logs --sprite dev-sprite --service zodexd --lines 100
 zodex proxy verify-origin --sprite dev-sprite
 zodex github grant-push --sprite dev-sprite --repo amxv/zodex
+zodex local status
+zodex local start --ttl 2d
+zodex github mode yolo --local --repo amxv/zodex --ttl 2d
 ```
 
 It also contains local service commands such as `install`, `start`, `stop`, `restart`, `status`, `logs`, `set-key`, `rotate-key`, and `tls setup` for direct non-Sprite service control.
@@ -55,6 +58,21 @@ It also contains local service commands such as `install`, `start`, `stop`, `res
 - `/v1/exec-command`, `/v1/write-stdin`, and `/v1/apply-patch`, HTTP JSON endpoints behind Bearer auth
 
 `zodex-prd` is the internal publisher-side service used by the push-grant and publishing support path. It is not exposed as an MCP tool.
+
+## Local runtime
+
+Zodex Local owns one persistent Apple Container Linux machine named `zodex-local`. It does not mount the operator's macOS home directory. Repositories, build outputs, package caches, and installed Linux tools stay on the machine's native persistent filesystem across `local stop` and later `local start`.
+
+The model-facing runtime keeps the same identities and MCP protocol as Sprite, but Local infrastructure is deliberately different:
+
+- `zodex-agent` remains the unprivileged coding identity
+- `zodex-publisher` and `zodex-tunnel` remain separate restricted identities
+- `zodexd`, `zodex-prd`, the tunnel process, and model-launched descendants share one root-owned restricted Linux network namespace
+- that namespace can reach public IPv4 destinations but is denied macOS/private-network and other non-public IPv4 ranges; IPv6 is disabled there
+- `zodex local exec` stays outside that namespace as trusted guest-root operator administration
+- Secure MCP Tunnel ingress is enabled only by `zodex local start --ttl ...` and revoked by stop/expiry
+
+Local trusts the Apple Container guest kernel and root-owned control plane. Its isolation claim is about the unprivileged coding agent; it is not a hostile-guest-kernel containment boundary.
 
 ## Agent helper
 
@@ -72,9 +90,9 @@ The agent helper can request and revoke direct-push grants, publish PRs through 
 
 ## Service flow
 
-A normal ChatGPT coding session looks like this:
+A normal ChatGPT coding session looks like this on either target:
 
-1. ChatGPT connects to the proxy-backed `/mcp?key=...` route.
+1. ChatGPT connects to the selected target identity: the Sprite MCP route or the dedicated Local Secure MCP Tunnel.
 2. `zodexd` authenticates the `key` query parameter.
 3. ChatGPT runs shell commands through `exec_command`.
 4. Long-running commands return a `session_handle`.
@@ -83,10 +101,12 @@ A normal ChatGPT coding session looks like this:
 7. Git clone and fetch use reader-backed access.
 8. Work returns to GitHub through PR-only publishing, a push grant, or operator YOLO mode.
 
-The design keeps code execution powerful while making GitHub writes explicit and time-bound.
+The design keeps code execution powerful while making GitHub writes explicit and time-bound. Local machine access and GitHub write authority are separate state machines: starting a Local TTL does not enable direct push, and a Local YOLO grant does not expose the MCP tunnel.
 
 ## Why Sprites fit this model
 
 A ChatGPT coding session often happens in bursts: clone, inspect, run checks, patch, wait for feedback, then continue later. Sprites fit that pattern better than an always-on VPS because the workspace can be provisioned for remote work without treating idle time as the default operating mode.
 
 zodex keeps the Sprite-specific operations in the operator CLI so ChatGPT can focus on the coding loop instead of infrastructure setup.
+
+Local follows the same principle without pretending its lifecycle is Sprite-shaped. Apple machine creation, persistent storage, Secure MCP Tunnel lifecycle, resource sizing, and network isolation stay Local-specific while the actual agent/runtime/GitHub behavior is reused.

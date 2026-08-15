@@ -1,0 +1,13 @@
+[Unit]
+Description=Zodex Local restricted agent network
+After=network-online.target
+Wants=network-online.target
+Before=zodex-prd.service zodexd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/zodex-local-network reconcile
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,6 +1,6 @@
 ---
 title: Configuration
-description: Configure bind addresses, TLS, API keys, workspace defaults, session limits, GitHub App credentials, publisher settings, and grant behavior.
+description: Configure guest runtime settings and understand the separate operator-side Sprite and Local target state that zodex keeps on the controlling machine.
 order: 4
 category: Architecture
 summary: The `/etc/zodex/config.toml` fields that control the daemon, tools, GitHub access, and publisher service.
@@ -22,6 +22,22 @@ zodex-agent --config /etc/zodex/config.toml github list-grants
 ```
 
 If the file is missing, zodex loads its built-in defaults.
+
+On a Sprite, this is the runtime configuration installed in the Sprite guest. Zodex Local creates the same guest config inside its Linux machine; the macOS operator does not use `/etc/zodex/config.toml` as the source of Local machine lifecycle state.
+
+## Operator-side Local state
+
+The macOS operator keeps Local lifecycle metadata under `~/.config/zodex/`:
+
+```text
+local-target.json
+local-access-lease.json
+local-last-ready-setup.json
+```
+
+`local-target.json` records the current Local setup/resource/network intent. `local-access-lease.json` is the finite MCP-access lease used by the host-side expiry supervisor. `local-last-ready-setup.json` preserves the most recent verified recreation intent so an interrupted later setup does not destroy the only reset recipe.
+
+These private state files contain identifiers and **source references**, not copied GitHub PEM or tunnel runtime-key contents. The PEM and tunnel-key files remain at the paths passed to `zodex local setup`; keep those source files readable by the operator if you want a future `zodex local reset` to recreate the machine. Do not hand-edit Local state to bypass setup/reset checks.
 
 ## Server and API settings
 

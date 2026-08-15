@@ -8,6 +8,8 @@ summary: The operator-machine controls for grant-push, revoke-push, mode yolo, m
 
 The operator CLI controls GitHub write autonomy from outside the ChatGPT session. Use it when the human should decide exactly when direct push opens, how wide the scope is, and how long it stays active.
 
+`grant-push` is the remote Sprite grant path. Operator YOLO mode can target either a Sprite or the configured Local machine.
+
 ## One-off operator grant
 
 The Sprite-side command is usually the clearest flow:
@@ -43,6 +45,7 @@ zodex github mode yolo --sprite dev-sprite --ttl 4h
 zodex github mode yolo --sprite dev-sprite --repo amxv/zodex
 zodex github mode yolo --sprite dev-sprite --repo amxv/zodex --repo amxv/webctx
 zodex github mode yolo --sprite dev-sprite --no-ttl
+zodex github mode yolo --local --repo amxv/zodex --ttl 4h
 ```
 
 `mode yolo` defaults to a `2h` TTL and an all-installed-repos scope. Passing `--repo` changes the scope to a repo allowlist. Repo-scoped YOLO commands merge with the active YOLO state instead of replacing other active repo grants, so each repo expires according to the TTL from the command that granted it. Passing `--no-ttl` makes the new window indefinite until the operator disables YOLO mode.
@@ -55,6 +58,7 @@ Check YOLO mode:
 
 ```bash
 zodex github mode status --sprite dev-sprite
+zodex github mode status --local
 ```
 
 List explicit grants:
@@ -71,9 +75,12 @@ Disable YOLO mode:
 
 ```bash
 zodex github mode default --sprite dev-sprite
+zodex github mode default --local
 ```
 
 `mode default` disables only YOLO state. It leaves explicit push grants alone so one-off grant state remains visible and revocable.
+
+`--local` and `--sprite <name>` are mutually exclusive selectors. When exactly one eligible target exists zodex can preserve convenient inference; when target selection is ambiguous it fails closed instead of silently granting both.
 
 ## Revoke explicit grants
 

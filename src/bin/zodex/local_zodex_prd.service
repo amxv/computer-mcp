@@ -1,0 +1,20 @@
+[Unit]
+Description=Zodex Local publisher daemon
+After=zodex-local-network.service
+Requires=zodex-local-network.service
+
+[Service]
+Type=simple
+User=zodex-publisher
+Group=zodex
+NetworkNamespacePath=/run/netns/zodex-agent
+BindReadOnlyPaths=/etc/netns/zodex-agent/resolv.conf:/etc/resolv.conf
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+ExecStart=/usr/local/bin/zodex-prd --config /etc/zodex/config.toml
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target
