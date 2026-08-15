@@ -1,15 +1,19 @@
+mod file_store;
 mod query;
 mod schema;
 mod store;
 mod worker;
 
 #[cfg(test)]
+mod migration_tests;
+#[cfg(test)]
 mod shutdown_tests;
 #[cfg(test)]
 mod tests;
 
 pub use query::{
-    HistoryFormat, HistoryInvocation, HistoryQuery, HistoryStoreStatus, LocalHistoryReader,
+    HistoryAgentSummary, HistoryAgentWorkdir, HistoryFileEvidence, HistoryFormat,
+    HistoryInvocation, HistoryQuery, HistoryStoreStatus, LocalHistoryReader,
 };
 pub use schema::HISTORY_SCHEMA_VERSION;
 pub use worker::{LocalHistoryRuntime, LocalHistoryRuntimeConfig};

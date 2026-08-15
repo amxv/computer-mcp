@@ -2,8 +2,8 @@ use std::io::IsTerminal as _;
 
 use zodex::local::{
     HistoryFormat, HistoryQuery, LocalConfig, LocalHistoryReader, LocalPaths, LocalStatusDocument,
-    LocalStatusState, RuntimeKey, clear_local_history, ensure_offline_mutation,
-    parse_human_duration, validate_tunnel_id,
+    LocalStatusState, RuntimeKey, build_presentation, clear_local_history, ensure_offline_mutation,
+    parse_human_duration, render_presentation, validate_tunnel_id,
 };
 
 #[cfg(target_os = "macos")]
@@ -241,7 +241,14 @@ async fn handle_local_command(command: LocalCommand) -> Result<()> {
                 query = query.with_workdir(workdir)?;
             }
             let records = LocalHistoryReader::query(&paths.history_database(), &query)?;
-            print!("{}", LocalHistoryReader::render(&records, format, raw)?);
+            if raw {
+                print!("{}", LocalHistoryReader::render(&records, format, true)?);
+            } else {
+                let agents =
+                    LocalHistoryReader::agent_summaries(&paths.history_database(), &records)?;
+                let presentation = build_presentation(&records, &agents);
+                print!("{}", render_presentation(&presentation, format)?);
+            }
             Ok(())
         }
         LocalCommand::Config { command } => handle_local_config(&paths, command),

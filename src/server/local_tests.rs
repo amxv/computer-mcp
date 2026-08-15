@@ -23,7 +23,7 @@ use super::local::{
 };
 use super::start_local_mcp_server;
 
-const TOKEN: &str = "phase4-local-mcp-token";
+pub(super) const TOKEN: &str = "phase4-local-mcp-token";
 
 fn local_environment() -> Vec<(OsString, OsString)> {
     [
@@ -44,7 +44,7 @@ fn local_service(config: Config) -> ZodexService {
     )
 }
 
-fn history_runtime(path: PathBuf) -> Arc<LocalHistoryRuntime> {
+pub(super) fn history_runtime(path: PathBuf) -> Arc<LocalHistoryRuntime> {
     LocalHistoryRuntime::open(LocalHistoryRuntimeConfig::new(
         path,
         "local-http-history-test-runtime",
@@ -54,21 +54,24 @@ fn history_runtime(path: PathBuf) -> Arc<LocalHistoryRuntime> {
     .unwrap()
 }
 
-fn local_service_with_history(config: Config, history: Arc<LocalHistoryRuntime>) -> ZodexService {
+pub(super) fn local_service_with_history(
+    config: Config,
+    history: Arc<LocalHistoryRuntime>,
+) -> ZodexService {
     let policy = SessionRuntimePolicy::local("/bin/sh", local_environment())
         .unwrap()
         .with_output_observer(history);
     ZodexService::with_session_policy(Arc::new(config), policy)
 }
 
-async fn shutdown_history_runtime(history: Arc<LocalHistoryRuntime>) {
+pub(super) async fn shutdown_history_runtime(history: Arc<LocalHistoryRuntime>) {
     tokio::task::spawn_blocking(move || history.shutdown_blocking())
         .await
         .unwrap()
         .unwrap();
 }
 
-fn test_http_client() -> reqwest::Client {
+pub(super) fn test_http_client() -> reqwest::Client {
     crate::install_rustls_crypto_provider();
     reqwest::Client::new()
 }
@@ -94,7 +97,7 @@ fn modern_meta(openai_session: Option<&str>) -> Value {
     Value::Object(meta)
 }
 
-async fn post_mcp(
+pub(super) async fn post_mcp(
     client: &reqwest::Client,
     url: &str,
     token: Option<&str>,
@@ -125,7 +128,7 @@ async fn post_mcp(
     request.send().await.unwrap()
 }
 
-async fn json_response(response: Response) -> Value {
+pub(super) async fn json_response(response: Response) -> Value {
     let status = response.status();
     let bytes = response.bytes().await.unwrap();
     assert!(
@@ -141,7 +144,7 @@ fn tool_output(value: &Value) -> ToolOutput {
         .unwrap_or_else(|error| panic!("invalid ToolOutput in MCP response ({error}): {value}"))
 }
 
-fn tool_call(id: u64, name: &str, arguments: Value, session: &str) -> Value {
+pub(super) fn tool_call(id: u64, name: &str, arguments: Value, session: &str) -> Value {
     json!({
         "jsonrpc": "2.0",
         "id": id,
@@ -571,7 +574,7 @@ async fn local_mcp_history_keeps_exact_bounded_result_and_full_quick_pty_output(
                 60,
                 "exec_command",
                 json!({
-                    "cmd":"i=0; while [ \"$i\" -lt 1024 ]; do printf 'abcdefgh'; i=$((i+1)); done; printf '\\nEND-OF-FULL-OUTPUT\\n'",
+                    "cmd":"i=0; while [ \"$i\" -lt 4096 ]; do printf 'abcdefgh'; i=$((i+1)); done; printf '\\nEND-OF-FULL-OUTPUT\\n'",
                     "workdir":root.path(),
                     "yield_time_ms":2000
                 }),
@@ -624,6 +627,24 @@ async fn local_mcp_history_keeps_exact_bounded_result_and_full_quick_pty_output(
     assert!(full_output.contains("abcdefghabcdefgh"));
     assert!(full_output.contains("END-OF-FULL-OUTPUT"));
     assert!(full_output.len() > returned.output.len());
+    let preview = record.output_preview.as_deref().unwrap();
+    assert!(preview.starts_with("abcdefghabcdefgh"));
+    assert_eq!(preview.chars().count(), 16_384);
+    assert!(record.output_preview_truncated);
+    assert!(!preview.contains("END-OF-FULL-OUTPUT"));
+
+    let compact_detail = LocalHistoryReader::query(
+        &database,
+        &HistoryQuery {
+            invocation_id: Some(record.id),
+            ..HistoryQuery::default()
+        },
+    )
+    .unwrap()
+    .pop()
+    .unwrap();
+    assert!(compact_detail.full_output.is_none());
+    assert_eq!(compact_detail.output_preview.as_deref(), Some(preview));
 }
 
 #[tokio::test]

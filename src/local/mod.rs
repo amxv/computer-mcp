@@ -1,7 +1,9 @@
 mod config;
+mod file_evidence;
 mod history;
 mod parse;
 mod paths;
+mod presentation;
 mod process_registry;
 mod runtime;
 mod secret;
@@ -15,11 +17,18 @@ mod setup_tests;
 
 pub use config::{LocalConfig, LocalHistoryConfig, LocalTunnelConfig, ManagedTunnelClientRelease};
 pub use history::{
-    HISTORY_SCHEMA_VERSION, HistoryFormat, HistoryInvocation, HistoryQuery, HistoryStoreStatus,
-    LocalHistoryReader, LocalHistoryRuntime, LocalHistoryRuntimeConfig, clear_local_history,
+    HISTORY_SCHEMA_VERSION, HistoryAgentSummary, HistoryAgentWorkdir, HistoryFileEvidence,
+    HistoryFormat, HistoryInvocation, HistoryQuery, HistoryStoreStatus, LocalHistoryReader,
+    LocalHistoryRuntime, LocalHistoryRuntimeConfig, clear_local_history,
 };
 pub use parse::{HumanDuration, StorageSize, parse_human_duration, parse_storage_size};
 pub use paths::LocalPaths;
+pub use presentation::{
+    PRESENTATION_SCHEMA_VERSION, PresentationAgent, PresentationDiffLine, PresentationDocument,
+    PresentationEvidence, PresentationFileChange, PresentationFileOperation, PresentationKind,
+    PresentationPollSummary, PresentationRecord, PresentationWorkdir, PresentationWriteMode,
+    build_presentation, render_presentation,
+};
 pub use process_registry::{
     LOCAL_PROCESS_REGISTRY_SCHEMA_VERSION, LocalOwnedProcessRecord, LocalOwnedProcessRegistry,
     LocalProcessRegistryDocument, StaleProcessCleanupReport, signal_matching_stale_processes,

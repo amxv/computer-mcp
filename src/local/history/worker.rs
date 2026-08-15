@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
@@ -11,6 +11,9 @@ use tracing::{error, warn};
 
 use crate::invocation::{
     InvocationContext, InvocationEvidenceRecorder, InvocationOutcome, InvocationStart,
+};
+use crate::local::file_evidence::{
+    CompletedFileEvidence, PendingFileEvidence, complete_file_evidence, prepare_file_evidence,
 };
 use crate::session::{
     OwnedProcess, OwnedProcessObserver, SessionOutputChunk, SessionOutputCompletion,
@@ -181,6 +184,7 @@ enum WorkerMessage {
     Complete {
         context: InvocationContext,
         outcome: InvocationOutcome,
+        file_evidence: Vec<CompletedFileEvidence>,
     },
     Shutdown,
 }
@@ -190,6 +194,7 @@ pub struct LocalHistoryRuntime {
     sender: SyncSender<WorkerMessage>,
     worker: Mutex<Option<JoinHandle<()>>>,
     health: Arc<HistoryHealth>,
+    file_evidence: Mutex<HashMap<i64, Vec<PendingFileEvidence>>>,
 }
 
 impl LocalHistoryRuntime {
@@ -227,6 +232,7 @@ impl LocalHistoryRuntime {
             sender,
             worker: Mutex::new(Some(worker)),
             health,
+            file_evidence: Mutex::new(HashMap::new()),
         }))
     }
 
@@ -316,6 +322,17 @@ impl LocalHistoryRuntime {
         handle
             .join()
             .map_err(|_| anyhow::anyhow!("Local history writer thread panicked"))?;
+        if let Err(error) = self.store.mark_pending_file_evidence_unavailable(
+            "Local runtime shutdown ended before after-file evidence completed",
+        ) {
+            warn!(
+                event = "local_history_shutdown_file_evidence_finalize_failed",
+                error = %error,
+            );
+            if finalize_error.is_none() {
+                finalize_error = Some(error);
+            }
+        }
         if let Some(error) = finalize_error {
             Err(error)
         } else {
@@ -363,8 +380,31 @@ impl InvocationEvidenceRecorder for LocalHistoryRuntime {
         start: InvocationStart,
     ) -> Result<InvocationContext> {
         self.health.ensure_accepting()?;
+        let pending_file_evidence = prepare_file_evidence(&start);
         match self.store.begin(context, start) {
-            Ok(context) => Ok(context),
+            Ok(context) => {
+                if let Some(invocation_id) = context.invocation_id
+                    && !pending_file_evidence.is_empty()
+                {
+                    match self
+                        .store
+                        .persist_file_evidence_start(invocation_id, &pending_file_evidence)
+                    {
+                        Ok(()) => {
+                            self.file_evidence
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                .insert(invocation_id, pending_file_evidence);
+                        }
+                        Err(error) => warn!(
+                            event = "local_file_evidence_before_persistence_failed",
+                            invocation_id,
+                            error = %error,
+                        ),
+                    }
+                }
+                Ok(context)
+            }
             Err(error) => {
                 self.health.degrade_persisting(
                     &self.store,
@@ -379,9 +419,17 @@ impl InvocationEvidenceRecorder for LocalHistoryRuntime {
         let invocation_id = context.invocation_id.ok_or_else(|| {
             anyhow::anyhow!("Local invocation completion is missing durable invocation ID")
         })?;
+        let pending_file_evidence = self
+            .file_evidence
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&invocation_id)
+            .unwrap_or_default();
+        let file_evidence = complete_file_evidence(&pending_file_evidence);
         let queued = WorkerMessage::Complete {
             context: context.clone(),
             outcome: outcome.clone(),
+            file_evidence: file_evidence.clone(),
         };
         let reason = match self.sender.try_send(queued) {
             Ok(()) => return Ok(()),
@@ -400,6 +448,7 @@ impl InvocationEvidenceRecorder for LocalHistoryRuntime {
         self.health.degrade_nonblocking(&reason);
         match self.store.complete(context, outcome) {
             Ok(()) => {
+                persist_completed_file_evidence(&self.store, invocation_id, &file_evidence);
                 self.health
                     .maintenance_requested
                     .store(true, Ordering::Release);
@@ -537,7 +586,11 @@ fn process_messages(messages: Vec<WorkerMessage>, store: &HistoryStore, health: 
     for message in messages {
         match message {
             WorkerMessage::Output(event) => output_events.push(event),
-            WorkerMessage::Complete { context, outcome } => {
+            WorkerMessage::Complete {
+                context,
+                outcome,
+                file_evidence,
+            } => {
                 flush_output_events(&mut output_events, store, health);
                 let invocation_id = context.invocation_id;
                 if let Err(error) = store.complete(&context, outcome) {
@@ -549,6 +602,9 @@ fn process_messages(messages: Vec<WorkerMessage>, store: &HistoryStore, health: 
                         format!("invocation completion persistence failed: {error}"),
                     );
                 } else {
+                    if let Some(invocation_id) = invocation_id {
+                        persist_completed_file_evidence(store, invocation_id, &file_evidence);
+                    }
                     health.maintenance_requested.store(true, Ordering::Release);
                 }
             }
@@ -560,6 +616,31 @@ fn process_messages(messages: Vec<WorkerMessage>, store: &HistoryStore, health: 
     flush_output_events(&mut output_events, store, health);
     if !health.accepting_new.load(Ordering::Acquire) {
         health.persist_degraded_state(store);
+    }
+}
+
+fn persist_completed_file_evidence(
+    store: &HistoryStore,
+    invocation_id: i64,
+    evidence: &[CompletedFileEvidence],
+) {
+    if evidence.is_empty() {
+        return;
+    }
+    if let Err(error) = store.persist_file_evidence_completion(invocation_id, evidence) {
+        warn!(
+            event = "local_file_evidence_after_persistence_failed",
+            invocation_id,
+            error = %error,
+        );
+        let reason = format!("after-file evidence persistence failed: {error}");
+        if let Err(mark_error) = store.mark_file_evidence_unavailable(invocation_id, &reason) {
+            warn!(
+                event = "local_file_evidence_unavailable_persistence_failed",
+                invocation_id,
+                error = %mark_error,
+            );
+        }
     }
 }
 

@@ -505,6 +505,8 @@ fn key_from_query(query: Option<&str>) -> Option<String> {
 }
 
 #[cfg(test)]
+mod local_history_tests;
+#[cfg(test)]
 mod local_tests;
 #[cfg(test)]
 mod tests;

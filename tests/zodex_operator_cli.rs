@@ -8,7 +8,7 @@ use zodex::invocation::{
     InvocationContext, InvocationEvidenceRecorder, InvocationOutcome, InvocationStart,
     ProviderCallMetadata,
 };
-use zodex::local::{LocalHistoryRuntime, LocalHistoryRuntimeConfig};
+use zodex::local::{LocalHistoryRuntime, LocalHistoryRuntimeConfig, PRESENTATION_SCHEMA_VERSION};
 
 #[test]
 fn zodex_github_help_exposes_mode_commands() {
@@ -333,6 +333,39 @@ fn zodex_local_history_queries_exact_offline_evidence_and_clear_removes_store() 
         records[0]["result"],
         serde_json::json!({"output":"exact-handler-result"})
     );
+
+    let output = fixture
+        .command()
+        .args(["local", "history", "--agent", &agent_id, "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let presentation: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(presentation["schema_version"], PRESENTATION_SCHEMA_VERSION);
+    assert_eq!(presentation["agents"][0]["id"], agent_id);
+    assert_eq!(presentation["records"][0]["agent_id"], agent_id);
+    assert_eq!(presentation["records"][0]["kind"], "generic");
+    assert!(
+        !String::from_utf8_lossy(&output.stdout).contains("operator-cli-provider-session"),
+        "normalized JSON must not expose provider correlation keys"
+    );
+
+    let output = fixture
+        .command()
+        .args(["local", "history", "--agent", &agent_id])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let markdown = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        markdown.contains(&format!("Agent `{agent_id}`")),
+        "{markdown}"
+    );
+    assert!(markdown.contains("**apply_patch**"), "{markdown}");
 
     let output = fixture
         .command()

@@ -1,9 +1,9 @@
 use anyhow::{Context, Result, bail};
 use rusqlite::{Connection, OptionalExtension};
 
-pub const HISTORY_SCHEMA_VERSION: u32 = 1;
+pub const HISTORY_SCHEMA_VERSION: u32 = 3;
 
-const SCHEMA_V1: &str = r#"
+pub(super) const SCHEMA_V1: &str = r#"
 CREATE TABLE agents (
     id TEXT PRIMARY KEY CHECK(length(id) = 4),
     provider_kind TEXT NOT NULL,
@@ -84,6 +84,37 @@ INSERT INTO history_state(singleton, health_state, updated_at_ms)
 VALUES (1, 'healthy', 0);
 "#;
 
+pub(super) const SCHEMA_V2: &str = r#"
+CREATE TABLE invocation_file_evidence (
+    invocation_id INTEGER NOT NULL REFERENCES invocations(id) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL,
+    source_kind TEXT NOT NULL CHECK(source_kind IN ('apply_patch', 'shell_write')),
+    operation_hint TEXT NOT NULL CHECK(operation_hint IN ('create', 'update', 'delete', 'move', 'overwrite', 'append')),
+    path_before TEXT NOT NULL,
+    path_after TEXT NOT NULL,
+    before_state TEXT NOT NULL CHECK(before_state IN ('missing', 'text', 'unavailable')),
+    before_text TEXT,
+    before_reason TEXT,
+    after_state TEXT NOT NULL CHECK(after_state IN ('pending', 'missing', 'text', 'unavailable')),
+    after_text TEXT,
+    after_reason TEXT,
+    source_after_state TEXT CHECK(source_after_state IS NULL OR source_after_state IN ('missing', 'text', 'unavailable')),
+    source_after_text TEXT,
+    source_after_reason TEXT,
+    PRIMARY KEY(invocation_id, ordinal)
+) WITHOUT ROWID;
+
+CREATE INDEX invocation_file_evidence_after_path_idx
+ON invocation_file_evidence(path_after, invocation_id);
+"#;
+
+const SCHEMA_V3: &str = r#"
+ALTER TABLE invocation_file_evidence ADD COLUMN destination_before_state TEXT
+    CHECK(destination_before_state IS NULL OR destination_before_state IN ('missing', 'text', 'unavailable'));
+ALTER TABLE invocation_file_evidence ADD COLUMN destination_before_text TEXT;
+ALTER TABLE invocation_file_evidence ADD COLUMN destination_before_reason TEXT;
+"#;
+
 pub(super) fn configure_writer(connection: &Connection) -> Result<()> {
     connection
         .busy_timeout(std::time::Duration::from_millis(500))
@@ -96,7 +127,7 @@ pub(super) fn configure_writer(connection: &Connection) -> Result<()> {
 
 pub(super) fn initialize_or_migrate(connection: &mut Connection) -> Result<()> {
     configure_writer(connection)?;
-    let version = user_version(connection)?;
+    let mut version = user_version(connection)?;
     if version > HISTORY_SCHEMA_VERSION {
         bail!(
             "Local history schema version {version} is newer than this Zodex build supports ({HISTORY_SCHEMA_VERSION})"
@@ -138,12 +169,15 @@ pub(super) fn initialize_or_migrate(connection: &mut Connection) -> Result<()> {
             .execute_batch(SCHEMA_V1)
             .context("failed to create Local history schema v1")?;
         transaction
-            .pragma_update(None, "user_version", HISTORY_SCHEMA_VERSION)
+            .pragma_update(None, "user_version", 1)
             .context("failed to publish Local history schema version")?;
         transaction
             .commit()
             .context("failed to commit Local history schema v1")?;
-    } else {
+        version = 1;
+    }
+
+    if version >= 1 {
         let auto_vacuum: i64 = connection
             .pragma_query_value(None, "auto_vacuum", |row| row.get(0))
             .context("failed to inspect Local history auto-vacuum mode")?;
@@ -160,6 +194,37 @@ pub(super) fn initialize_or_migrate(connection: &mut Connection) -> Result<()> {
         }
     }
 
+    if version == 1 {
+        let transaction = connection
+            .transaction()
+            .context("failed to start Local history schema-v2 transaction")?;
+        transaction
+            .execute_batch(SCHEMA_V2)
+            .context("failed to create Local history schema v2")?;
+        transaction
+            .pragma_update(None, "user_version", 2)
+            .context("failed to publish Local history schema version 2")?;
+        transaction
+            .commit()
+            .context("failed to commit Local history schema v2")?;
+        version = 2;
+    }
+
+    if version == 2 {
+        let transaction = connection
+            .transaction()
+            .context("failed to start Local history schema-v3 transaction")?;
+        transaction
+            .execute_batch(SCHEMA_V3)
+            .context("failed to create Local history schema v3")?;
+        transaction
+            .pragma_update(None, "user_version", 3)
+            .context("failed to publish Local history schema version 3")?;
+        transaction
+            .commit()
+            .context("failed to commit Local history schema v3")?;
+    }
+
     let version = user_version(connection)?;
     if version != HISTORY_SCHEMA_VERSION {
         bail!(
@@ -170,13 +235,17 @@ pub(super) fn initialize_or_migrate(connection: &mut Connection) -> Result<()> {
 }
 
 pub(super) fn verify_readable_schema(connection: &Connection) -> Result<()> {
+    readable_schema_version(connection).map(|_| ())
+}
+
+pub(super) fn readable_schema_version(connection: &Connection) -> Result<u32> {
     let version = user_version(connection)?;
-    if version != HISTORY_SCHEMA_VERSION {
+    if version == 0 || version > HISTORY_SCHEMA_VERSION {
         bail!(
-            "unsupported Local history schema version {version}; expected {HISTORY_SCHEMA_VERSION}"
+            "unsupported Local history schema version {version}; supported range is 1..={HISTORY_SCHEMA_VERSION}"
         );
     }
-    Ok(())
+    Ok(version)
 }
 
 fn user_version(connection: &Connection) -> Result<u32> {

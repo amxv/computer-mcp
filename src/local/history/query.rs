@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::path::Path;
 
@@ -7,8 +8,12 @@ use rusqlite::{Connection, OpenFlags, params_from_iter};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::schema::verify_readable_schema;
+use crate::local::presentation::{markdown_code_span, sanitize_display_text};
+
+use super::schema::{readable_schema_version, verify_readable_schema};
 use super::store::{canonical_json, normalize_declared_workdir, physical_store_size};
+
+const PRESENTATION_OUTPUT_PREVIEW_CHARS: usize = 16_384;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HistoryFormat {
@@ -83,8 +88,54 @@ pub struct HistoryInvocation {
     pub result_session_handle: Option<String>,
     pub result_exit_code: Option<i64>,
     pub result_termination_reason: Option<String>,
+    #[serde(skip)]
+    pub output_preview: Option<String>,
+    #[serde(skip)]
+    pub output_preview_truncated: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub full_output: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub file_evidence: Vec<HistoryFileEvidence>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HistoryFileEvidence {
+    pub ordinal: u32,
+    pub source_kind: String,
+    pub operation_hint: String,
+    pub path_before: String,
+    pub path_after: String,
+    pub before_state: String,
+    pub before_text: Option<String>,
+    pub before_reason: Option<String>,
+    pub destination_before_state: Option<String>,
+    pub destination_before_text: Option<String>,
+    pub destination_before_reason: Option<String>,
+    pub after_state: String,
+    pub after_text: Option<String>,
+    pub after_reason: Option<String>,
+    pub source_after_state: Option<String>,
+    pub source_after_text: Option<String>,
+    pub source_after_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HistoryAgentWorkdir {
+    pub normalized_workdir: String,
+    pub ordinal: u32,
+    pub first_seen_at_ms: i64,
+    pub last_seen_at_ms: i64,
+    pub first_invocation_id: i64,
+    pub last_invocation_id: i64,
+    pub retained_invocation_count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HistoryAgentSummary {
+    pub id: String,
+    pub first_seen_at_ms: i64,
+    pub last_seen_at_ms: i64,
+    pub workdirs: Vec<HistoryAgentWorkdir>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -105,7 +156,7 @@ impl LocalHistoryReader {
             return Ok(Vec::new());
         }
         let connection = open_read_only(path)?;
-        verify_readable_schema(&connection)?;
+        let schema_version = readable_schema_version(&connection)?;
 
         let mut sql = String::from(
             "SELECT id, correlation_id, agent_id, provider_kind, provider_session_key,
@@ -146,12 +197,49 @@ impl LocalHistoryReader {
             .context("failed to query Local history")?
             .collect::<rusqlite::Result<Vec<_>>>()
             .context("failed to decode Local history rows")?;
-        if query.include_raw || query.invocation_id.is_some() {
+        for record in &mut records {
+            if record.tool_name == "exec_command" {
+                let (preview, truncated) =
+                    load_output_preview(&connection, record.id, PRESENTATION_OUTPUT_PREVIEW_CHARS)?;
+                record.output_preview = preview;
+                record.output_preview_truncated = truncated;
+            }
+        }
+        if query.include_raw {
             for record in &mut records {
                 record.full_output = Some(load_full_output(&connection, record.id)?);
             }
         }
+        if schema_version >= 3 {
+            for record in &mut records {
+                record.file_evidence = load_file_evidence(&connection, record.id)?;
+            }
+        }
         Ok(records)
+    }
+
+    pub fn agent_summaries(
+        path: &Path,
+        records: &[HistoryInvocation],
+    ) -> Result<Vec<HistoryAgentSummary>> {
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+        let connection = open_read_only(path)?;
+        verify_readable_schema(&connection)?;
+        let mut seen = HashSet::new();
+        let mut agent_ids = Vec::new();
+        for record in records.iter().rev() {
+            if let Some(agent_id) = record.agent_id.as_ref()
+                && seen.insert(agent_id.clone())
+            {
+                agent_ids.push(agent_id.clone());
+            }
+        }
+        agent_ids
+            .into_iter()
+            .map(|agent_id| load_agent_summary(&connection, &agent_id))
+            .collect()
     }
 
     pub fn status(path: &Path) -> Result<HistoryStoreStatus> {
@@ -287,7 +375,91 @@ fn map_invocation(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoryInvocation
         result_session_handle: row.get(25)?,
         result_exit_code: row.get(26)?,
         result_termination_reason: row.get(27)?,
+        output_preview: None,
+        output_preview_truncated: false,
         full_output: None,
+        file_evidence: Vec::new(),
+    })
+}
+
+fn load_file_evidence(
+    connection: &Connection,
+    invocation_id: i64,
+) -> Result<Vec<HistoryFileEvidence>> {
+    let mut statement = connection
+        .prepare(
+            "SELECT ordinal, source_kind, operation_hint, path_before, path_after,
+                    before_state, before_text, before_reason,
+                    destination_before_state, destination_before_text, destination_before_reason,
+                    after_state, after_text, after_reason, source_after_state, source_after_text, source_after_reason
+             FROM invocation_file_evidence WHERE invocation_id = ?1 ORDER BY ordinal ASC",
+        )
+        .context("failed to prepare Local file-evidence query")?;
+    statement
+        .query_map([invocation_id], |row| {
+            let ordinal: i64 = row.get(0)?;
+            Ok(HistoryFileEvidence {
+                ordinal: ordinal as u32,
+                source_kind: row.get(1)?,
+                operation_hint: row.get(2)?,
+                path_before: row.get(3)?,
+                path_after: row.get(4)?,
+                before_state: row.get(5)?,
+                before_text: row.get(6)?,
+                before_reason: row.get(7)?,
+                destination_before_state: row.get(8)?,
+                destination_before_text: row.get(9)?,
+                destination_before_reason: row.get(10)?,
+                after_state: row.get(11)?,
+                after_text: row.get(12)?,
+                after_reason: row.get(13)?,
+                source_after_state: row.get(14)?,
+                source_after_text: row.get(15)?,
+                source_after_reason: row.get(16)?,
+            })
+        })
+        .context("failed to query Local file evidence")?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .context("failed to decode Local file evidence")
+}
+
+fn load_agent_summary(connection: &Connection, agent_id: &str) -> Result<HistoryAgentSummary> {
+    let (first_seen_at_ms, last_seen_at_ms) = connection
+        .query_row(
+            "SELECT first_seen_at_ms, last_seen_at_ms FROM agents WHERE id = ?1",
+            [agent_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .with_context(|| format!("failed to read Local Agent {agent_id}"))?;
+    let mut statement = connection
+        .prepare(
+            "SELECT normalized_workdir, ordinal, first_seen_at_ms, last_seen_at_ms,
+                    first_invocation_id, last_invocation_id, retained_invocation_count
+             FROM agent_workdirs WHERE agent_id = ?1 ORDER BY ordinal ASC",
+        )
+        .context("failed to prepare Local Agent workdir query")?;
+    let workdirs = statement
+        .query_map([agent_id], |row| {
+            let ordinal: i64 = row.get(1)?;
+            let retained_invocation_count: i64 = row.get(6)?;
+            Ok(HistoryAgentWorkdir {
+                normalized_workdir: row.get(0)?,
+                ordinal: ordinal as u32,
+                first_seen_at_ms: row.get(2)?,
+                last_seen_at_ms: row.get(3)?,
+                first_invocation_id: row.get(4)?,
+                last_invocation_id: row.get(5)?,
+                retained_invocation_count: retained_invocation_count as u64,
+            })
+        })
+        .context("failed to query Local Agent workdirs")?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .context("failed to decode Local Agent workdirs")?;
+    Ok(HistoryAgentSummary {
+        id: agent_id.to_string(),
+        first_seen_at_ms,
+        last_seen_at_ms,
+        workdirs,
     })
 }
 
@@ -306,6 +478,58 @@ fn load_full_output(connection: &Connection, invocation_id: i64) -> Result<Strin
     Ok(chunks.concat())
 }
 
+fn load_output_preview(
+    connection: &Connection,
+    invocation_id: i64,
+    max_chars: usize,
+) -> Result<(Option<String>, bool)> {
+    let mut statement = connection
+        .prepare(
+            "SELECT text FROM invocation_output_chunks
+             WHERE invocation_id = ?1 ORDER BY sequence ASC",
+        )
+        .context("failed to prepare Local output-preview query")?;
+    let mut rows = statement
+        .query([invocation_id])
+        .context("failed to query Local output-preview chunks")?;
+    let mut preview = String::new();
+    let mut chars_seen = 0usize;
+    let mut saw_chunk = false;
+    let preview_limit = max_chars.saturating_add(1);
+
+    'chunks: while let Some(row) = rows
+        .next()
+        .context("failed to iterate Local output-preview chunks")?
+    {
+        saw_chunk = true;
+        let chunk: String = row
+            .get(0)
+            .context("failed to decode Local output-preview chunk")?;
+        for ch in chunk.chars() {
+            if chars_seen >= preview_limit {
+                break 'chunks;
+            }
+            preview.push(ch);
+            chars_seen = chars_seen.saturating_add(1);
+        }
+    }
+
+    if !saw_chunk {
+        return Ok((None, false));
+    }
+    if chars_seen <= max_chars {
+        return Ok((Some(preview), false));
+    }
+
+    let cut = preview
+        .char_indices()
+        .nth(max_chars)
+        .map(|(index, _)| index)
+        .unwrap_or(preview.len());
+    preview.truncate(cut);
+    Ok((Some(preview), true))
+}
+
 fn render_markdown(records: &[HistoryInvocation], raw: bool) -> String {
     if records.is_empty() {
         return "No Local history.\n".to_string();
@@ -317,7 +541,8 @@ fn render_markdown(records: &[HistoryInvocation], raw: bool) -> String {
         let workdir = record
             .declared_workdir_normalized
             .as_deref()
-            .map(|value| format!(" · {value}"))
+            .map(sanitize_display_text)
+            .map(|value| format!(" · {}", markdown_code_span(&value)))
             .unwrap_or_default();
         let cross_agent = if record.cross_agent == Some(true) {
             " · cross-agent"
@@ -331,31 +556,31 @@ fn render_markdown(records: &[HistoryInvocation], raw: bool) -> String {
         );
         if raw {
             let args = canonical_json(&record.arguments).unwrap_or_else(|_| "null".to_string());
-            let _ = writeln!(output, "  - arguments: `{}`", markdown_inline_escape(&args));
+            let args = sanitize_display_text(&args);
+            let _ = writeln!(output, "  - arguments: {}", markdown_code_span(&args));
             if let Some(result) = &record.result {
                 let result = canonical_json(result).unwrap_or_else(|_| "null".to_string());
-                let _ = writeln!(output, "  - result: `{}`", markdown_inline_escape(&result));
+                let result = sanitize_display_text(&result);
+                let _ = writeln!(output, "  - result: {}", markdown_code_span(&result));
             }
             if let Some(error) = &record.error {
                 let escaped = serde_json::to_string(error).unwrap_or_else(|_| "null".to_string());
-                let _ = writeln!(output, "  - error: `{}`", markdown_inline_escape(&escaped));
+                let escaped = sanitize_display_text(&escaped);
+                let _ = writeln!(output, "  - error: {}", markdown_code_span(&escaped));
             }
             if let Some(full_output) = &record.full_output {
                 let escaped =
                     serde_json::to_string(full_output).unwrap_or_else(|_| "null".to_string());
+                let escaped = sanitize_display_text(&escaped);
                 let _ = writeln!(
                     output,
-                    "  - full PTY text (evidence {}, capture {}): `{}`",
+                    "  - full PTY text (evidence {}, capture {}): {}",
                     record.evidence_state,
                     record.capture_state,
-                    markdown_inline_escape(&escaped)
+                    markdown_code_span(&escaped)
                 );
             }
         }
     }
     output
-}
-
-fn markdown_inline_escape(value: &str) -> String {
-    value.replace('`', "\\`")
 }

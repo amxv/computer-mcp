@@ -71,6 +71,7 @@ impl HistoryStore {
             agent_id_source,
         };
         store.recover_interrupted_capture()?;
+        store.recover_interrupted_file_evidence()?;
         store.set_health("healthy", None)?;
         Ok(store)
     }
@@ -536,7 +537,7 @@ impl HistoryStore {
         Ok(())
     }
 
-    fn lock_connection(&self) -> std::sync::MutexGuard<'_, Connection> {
+    pub(super) fn lock_connection(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.connection
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
