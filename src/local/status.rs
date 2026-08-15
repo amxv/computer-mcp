@@ -4,9 +4,9 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use super::{LocalConfig, LocalPaths};
+use super::{LocalConfig, LocalHistoryReader, LocalPaths};
 
-pub const LOCAL_STATUS_SCHEMA_VERSION: u32 = 1;
+pub const LOCAL_STATUS_SCHEMA_VERSION: u32 = 2;
 pub const LOCAL_DISCOVERY_SCHEMA_VERSION: u32 = 1;
 pub const LOCAL_RUNTIME_STATE_SCHEMA_VERSION: u32 = 1;
 
@@ -70,6 +70,12 @@ pub enum LocalStatusState {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct LocalHistoryStatus {
     pub database_path: PathBuf,
+    pub database_exists: bool,
+    pub physical_size_bytes: u64,
+    pub store_state: String,
+    pub store_reason: Option<String>,
+    pub over_budget: bool,
+    pub last_retention_error: Option<String>,
     pub max_age: String,
     pub max_age_seconds: u64,
     pub max_size: String,
@@ -85,6 +91,7 @@ impl LocalStatusDocument {
         let discovery_path = paths.discovery_file();
         let runtime_state_present = runtime_state_path.exists();
         let discovery = load_discovery_if_present(paths)?;
+        let history_store = LocalHistoryReader::status(&paths.history_database())?;
 
         let state = if runtime_state_present || discovery.is_some() {
             // Phase 2 deliberately does not claim a process is live merely because an
@@ -106,6 +113,13 @@ impl LocalStatusDocument {
             discovery,
             history: LocalHistoryStatus {
                 database_path: paths.history_database(),
+                database_exists: history_store.database_exists,
+                physical_size_bytes: history_store.physical_size_bytes,
+                store_state: history_store.health_state,
+                store_reason: history_store.health_reason,
+                over_budget: history_store.over_budget
+                    || history_store.physical_size_bytes > config.history.max_size.bytes(),
+                last_retention_error: history_store.last_retention_error,
                 max_age: config.history.max_age.to_string(),
                 max_age_seconds: config.history.max_age.seconds(),
                 max_size: config.history.max_size.to_string(),
@@ -173,7 +187,7 @@ mod tests {
     fn first_run_status_is_versioned_and_unconfigured() {
         let (_dir, paths) = test_paths();
         let status = LocalStatusDocument::inspect(&paths).unwrap();
-        assert_eq!(status.schema_version, 1);
+        assert_eq!(status.schema_version, 2);
         assert!(!status.configured);
         assert_eq!(status.state, LocalStatusState::Unconfigured);
         assert_eq!(status.history.max_age_seconds, 60 * 24 * 60 * 60);

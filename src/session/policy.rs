@@ -18,11 +18,21 @@ pub struct SessionOutputChunk {
     pub internal_session_id: u64,
     pub session_handle: Arc<str>,
     pub invocation: InvocationContext,
+    pub sequence: u64,
     pub text: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionOutputCompletion {
+    pub internal_session_id: u64,
+    pub session_handle: Arc<str>,
+    pub invocation: InvocationContext,
 }
 
 pub trait SessionOutputObserver: Send + Sync {
     fn observe_output(&self, chunk: SessionOutputChunk);
+
+    fn observe_output_complete(&self, _completion: SessionOutputCompletion) {}
 }
 
 #[derive(Debug, Clone)]

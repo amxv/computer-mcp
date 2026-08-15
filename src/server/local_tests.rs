@@ -1,11 +1,19 @@
 use std::ffi::OsString;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use anyhow::{Result, bail};
 use reqwest::Response;
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
 use crate::config::Config;
+use crate::invocation::{
+    InvocationContext, InvocationEvidenceRecorder, InvocationOutcome, InvocationStart,
+};
+use crate::local::{
+    HistoryQuery, LocalHistoryReader, LocalHistoryRuntime, LocalHistoryRuntimeConfig,
+};
 use crate::protocol::{CommandStatus, TerminationReason, ToolOutput};
 use crate::service::ZodexService;
 use crate::session::{SessionOutputChunk, SessionOutputObserver, SessionRuntimePolicy};
@@ -34,6 +42,30 @@ fn local_service(config: Config) -> ZodexService {
         Arc::new(config),
         SessionRuntimePolicy::local("/bin/sh", local_environment()).unwrap(),
     )
+}
+
+fn history_runtime(path: PathBuf) -> Arc<LocalHistoryRuntime> {
+    LocalHistoryRuntime::open(LocalHistoryRuntimeConfig::new(
+        path,
+        "local-http-history-test-runtime",
+        365 * 24 * 60 * 60,
+        1024 * 1024 * 1024,
+    ))
+    .unwrap()
+}
+
+fn local_service_with_history(config: Config, history: Arc<LocalHistoryRuntime>) -> ZodexService {
+    let policy = SessionRuntimePolicy::local("/bin/sh", local_environment())
+        .unwrap()
+        .with_output_observer(history);
+    ZodexService::with_session_policy(Arc::new(config), policy)
+}
+
+async fn shutdown_history_runtime(history: Arc<LocalHistoryRuntime>) {
+    tokio::task::spawn_blocking(move || history.shutdown_blocking())
+        .await
+        .unwrap()
+        .unwrap();
 }
 
 fn test_http_client() -> reqwest::Client {
@@ -506,5 +538,390 @@ async fn local_http_exercises_all_three_tools_concurrently_and_preserves_provide
     }
 
     server.shutdown().await.unwrap();
+    service.shutdown_sessions().await.unwrap();
+}
+
+#[tokio::test]
+async fn local_mcp_history_keeps_exact_bounded_result_and_full_quick_pty_output() {
+    let root = tempdir().unwrap();
+    let database = root.path().join("history.sqlite3");
+    let history = history_runtime(database.clone());
+    let service = local_service_with_history(
+        Config {
+            max_output_chars: 256,
+            ..Config::default()
+        },
+        history.clone(),
+    );
+    let server = start_local_mcp_server(
+        service.clone(),
+        LocalMcpServerConfig::new(root.path(), TOKEN).with_invocation_recorder(history.clone()),
+    )
+    .await
+    .unwrap();
+    let client = test_http_client();
+
+    let response = json_response(
+        post_mcp(
+            &client,
+            &server.url(),
+            Some(TOKEN),
+            Some("tools/call"),
+            tool_call(
+                60,
+                "exec_command",
+                json!({
+                    "cmd":"i=0; while [ \"$i\" -lt 1024 ]; do printf 'abcdefgh'; i=$((i+1)); done; printf '\\nEND-OF-FULL-OUTPUT\\n'",
+                    "workdir":root.path(),
+                    "yield_time_ms":2000
+                }),
+                "history-session-a",
+            ),
+        )
+        .await,
+    )
+    .await;
+    let returned = tool_output(&response);
+    assert_eq!(returned.status, CommandStatus::Exited);
+    assert!(returned.session_handle.is_none());
+    assert!(
+        returned.output.contains("bytes truncated"),
+        "{}",
+        returned.output
+    );
+    assert!(returned.output.contains("END-OF-FULL-OUTPUT"));
+    assert!(returned.output.len() < 1024);
+
+    server.shutdown().await.unwrap();
+    service.shutdown_sessions().await.unwrap();
+    shutdown_history_runtime(history).await;
+
+    let records = LocalHistoryReader::query(
+        &database,
+        &HistoryQuery {
+            last: 10,
+            include_raw: true,
+            ..HistoryQuery::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(records.len(), 1);
+    let record = &records[0];
+    assert_eq!(record.tool_name, "exec_command");
+    assert_eq!(record.agent_id.as_deref().map(str::len), Some(4));
+    assert_eq!(record.evidence_state, "complete");
+    assert_eq!(record.capture_state, "complete");
+    assert_eq!(
+        record.result.as_ref(),
+        Some(&serde_json::to_value(&returned).unwrap())
+    );
+    let full_output = record.full_output.as_deref().unwrap();
+    assert!(
+        full_output.len() > 8_000,
+        "full output was only {} bytes",
+        full_output.len()
+    );
+    assert!(full_output.contains("abcdefghabcdefgh"));
+    assert!(full_output.contains("END-OF-FULL-OUTPUT"));
+    assert!(full_output.len() > returned.output.len());
+}
+
+#[tokio::test]
+async fn local_mcp_history_records_cross_agent_session_creator_and_unattributed_calls() {
+    let root = tempdir().unwrap();
+    let database = root.path().join("history.sqlite3");
+    let history = history_runtime(database.clone());
+    let service = local_service_with_history(Config::default(), history.clone());
+    let server = start_local_mcp_server(
+        service.clone(),
+        LocalMcpServerConfig::new(root.path(), TOKEN).with_invocation_recorder(history.clone()),
+    )
+    .await
+    .unwrap();
+    let client = test_http_client();
+
+    let started = json_response(
+        post_mcp(
+            &client,
+            &server.url(),
+            Some(TOKEN),
+            Some("tools/call"),
+            tool_call(
+                70,
+                "exec_command",
+                json!({
+                    "cmd":"sleep 30",
+                    "workdir":root.path(),
+                    "yield_time_ms":50,
+                    "timeout_ms":60000
+                }),
+                "creator-session",
+            ),
+        )
+        .await,
+    )
+    .await;
+    let started = tool_output(&started);
+    assert_eq!(started.status, CommandStatus::Running);
+    let handle = started.session_handle.clone().unwrap();
+
+    let killed = json_response(
+        post_mcp(
+            &client,
+            &server.url(),
+            Some(TOKEN),
+            Some("tools/call"),
+            tool_call(
+                71,
+                "write_stdin",
+                json!({
+                    "session_handle":handle,
+                    "kill_process":true,
+                    "yield_time_ms":6000
+                }),
+                "caller-session",
+            ),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        tool_output(&killed).termination_reason,
+        Some(TerminationReason::Killed)
+    );
+
+    let unattributed = json!({
+        "jsonrpc":"2.0",
+        "id":72,
+        "method":"tools/call",
+        "params":{
+            "name":"exec_command",
+            "arguments":{
+                "cmd":"printf 'unattributed-ok\\n'",
+                "workdir":root.path(),
+                "yield_time_ms":2000
+            },
+            "_meta":modern_meta(None)
+        }
+    });
+    let unattributed = json_response(
+        post_mcp(
+            &client,
+            &server.url(),
+            Some(TOKEN),
+            Some("tools/call"),
+            unattributed,
+        )
+        .await,
+    )
+    .await;
+    assert!(
+        tool_output(&unattributed)
+            .output
+            .contains("unattributed-ok")
+    );
+
+    let missing_workdir = root.path().join("missing-workdir");
+    let rejected = json_response(
+        post_mcp(
+            &client,
+            &server.url(),
+            Some(TOKEN),
+            Some("tools/call"),
+            tool_call(
+                73,
+                "exec_command",
+                json!({
+                    "cmd":"printf 'must-not-run\\n'",
+                    "workdir":missing_workdir,
+                    "yield_time_ms":2000
+                }),
+                "error-session",
+            ),
+        )
+        .await,
+    )
+    .await;
+    assert!(rejected["result"]["isError"].as_bool().unwrap_or(false));
+
+    server.shutdown().await.unwrap();
+    service.shutdown_sessions().await.unwrap();
+    shutdown_history_runtime(history).await;
+
+    let records = LocalHistoryReader::query(
+        &database,
+        &HistoryQuery {
+            last: 10,
+            include_raw: true,
+            ..HistoryQuery::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(records.len(), 4);
+    let exec = records
+        .iter()
+        .find(|record| {
+            record.tool_name == "exec_command" && record.result_status.as_deref() == Some("running")
+        })
+        .unwrap();
+    let write = records
+        .iter()
+        .find(|record| record.tool_name == "write_stdin")
+        .unwrap();
+    let unattributed = records
+        .iter()
+        .find(|record| record.agent_id.is_none())
+        .unwrap();
+    assert_ne!(write.agent_id, exec.agent_id);
+    assert_eq!(write.target_created_by_agent_id, exec.agent_id);
+    assert_eq!(write.cross_agent, Some(true));
+    assert_eq!(
+        write.target_session_handle.as_deref(),
+        Some(handle.as_str())
+    );
+    assert_eq!(write.result_termination_reason.as_deref(), Some("killed"));
+    assert_eq!(unattributed.tool_name, "exec_command");
+    assert!(unattributed.provider_session_key.is_none());
+    let rejected = records
+        .iter()
+        .find(|record| record.outcome_kind.as_deref() == Some("error"))
+        .unwrap();
+    assert_eq!(rejected.tool_name, "exec_command");
+    assert_eq!(rejected.evidence_state, "complete");
+    assert_eq!(rejected.capture_state, "complete");
+    assert!(rejected.error.as_deref().unwrap().contains("workdir"));
+}
+
+struct RejectingInvocationRecorder;
+
+impl InvocationEvidenceRecorder for RejectingInvocationRecorder {
+    fn begin(
+        &self,
+        _context: InvocationContext,
+        _start: InvocationStart,
+    ) -> Result<InvocationContext> {
+        bail!("injected envelope persistence failure")
+    }
+
+    fn complete(&self, _context: &InvocationContext, _outcome: InvocationOutcome) -> Result<()> {
+        unreachable!("a rejected invocation must never reach completion")
+    }
+}
+
+#[tokio::test]
+async fn local_mcp_rejects_command_patch_and_stdin_before_side_effect_when_envelope_fails() {
+    let root = tempdir().unwrap();
+    let service = local_service(Config::default());
+    let direct_shell = service
+        .exec_command(crate::protocol::ExecCommandInput {
+            cmd: "/bin/sh".to_string(),
+            workdir: root.path().display().to_string(),
+            yield_time_ms: Some(50),
+            timeout_ms: Some(60_000),
+        })
+        .await
+        .unwrap();
+    let direct_handle = direct_shell.session_handle.unwrap();
+    let server = start_local_mcp_server(
+        service.clone(),
+        LocalMcpServerConfig::new(root.path(), TOKEN)
+            .with_invocation_recorder(Arc::new(RejectingInvocationRecorder)),
+    )
+    .await
+    .unwrap();
+    let client = test_http_client();
+
+    let command_marker = root.path().join("command-must-not-run");
+    let command_response = json_response(
+        post_mcp(
+            &client,
+            &server.url(),
+            Some(TOKEN),
+            Some("tools/call"),
+            tool_call(
+                80,
+                "exec_command",
+                json!({
+                    "cmd":format!("touch {}", command_marker.display()),
+                    "workdir":root.path(),
+                    "yield_time_ms":2000
+                }),
+                "reject-session",
+            ),
+        )
+        .await,
+    )
+    .await;
+    assert!(
+        command_response["result"]["isError"]
+            .as_bool()
+            .unwrap_or(false)
+    );
+    assert!(!command_marker.exists());
+
+    let patch_response = json_response(
+        post_mcp(
+            &client,
+            &server.url(),
+            Some(TOKEN),
+            Some("tools/call"),
+            tool_call(
+                81,
+                "apply_patch",
+                json!({
+                    "patch":"*** Begin Patch\n*** Add File: patch-must-not-run\n+nope\n*** End Patch\n",
+                    "workdir":root.path()
+                }),
+                "reject-session",
+            ),
+        )
+        .await,
+    )
+    .await;
+    assert!(
+        patch_response["result"]["isError"]
+            .as_bool()
+            .unwrap_or(false)
+    );
+    assert!(!root.path().join("patch-must-not-run").exists());
+
+    let stdin_marker = root.path().join("stdin-must-not-run");
+    let stdin_response = json_response(
+        post_mcp(
+            &client,
+            &server.url(),
+            Some(TOKEN),
+            Some("tools/call"),
+            tool_call(
+                82,
+                "write_stdin",
+                json!({
+                    "session_handle":direct_handle,
+                    "chars":format!("touch {}\\n", stdin_marker.display()),
+                    "yield_time_ms":500
+                }),
+                "reject-session",
+            ),
+        )
+        .await,
+    )
+    .await;
+    assert!(
+        stdin_response["result"]["isError"]
+            .as_bool()
+            .unwrap_or(false)
+    );
+    assert!(!stdin_marker.exists());
+
+    server.shutdown().await.unwrap();
+    let _ = service
+        .write_stdin(crate::protocol::WriteStdinInput {
+            session_handle: direct_handle,
+            chars: None,
+            yield_time_ms: Some(6_000),
+            kill_process: Some(true),
+        })
+        .await
+        .unwrap();
     service.shutdown_sessions().await.unwrap();
 }

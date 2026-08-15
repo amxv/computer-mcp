@@ -371,8 +371,12 @@ async fn concurrent_sessions_are_independent() {
         slow_mgr
             .exec_command(
                 ExecCommandInput {
-                    cmd: "sleep 1; echo slow".to_string(),
-                    yield_time_ms: Some(2_000),
+                    // Keep this invocation deliberately pending long enough
+                    // that the assertion below proves the unrelated fast
+                    // session can finish without relying on host wall-clock
+                    // scheduling staying below a sub-second threshold.
+                    cmd: "sleep 300; echo slow".to_string(),
+                    yield_time_ms: Some(60_000),
                     workdir: test_workdir(),
                     timeout_ms: None,
                 },
@@ -387,13 +391,12 @@ async fn concurrent_sessions_are_independent() {
 
     let fast_mgr = mgr.clone();
     let fast_cfg = cfg.clone();
-    let fast_started = Instant::now();
     let fast = tokio::spawn(async move {
         fast_mgr
             .exec_command(
                 ExecCommandInput {
                     cmd: "echo fast".to_string(),
-                    yield_time_ms: Some(2_000),
+                    yield_time_ms: Some(60_000),
                     workdir: test_workdir(),
                     timeout_ms: None,
                 },
@@ -405,14 +408,17 @@ async fn concurrent_sessions_are_independent() {
     });
 
     let fast_output = fast.await.expect("fast join");
-    let fast_elapsed = fast_started.elapsed();
-    let slow_output = slow.await.expect("slow join");
-
     assert!(fast_output.output.contains("fast"));
-    assert!(slow_output.output.contains("slow"));
     assert!(
-        fast_elapsed < Duration::from_millis(800),
-        "fast command was unexpectedly delayed: {fast_elapsed:?}"
+        !slow.is_finished(),
+        "unrelated slow command completed before the fast session; fixture no longer proves concurrency"
+    );
+
+    mgr.shutdown_all().await.expect("shutdown slow fixture");
+    let slow_output = slow.await.expect("slow join");
+    assert_eq!(
+        slow_output.termination_reason,
+        Some(TerminationReason::Killed)
     );
 }
 
@@ -764,7 +770,7 @@ async fn output_reports_command_cwd() {
         .exec_command(
             ExecCommandInput {
                 cmd: "pwd".to_string(),
-                yield_time_ms: Some(2_000),
+                yield_time_ms: Some(60_000),
                 workdir: workdir.clone(),
                 timeout_ms: None,
             },

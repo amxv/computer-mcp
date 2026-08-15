@@ -1,8 +1,9 @@
 use std::io::IsTerminal as _;
 
 use zodex::local::{
-    LocalConfig, LocalPaths, LocalStatusDocument, LocalStatusState, RuntimeKey,
-    ensure_offline_mutation, parse_human_duration, validate_tunnel_id,
+    HistoryFormat, HistoryQuery, LocalConfig, LocalHistoryReader, LocalPaths, LocalStatusDocument,
+    LocalStatusState, RuntimeKey, clear_local_history, ensure_offline_mutation,
+    parse_human_duration, validate_tunnel_id,
 };
 
 #[cfg(target_os = "macos")]
@@ -183,10 +184,17 @@ async fn handle_local_command(command: LocalCommand) -> Result<()> {
             raw,
             command,
         } => {
-            if let Some(since) = since.as_deref() {
-                parse_human_duration(since)
-                    .with_context(|| format!("invalid history duration `{since}`"))?;
-            }
+            let since_ms = since
+                .as_deref()
+                .map(|since| {
+                    let duration = parse_human_duration(since)
+                        .with_context(|| format!("invalid history duration `{since}`"))?;
+                    let now_ms = OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000;
+                    let delta_ms = i128::from(duration) * 1_000;
+                    i64::try_from(now_ms.saturating_sub(delta_ms))
+                        .context("history --since timestamp is outside supported range")
+                })
+                .transpose()?;
             if let Some(agent) = agent.as_deref() {
                 validate_agent_id(agent)?;
             }
@@ -195,16 +203,46 @@ async fn handle_local_command(command: LocalCommand) -> Result<()> {
             {
                 bail!("history --workdir must be an absolute path");
             }
-            if !matches!(format.as_str(), "markdown" | "json") {
-                bail!("history --format must be `markdown` or `json`");
-            }
-            let _ = (last, id, raw);
+            let format = HistoryFormat::parse(&format)?;
             if let Some(LocalHistoryCommand::Clear { yes }) = command {
                 ensure_offline_mutation(&paths, "clear Local history")?;
-                let _ = yes;
-                bail!("Local history storage is not available until the durable-history phase")
+                if !yes {
+                    if !io::stdin().is_terminal() || !io::stderr().is_terminal() {
+                        bail!("non-interactive `zodex local history clear` requires --yes");
+                    }
+                    let answer = prompt_line("Clear all retained Zodex Local history? [y/N]: ")?;
+                    if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+                        println!("Local history clear cancelled");
+                        return Ok(());
+                    }
+                }
+                clear_local_history(&paths.history_database())?;
+                println!("cleared Local history at {}", paths.history_database().display());
+                return Ok(());
             }
-            bail!("Local history storage is not available until the durable-history phase")
+
+            let invocation_id = id
+                .as_deref()
+                .map(|value| {
+                    value
+                        .parse::<i64>()
+                        .with_context(|| format!("invalid durable invocation ID `{value}`"))
+                })
+                .transpose()?;
+            let mut query = HistoryQuery {
+                last: last.unwrap_or(if invocation_id.is_some() { 1 } else { 20 }),
+                since_ms,
+                agent_id: agent,
+                normalized_workdir: None,
+                invocation_id,
+                include_raw: raw,
+            };
+            if let Some(workdir) = workdir.as_deref() {
+                query = query.with_workdir(workdir)?;
+            }
+            let records = LocalHistoryReader::query(&paths.history_database(), &query)?;
+            print!("{}", LocalHistoryReader::render(&records, format, raw)?);
+            Ok(())
         }
         LocalCommand::Config { command } => handle_local_config(&paths, command),
         LocalCommand::Stop => {
@@ -417,6 +455,22 @@ fn print_local_status(paths: &LocalPaths, json: bool) -> Result<()> {
         "History retention: {} / {}",
         status.history.max_age, status.history.max_size
     );
+    println!(
+        "History store: {} ({} bytes{})",
+        status.history.store_state,
+        status.history.physical_size_bytes,
+        if status.history.over_budget {
+            ", over budget"
+        } else {
+            ""
+        }
+    );
+    if let Some(reason) = &status.history.store_reason {
+        println!("History health detail: {reason}");
+    }
+    if let Some(error) = &status.history.last_retention_error {
+        println!("History retention error: {error}");
+    }
     println!("Discovery: {}", status.discovery_path.display());
     if status.discovery.is_none() {
         println!("Runtime discovery: inactive");

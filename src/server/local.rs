@@ -13,6 +13,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tower::{ServiceExt, service_fn};
 
+use crate::invocation::InvocationEvidenceRecorder;
 use crate::service::ZodexService;
 use crate::workdir::validate_absolute_existing_workdir;
 
@@ -26,6 +27,7 @@ pub const LOCAL_MCP_TOKEN_HEADER: &str = "x-zodex-local-token";
 pub struct LocalMcpServerConfig {
     pub start_directory: PathBuf,
     pub token: Arc<str>,
+    invocation_recorder: Option<Arc<dyn InvocationEvidenceRecorder>>,
 }
 
 impl LocalMcpServerConfig {
@@ -33,7 +35,16 @@ impl LocalMcpServerConfig {
         Self {
             start_directory: start_directory.into(),
             token: token.into(),
+            invocation_recorder: None,
         }
+    }
+
+    pub fn with_invocation_recorder(
+        mut self,
+        recorder: Arc<dyn InvocationEvidenceRecorder>,
+    ) -> Self {
+        self.invocation_recorder = Some(recorder);
+        self
     }
 }
 
@@ -99,6 +110,7 @@ pub(super) async fn start_local_mcp_server_with_observer(
             stateless_protocol_metadata_required: true,
             instructions,
             provider_metadata_observer,
+            invocation_recorder: config.invocation_recorder,
         },
     );
     let app = local_mcp_app(mcp, token);

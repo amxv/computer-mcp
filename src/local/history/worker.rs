@@ -1,0 +1,582 @@
+use std::collections::HashSet;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
+
+use anyhow::{Context, Result, bail};
+use tracing::{error, warn};
+
+use crate::invocation::{
+    InvocationContext, InvocationEvidenceRecorder, InvocationOutcome, InvocationStart,
+};
+use crate::session::{
+    OwnedProcess, OwnedProcessObserver, SessionOutputChunk, SessionOutputCompletion,
+    SessionOutputObserver,
+};
+
+use super::store::{
+    HistoryStore, OutputEvent, distinct_invocation_ids, mark_retention_error_best_effort, now_ms,
+};
+
+const DEFAULT_OUTPUT_QUEUE_CAPACITY: usize = 4096;
+const OUTPUT_BATCH_LIMIT: usize = 128;
+const OUTPUT_BATCH_WAIT: Duration = Duration::from_millis(25);
+const RETENTION_MIN_INTERVAL: Duration = Duration::from_secs(30);
+// Remote MCP ingress and command-session shutdown are already closed before
+// this evidence-only drain runs. Give the detached PTY reader enough room to
+// observe EOF even on a heavily loaded host, while retaining a hard bound so
+// a descendant that keeps the slave open cannot stall Local shutdown forever.
+const SHUTDOWN_CAPTURE_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
+const SHUTDOWN_CAPTURE_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+#[derive(Debug, Clone)]
+pub struct LocalHistoryRuntimeConfig {
+    pub database_path: PathBuf,
+    pub runtime_id: Arc<str>,
+    pub max_age_seconds: u64,
+    pub max_size_bytes: u64,
+    pub output_queue_capacity: usize,
+}
+
+impl LocalHistoryRuntimeConfig {
+    pub fn new(
+        database_path: PathBuf,
+        runtime_id: impl Into<Arc<str>>,
+        max_age_seconds: u64,
+        max_size_bytes: u64,
+    ) -> Self {
+        Self {
+            database_path,
+            runtime_id: runtime_id.into(),
+            max_age_seconds,
+            max_size_bytes,
+            output_queue_capacity: DEFAULT_OUTPUT_QUEUE_CAPACITY,
+        }
+    }
+
+    pub fn with_output_queue_capacity(mut self, capacity: usize) -> Self {
+        self.output_queue_capacity = capacity.max(1);
+        self
+    }
+}
+
+struct HistoryHealth {
+    accepting_new: AtomicBool,
+    reason: Mutex<Option<String>>,
+    incomplete_evidence_invocations: Mutex<HashSet<i64>>,
+    incomplete_capture_invocations: Mutex<HashSet<i64>>,
+    maintenance_requested: AtomicBool,
+}
+
+impl HistoryHealth {
+    fn new() -> Self {
+        Self {
+            accepting_new: AtomicBool::new(true),
+            reason: Mutex::new(None),
+            incomplete_evidence_invocations: Mutex::new(HashSet::new()),
+            incomplete_capture_invocations: Mutex::new(HashSet::new()),
+            maintenance_requested: AtomicBool::new(true),
+        }
+    }
+
+    fn ensure_accepting(&self) -> Result<()> {
+        if self.accepting_new.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let reason = self
+            .reason
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+            .unwrap_or_else(|| "unknown evidence-pipeline failure".to_string());
+        bail!("Local history evidence pipeline is degraded: {reason}")
+    }
+
+    fn degrade_nonblocking(&self, reason: impl Into<String>) {
+        let reason = reason.into();
+        self.accepting_new.store(false, Ordering::Release);
+        let mut guard = self
+            .reason
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if guard.is_none() {
+            *guard = Some(reason.clone());
+        }
+        drop(guard);
+        error!(event = "local_history_degraded", error = %reason);
+    }
+
+    fn degrade_persisting(&self, store: &HistoryStore, reason: impl Into<String>) {
+        self.degrade_nonblocking(reason);
+        self.persist_degraded_state(store);
+    }
+
+    fn persist_degraded_state(&self, store: &HistoryStore) {
+        if self.accepting_new.load(Ordering::Acquire) {
+            return;
+        }
+        let reason = self
+            .reason
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+            .unwrap_or_else(|| "unknown evidence-pipeline failure".to_string());
+        if let Err(error) = store.set_health("degraded", Some(&reason)) {
+            error!(
+                event = "local_history_health_persistence_failed",
+                original_error = %reason,
+                error = %error,
+            );
+        }
+        let incomplete_evidence = self
+            .incomplete_evidence_invocations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        for invocation_id in incomplete_evidence {
+            if let Err(error) = store.mark_evidence_incomplete(invocation_id, &reason) {
+                error!(
+                    event = "local_history_evidence_incomplete_persistence_failed",
+                    invocation_id,
+                    error = %error,
+                );
+            }
+        }
+        let incomplete_capture = self
+            .incomplete_capture_invocations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        for invocation_id in incomplete_capture {
+            if let Err(error) = store.mark_capture_incomplete(invocation_id, &reason) {
+                error!(
+                    event = "local_history_capture_incomplete_persistence_failed",
+                    invocation_id,
+                    error = %error,
+                );
+            }
+        }
+    }
+
+    fn note_evidence_incomplete(&self, invocation_id: i64) {
+        self.incomplete_evidence_invocations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(invocation_id);
+    }
+
+    fn note_capture_incomplete(&self, invocation_id: i64) {
+        self.incomplete_capture_invocations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(invocation_id);
+    }
+}
+
+enum WorkerMessage {
+    Output(OutputEvent),
+    Complete {
+        context: InvocationContext,
+        outcome: InvocationOutcome,
+    },
+    Shutdown,
+}
+
+pub struct LocalHistoryRuntime {
+    store: Arc<HistoryStore>,
+    sender: SyncSender<WorkerMessage>,
+    worker: Mutex<Option<JoinHandle<()>>>,
+    health: Arc<HistoryHealth>,
+}
+
+impl LocalHistoryRuntime {
+    pub fn open(config: LocalHistoryRuntimeConfig) -> Result<Arc<Self>> {
+        Self::open_with_store(config, None)
+    }
+
+    pub(super) fn open_with_store(
+        config: LocalHistoryRuntimeConfig,
+        store_override: Option<Arc<HistoryStore>>,
+    ) -> Result<Arc<Self>> {
+        let store = match store_override {
+            Some(store) => store,
+            None => Arc::new(HistoryStore::open(config.database_path, config.runtime_id)?),
+        };
+        let (sender, receiver) = std::sync::mpsc::sync_channel(config.output_queue_capacity.max(1));
+        let health = Arc::new(HistoryHealth::new());
+        let worker_store = store.clone();
+        let worker_health = health.clone();
+        let max_age_seconds = config.max_age_seconds;
+        let max_size_bytes = config.max_size_bytes;
+        let worker = std::thread::Builder::new()
+            .name("zodex-local-history".to_string())
+            .spawn(move || {
+                run_worker(
+                    receiver,
+                    worker_store,
+                    worker_health,
+                    max_age_seconds,
+                    max_size_bytes,
+                )
+            })?;
+        Ok(Arc::new(Self {
+            store,
+            sender,
+            worker: Mutex::new(Some(worker)),
+            health,
+        }))
+    }
+
+    pub fn database_path(&self) -> &std::path::Path {
+        self.store.path()
+    }
+
+    pub fn accepting_new_invocations(&self) -> bool {
+        self.health.accepting_new.load(Ordering::Acquire)
+    }
+
+    pub fn physical_size_bytes(&self) -> Result<u64> {
+        self.store.physical_size()
+    }
+
+    pub fn request_retention(&self) {
+        self.health
+            .maintenance_requested
+            .store(true, Ordering::Release);
+    }
+
+    pub fn run_retention_now(&self, max_age_seconds: u64, max_size_bytes: u64) -> Result<()> {
+        self.store.run_retention(max_age_seconds, max_size_bytes)
+    }
+
+    pub fn shutdown_blocking(&self) -> Result<()> {
+        let handle = self
+            .worker
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        let Some(handle) = handle else {
+            return Ok(());
+        };
+        // The command-result path intentionally has a short PTY drain bound so
+        // a descendant that keeps the slave open cannot hold the MCP response
+        // forever. Runtime shutdown owns a separate bounded evidence-finalize
+        // window: keep the history worker alive while any late reader EOF/EIO
+        // markers arrive, then mark the remaining captures explicitly
+        // incomplete rather than leaving durable `pending` rows behind.
+        let capture_deadline = Instant::now() + SHUTDOWN_CAPTURE_DRAIN_TIMEOUT;
+        let mut finalize_error = None;
+        loop {
+            let pending = match self.store.pending_capture_ids() {
+                Ok(pending) => pending,
+                Err(error) => {
+                    warn!(
+                        event = "local_history_shutdown_capture_query_failed",
+                        error = %error,
+                    );
+                    finalize_error = Some(
+                        error.context("failed while finalizing Local output capture at shutdown"),
+                    );
+                    break;
+                }
+            };
+            if pending.is_empty() {
+                break;
+            }
+            if Instant::now() >= capture_deadline {
+                for invocation_id in pending {
+                    if let Err(error) = self.store.mark_capture_incomplete(
+                        invocation_id,
+                        "Local runtime shutdown ended before PTY capture reached terminal EOF",
+                    ) {
+                        warn!(
+                            event = "local_history_shutdown_capture_finalize_failed",
+                            invocation_id,
+                            error = %error,
+                        );
+                        if finalize_error.is_none() {
+                            finalize_error = Some(error.context(
+                                "failed to finalize incomplete Local output capture at shutdown",
+                            ));
+                        }
+                    }
+                }
+                break;
+            }
+            std::thread::sleep(SHUTDOWN_CAPTURE_POLL_INTERVAL);
+        }
+        // After the finalize window, a blocking send is safe: the worker keeps
+        // draining everything already queued before it observes Shutdown. A
+        // pathological late producer may still race after the deadline, but
+        // that invocation is already durably marked capture-incomplete.
+        let _ = self.sender.send(WorkerMessage::Shutdown);
+        handle
+            .join()
+            .map_err(|_| anyhow::anyhow!("Local history writer thread panicked"))?;
+        if let Some(error) = finalize_error {
+            Err(error)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn try_enqueue(
+        &self,
+        message: WorkerMessage,
+        invocation_id: i64,
+        evidence_kind: &str,
+        loses_output: bool,
+    ) -> Result<()> {
+        match self.sender.try_send(message) {
+            Ok(()) => Ok(()),
+            Err(TrySendError::Full(_)) => {
+                let reason = format!("Local history {evidence_kind} queue is full");
+                if loses_output {
+                    self.health.note_capture_incomplete(invocation_id);
+                } else {
+                    self.health.note_evidence_incomplete(invocation_id);
+                }
+                self.health.degrade_nonblocking(&reason);
+                bail!(reason)
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                let reason = format!("Local history {evidence_kind} writer is unavailable");
+                if loses_output {
+                    self.health.note_capture_incomplete(invocation_id);
+                } else {
+                    self.health.note_evidence_incomplete(invocation_id);
+                }
+                self.health.degrade_nonblocking(&reason);
+                bail!(reason)
+            }
+        }
+    }
+}
+
+impl InvocationEvidenceRecorder for LocalHistoryRuntime {
+    fn begin(
+        &self,
+        context: InvocationContext,
+        start: InvocationStart,
+    ) -> Result<InvocationContext> {
+        self.health.ensure_accepting()?;
+        match self.store.begin(context, start) {
+            Ok(context) => Ok(context),
+            Err(error) => {
+                self.health.degrade_persisting(
+                    &self.store,
+                    format!("invocation envelope persistence failed: {error}"),
+                );
+                Err(error)
+            }
+        }
+    }
+
+    fn complete(&self, context: &InvocationContext, outcome: InvocationOutcome) -> Result<()> {
+        let invocation_id = context.invocation_id.ok_or_else(|| {
+            anyhow::anyhow!("Local invocation completion is missing durable invocation ID")
+        })?;
+        let queued = WorkerMessage::Complete {
+            context: context.clone(),
+            outcome: outcome.clone(),
+        };
+        let reason = match self.sender.try_send(queued) {
+            Ok(()) => return Ok(()),
+            Err(TrySendError::Full(_)) => "Local history completion queue is full".to_string(),
+            Err(TrySendError::Disconnected(_)) => {
+                "Local history completion writer is unavailable".to_string()
+            }
+        };
+
+        // A saturated output queue must never make us discard the exact
+        // handler result. Degrade future admission immediately, then make one
+        // bounded direct SQLite attempt for this already-admitted invocation.
+        // This exceptional fallback may wait for SQLite's short busy timeout;
+        // normal completions remain asynchronous and never block the response
+        // path on the history writer.
+        self.health.degrade_nonblocking(&reason);
+        match self.store.complete(context, outcome) {
+            Ok(()) => {
+                self.health
+                    .maintenance_requested
+                    .store(true, Ordering::Release);
+                self.health.persist_degraded_state(&self.store);
+                Ok(())
+            }
+            Err(error) => {
+                self.health.note_evidence_incomplete(invocation_id);
+                self.health.persist_degraded_state(&self.store);
+                Err(anyhow::anyhow!(
+                    "{reason}; direct exact-completion persistence also failed: {error}"
+                ))
+            }
+        }
+    }
+}
+
+impl SessionOutputObserver for LocalHistoryRuntime {
+    fn observe_output(&self, chunk: SessionOutputChunk) {
+        let Some(invocation_id) = chunk.invocation.invocation_id else {
+            return;
+        };
+        let observed_at_ms = match now_ms() {
+            Ok(value) => value,
+            Err(error) => {
+                let reason = format!("failed to timestamp Local PTY output: {error}");
+                self.health.note_capture_incomplete(invocation_id);
+                self.health.degrade_nonblocking(reason);
+                return;
+            }
+        };
+        let _ = self.try_enqueue(
+            WorkerMessage::Output(OutputEvent::Chunk {
+                invocation_id,
+                sequence: chunk.sequence,
+                observed_at_ms,
+                text: chunk.text,
+            }),
+            invocation_id,
+            "output",
+            true,
+        );
+    }
+
+    fn observe_output_complete(&self, completion: SessionOutputCompletion) {
+        let Some(invocation_id) = completion.invocation.invocation_id else {
+            return;
+        };
+        let _ = self.try_enqueue(
+            WorkerMessage::Output(OutputEvent::Complete { invocation_id }),
+            invocation_id,
+            "output",
+            true,
+        );
+    }
+}
+
+impl OwnedProcessObserver for LocalHistoryRuntime {
+    fn process_started(&self, process: &OwnedProcess) -> Result<()> {
+        let invocation_id = process
+            .created_by
+            .invocation_id
+            .context("active Local process is missing durable creator invocation ID")?;
+        self.store.protect_active_process_invocation(invocation_id)
+    }
+
+    fn process_ended(&self, process: &OwnedProcess) -> Result<()> {
+        let Some(invocation_id) = process.created_by.invocation_id else {
+            return Ok(());
+        };
+        self.store
+            .unprotect_active_process_invocation(invocation_id)
+    }
+}
+
+fn run_worker(
+    receiver: Receiver<WorkerMessage>,
+    store: Arc<HistoryStore>,
+    health: Arc<HistoryHealth>,
+    max_age_seconds: u64,
+    max_size_bytes: u64,
+) {
+    let mut shutdown = false;
+    let mut last_maintenance = None::<Instant>;
+    while !shutdown {
+        let mut messages = Vec::with_capacity(OUTPUT_BATCH_LIMIT);
+        match receiver.recv_timeout(OUTPUT_BATCH_WAIT) {
+            Ok(message @ (WorkerMessage::Output(_) | WorkerMessage::Complete { .. })) => {
+                messages.push(message)
+            }
+            Ok(WorkerMessage::Shutdown) => shutdown = true,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+        while messages.len() < OUTPUT_BATCH_LIMIT {
+            match receiver.try_recv() {
+                Ok(message @ (WorkerMessage::Output(_) | WorkerMessage::Complete { .. })) => {
+                    messages.push(message)
+                }
+                Ok(WorkerMessage::Shutdown) => {
+                    shutdown = true;
+                    break;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    shutdown = true;
+                    break;
+                }
+            }
+        }
+
+        process_messages(messages, &store, &health);
+
+        let maintenance_due = health.maintenance_requested.load(Ordering::Acquire)
+            && last_maintenance
+                .map(|last| last.elapsed() >= RETENTION_MIN_INTERVAL)
+                .unwrap_or(true);
+        if maintenance_due && health.maintenance_requested.swap(false, Ordering::AcqRel) {
+            last_maintenance = Some(Instant::now());
+            if let Err(error) = store.run_retention(max_age_seconds, max_size_bytes) {
+                mark_retention_error_best_effort(&store, &error.to_string());
+            }
+        }
+    }
+
+    // One final maintenance pass after all queued output has been flushed.
+    if let Err(error) = store.run_retention(max_age_seconds, max_size_bytes) {
+        warn!(event = "local_history_shutdown_retention_failed", error = %error);
+    }
+    health.persist_degraded_state(&store);
+}
+
+fn process_messages(messages: Vec<WorkerMessage>, store: &HistoryStore, health: &HistoryHealth) {
+    let mut output_events = Vec::new();
+    for message in messages {
+        match message {
+            WorkerMessage::Output(event) => output_events.push(event),
+            WorkerMessage::Complete { context, outcome } => {
+                flush_output_events(&mut output_events, store, health);
+                let invocation_id = context.invocation_id;
+                if let Err(error) = store.complete(&context, outcome) {
+                    if let Some(invocation_id) = invocation_id {
+                        health.note_evidence_incomplete(invocation_id);
+                    }
+                    health.degrade_persisting(
+                        store,
+                        format!("invocation completion persistence failed: {error}"),
+                    );
+                } else {
+                    health.maintenance_requested.store(true, Ordering::Release);
+                }
+            }
+            WorkerMessage::Shutdown => {
+                unreachable!("shutdown messages are consumed by the worker loop")
+            }
+        }
+    }
+    flush_output_events(&mut output_events, store, health);
+    if !health.accepting_new.load(Ordering::Acquire) {
+        health.persist_degraded_state(store);
+    }
+}
+
+fn flush_output_events(
+    events: &mut Vec<OutputEvent>,
+    store: &HistoryStore,
+    health: &HistoryHealth,
+) {
+    if events.is_empty() {
+        return;
+    }
+    if let Err(error) = store.persist_output_batch(events) {
+        let reason = format!("output evidence batch persistence failed: {error}");
+        for invocation_id in distinct_invocation_ids(events) {
+            health.note_capture_incomplete(invocation_id);
+        }
+        health.degrade_persisting(store, reason);
+    }
+    events.clear();
+}

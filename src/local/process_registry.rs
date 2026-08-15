@@ -273,6 +273,7 @@ mod tests {
             session_handle: format!("handle{id}").into(),
             identity: identity(pid, ticks),
             created_by: InvocationContext {
+                invocation_id: None,
                 correlation_id: Some(format!("invoke-{id}").into()),
                 provider: None,
                 agent_id: Some("k7m2".into()),

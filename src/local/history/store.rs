@@ -1,0 +1,938 @@
+use std::collections::HashSet;
+use std::fs;
+use std::path::{Component, Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use anyhow::{Context, Result, bail};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+use serde_json::Value;
+use tracing::{error, warn};
+
+use crate::invocation::{
+    InvocationContext, InvocationOutcome, InvocationStart, ProviderCallMetadata,
+};
+
+use super::history_store_paths;
+use super::schema::initialize_or_migrate;
+
+const AGENT_ID_ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
+const AGENT_ID_ATTEMPTS: usize = 128;
+
+pub(super) type AgentIdSource = Arc<dyn Fn() -> String + Send + Sync>;
+
+pub(super) struct HistoryStore {
+    path: PathBuf,
+    connection: Mutex<Connection>,
+    runtime_id: Arc<str>,
+    agent_id_source: AgentIdSource,
+}
+
+#[derive(Debug, Clone)]
+pub(super) enum OutputEvent {
+    Chunk {
+        invocation_id: i64,
+        sequence: u64,
+        observed_at_ms: i64,
+        text: String,
+    },
+    Complete {
+        invocation_id: i64,
+    },
+}
+
+impl HistoryStore {
+    pub(super) fn open(path: PathBuf, runtime_id: Arc<str>) -> Result<Self> {
+        Self::open_with_agent_id_source(path, runtime_id, Arc::new(random_agent_id))
+    }
+
+    pub(super) fn open_with_agent_id_source(
+        path: PathBuf,
+        runtime_id: Arc<str>,
+        agent_id_source: AgentIdSource,
+    ) -> Result<Self> {
+        ensure_history_parent(&path)?;
+        let mut connection = Connection::open(&path)
+            .with_context(|| format!("failed to open Local history database {}", path.display()))?;
+        initialize_or_migrate(&mut connection)?;
+        connection
+            .execute_batch(
+                "CREATE TEMP TABLE IF NOT EXISTS active_process_invocations(
+                    invocation_id INTEGER PRIMARY KEY
+                 );",
+            )
+            .context("failed to initialize Local history active-process retention guard")?;
+        set_user_only_file_permissions(&path)?;
+
+        let store = Self {
+            path,
+            connection: Mutex::new(connection),
+            runtime_id,
+            agent_id_source,
+        };
+        store.recover_interrupted_capture()?;
+        store.set_health("healthy", None)?;
+        Ok(store)
+    }
+
+    pub(super) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub(super) fn begin(
+        &self,
+        mut context: InvocationContext,
+        start: InvocationStart,
+    ) -> Result<InvocationContext> {
+        let correlation_id = context
+            .correlation_id
+            .clone()
+            .unwrap_or_else(|| Arc::from(format!("{:032x}", rand::random::<u128>())));
+        context.correlation_id = Some(correlation_id.clone());
+        let now = now_ms()?;
+        let mut connection = self.lock_connection();
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .context("failed to start mandatory Local invocation-envelope transaction")?;
+
+        let agent_id = resolve_agent(
+            &transaction,
+            context.provider.as_ref(),
+            now,
+            &self.runtime_id,
+            &self.agent_id_source,
+        )?;
+        if let Some(agent_id) = agent_id.as_deref() {
+            context.agent_id = Some(Arc::from(agent_id));
+        }
+
+        let canonical_args = canonical_json(&start.arguments)?;
+        let declared_workdir_exact = start
+            .arguments
+            .get("workdir")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let declared_workdir_normalized = declared_workdir_exact
+            .as_deref()
+            .and_then(normalize_declared_workdir);
+        let target_session_handle = start
+            .arguments
+            .get("session_handle")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let target_creator = start
+            .target_created_by_agent_id
+            .as_deref()
+            .map(str::to_owned);
+        let cross_agent = match (agent_id.as_deref(), target_creator.as_deref()) {
+            (Some(caller), Some(creator)) => Some(i64::from(caller != creator)),
+            _ => None,
+        };
+        let capture_state = if start.tool_name.as_ref() == "exec_command" {
+            "pending"
+        } else {
+            "not_applicable"
+        };
+        let provider_kind = context.provider.as_ref().map(|value| value.kind.as_ref());
+        let provider_key = context
+            .provider
+            .as_ref()
+            .map(|value| value.session_key.as_ref());
+
+        transaction
+            .execute(
+                "INSERT INTO invocations(
+                    correlation_id, agent_id, provider_kind, provider_session_key, tool_name,
+                    args_json, declared_workdir_exact, declared_workdir_normalized,
+                    started_at_ms, evidence_state, capture_state, target_session_handle,
+                    target_created_by_agent_id, cross_agent
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'pending', ?10, ?11, ?12, ?13)",
+                params![
+                    correlation_id.as_ref(),
+                    agent_id,
+                    provider_kind,
+                    provider_key,
+                    start.tool_name.as_ref(),
+                    canonical_args,
+                    declared_workdir_exact,
+                    declared_workdir_normalized,
+                    now,
+                    capture_state,
+                    target_session_handle,
+                    target_creator,
+                    cross_agent,
+                ],
+            )
+            .context("failed to persist mandatory Local invocation envelope")?;
+        let invocation_id = transaction.last_insert_rowid();
+
+        let is_new_workdir = update_agent_workdir_summary(
+            &transaction,
+            agent_id.as_deref(),
+            declared_workdir_normalized.as_deref(),
+            now,
+            invocation_id,
+        )?;
+        if is_new_workdir {
+            transaction
+                .execute(
+                    "UPDATE invocations SET is_new_workdir = 1 WHERE id = ?1",
+                    [invocation_id],
+                )
+                .context("failed to record new-workdir invocation evidence")?;
+        }
+
+        transaction
+            .commit()
+            .context("failed to commit mandatory Local invocation envelope")?;
+        Ok(context.with_invocation_id(invocation_id))
+    }
+
+    pub(super) fn complete(
+        &self,
+        context: &InvocationContext,
+        outcome: InvocationOutcome,
+    ) -> Result<()> {
+        let invocation_id = context
+            .invocation_id
+            .context("Local invocation completion is missing durable invocation ID")?;
+        let completed_at_ms = now_ms()?;
+        let connection = self.lock_connection();
+        let started_at_ms: i64 = connection
+            .query_row(
+                "SELECT started_at_ms FROM invocations WHERE id = ?1",
+                [invocation_id],
+                |row| row.get(0),
+            )
+            .with_context(|| {
+                format!("missing Local invocation {invocation_id} during completion")
+            })?;
+        let duration_ms = completed_at_ms.saturating_sub(started_at_ms);
+
+        match outcome {
+            InvocationOutcome::Success(value) => {
+                let result_json = canonical_json(&value)?;
+                let metadata = ResultMetadata::from_json(&value);
+                connection
+                    .execute(
+                        "UPDATE invocations SET
+                            completed_at_ms = ?2, duration_ms = ?3, outcome_kind = 'success',
+                            result_json = ?4, error_text = NULL, result_status = ?5,
+                            result_cwd = ?6, result_session_handle = ?7,
+                            result_exit_code = ?8, result_termination_reason = ?9,
+                            evidence_state = 'complete', evidence_reason = NULL
+                         WHERE id = ?1",
+                        params![
+                            invocation_id,
+                            completed_at_ms,
+                            duration_ms,
+                            result_json,
+                            metadata.status,
+                            metadata.cwd,
+                            metadata.session_handle,
+                            metadata.exit_code,
+                            metadata.termination_reason,
+                        ],
+                    )
+                    .context("failed to persist exact Local invocation success result")?;
+            }
+            InvocationOutcome::Error(error_text) => {
+                connection
+                    .execute(
+                        "UPDATE invocations SET
+                            completed_at_ms = ?2, duration_ms = ?3, outcome_kind = 'error',
+                            result_json = NULL, error_text = ?4,
+                            evidence_state = 'complete', evidence_reason = NULL,
+                            capture_state = CASE
+                                WHEN capture_state = 'pending' THEN 'complete'
+                                ELSE capture_state
+                            END,
+                            capture_reason = CASE
+                                WHEN capture_state = 'pending' THEN NULL
+                                ELSE capture_reason
+                            END
+                         WHERE id = ?1",
+                        params![invocation_id, completed_at_ms, duration_ms, error_text],
+                    )
+                    .context("failed to persist exact Local invocation error")?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn persist_output_batch(&self, events: &[OutputEvent]) -> Result<()> {
+        if events.is_empty() {
+            return Ok(());
+        }
+        let mut connection = self.lock_connection();
+        let transaction = connection
+            .transaction()
+            .context("failed to start Local output-evidence batch transaction")?;
+        for event in events {
+            match event {
+                OutputEvent::Chunk {
+                    invocation_id,
+                    sequence,
+                    observed_at_ms,
+                    text,
+                } => {
+                    transaction
+                        .execute(
+                            "INSERT OR IGNORE INTO invocation_output_chunks(
+                                invocation_id, sequence, observed_at_ms, text
+                             ) VALUES (?1, ?2, ?3, ?4)",
+                            params![invocation_id, *sequence as i64, observed_at_ms, text],
+                        )
+                        .with_context(|| {
+                            format!("failed to persist output chunk for invocation {invocation_id}")
+                        })?;
+                }
+                OutputEvent::Complete { invocation_id } => {
+                    transaction
+                        .execute(
+                            "UPDATE invocations
+                             SET capture_state = 'complete', capture_reason = NULL
+                             WHERE id = ?1 AND capture_state = 'pending'",
+                            [invocation_id],
+                        )
+                        .with_context(|| {
+                            format!(
+                                "failed to finalize output capture for invocation {invocation_id}"
+                            )
+                        })?;
+                }
+            }
+        }
+        transaction
+            .commit()
+            .context("failed to commit Local output-evidence batch")?;
+        Ok(())
+    }
+
+    pub(super) fn mark_capture_incomplete(&self, invocation_id: i64, reason: &str) -> Result<()> {
+        self.lock_connection()
+            .execute(
+                "UPDATE invocations
+                 SET capture_state = CASE
+                         WHEN capture_state IN ('pending', 'complete') THEN 'incomplete'
+                         ELSE capture_state
+                     END,
+                     capture_reason = CASE
+                         WHEN capture_state IN ('pending', 'complete') THEN ?2
+                         ELSE capture_reason
+                     END
+                 WHERE id = ?1",
+                params![invocation_id, reason],
+            )
+            .with_context(|| {
+                format!("failed to mark invocation {invocation_id} output capture incomplete")
+            })?;
+        Ok(())
+    }
+
+    pub(super) fn mark_evidence_incomplete(&self, invocation_id: i64, reason: &str) -> Result<()> {
+        self.lock_connection()
+            .execute(
+                "UPDATE invocations
+                 SET evidence_state = 'incomplete', evidence_reason = ?2
+                 WHERE id = ?1",
+                params![invocation_id, reason],
+            )
+            .with_context(|| {
+                format!("failed to mark invocation {invocation_id} evidence incomplete")
+            })?;
+        Ok(())
+    }
+
+    pub(super) fn set_health(&self, state: &str, reason: Option<&str>) -> Result<()> {
+        self.lock_connection()
+            .execute(
+                "UPDATE history_state
+                 SET health_state = ?1, health_reason = ?2, updated_at_ms = ?3
+                 WHERE singleton = 1",
+                params![state, reason, now_ms()?],
+            )
+            .context("failed to update Local history health state")?;
+        Ok(())
+    }
+
+    pub(super) fn set_retention_state(
+        &self,
+        over_budget: bool,
+        error_message: Option<&str>,
+    ) -> Result<()> {
+        self.lock_connection()
+            .execute(
+                "UPDATE history_state
+                 SET over_budget = ?1, last_retention_error = ?2, updated_at_ms = ?3
+                 WHERE singleton = 1",
+                params![i64::from(over_budget), error_message, now_ms()?],
+            )
+            .context("failed to update Local history retention state")?;
+        Ok(())
+    }
+
+    pub(super) fn protect_active_process_invocation(&self, invocation_id: i64) -> Result<()> {
+        self.lock_connection()
+            .execute(
+                "INSERT OR IGNORE INTO active_process_invocations(invocation_id) VALUES (?1)",
+                [invocation_id],
+            )
+            .context("failed to protect active Local process invocation from retention")?;
+        Ok(())
+    }
+
+    pub(super) fn unprotect_active_process_invocation(&self, invocation_id: i64) -> Result<()> {
+        self.lock_connection()
+            .execute(
+                "DELETE FROM active_process_invocations WHERE invocation_id = ?1",
+                [invocation_id],
+            )
+            .context("failed to release active Local process invocation retention guard")?;
+        Ok(())
+    }
+
+    pub(super) fn pending_capture_ids(&self) -> Result<Vec<i64>> {
+        let connection = self.lock_connection();
+        let mut statement = connection
+            .prepare("SELECT id FROM invocations WHERE capture_state = 'pending' ORDER BY id")
+            .context("failed to prepare pending Local output-capture query")?;
+        statement
+            .query_map([], |row| row.get(0))
+            .context("failed to query pending Local output captures")?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("failed to decode pending Local output captures")
+    }
+
+    pub(super) fn run_retention(&self, max_age_seconds: u64, max_size_bytes: u64) -> Result<()> {
+        let cutoff = now_ms()?.saturating_sub(
+            i64::try_from(max_age_seconds)
+                .unwrap_or(i64::MAX)
+                .saturating_mul(1000),
+        );
+        {
+            let mut connection = self.lock_connection();
+            let transaction = connection
+                .transaction()
+                .context("failed to start age-retention transaction")?;
+            transaction
+                .execute(
+                    "DELETE FROM invocations
+                     WHERE evidence_state != 'pending'
+                       AND capture_state != 'pending'
+                       AND id NOT IN (SELECT invocation_id FROM active_process_invocations)
+                       AND COALESCE(completed_at_ms, started_at_ms) < ?1",
+                    [cutoff],
+                )
+                .context("failed to delete age-expired Local invocation units")?;
+            recompute_summaries(&transaction)?;
+            transaction
+                .commit()
+                .context("failed to commit Local age retention")?;
+        }
+
+        self.reclaim_pages()?;
+        let mut over_budget = physical_store_size(&self.path)? > max_size_bytes;
+        while over_budget {
+            let deleted = {
+                let mut connection = self.lock_connection();
+                let eligible_count: i64 = connection
+                    .query_row(
+                        "SELECT COUNT(*) FROM invocations
+                         WHERE evidence_state != 'pending' AND capture_state != 'pending'
+                           AND id NOT IN (SELECT invocation_id FROM active_process_invocations)",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .context("failed to count size-retention candidates")?;
+                if eligible_count <= 1 {
+                    false
+                } else {
+                    let transaction = connection
+                        .transaction()
+                        .context("failed to start size-retention transaction")?;
+                    let oldest: Option<i64> = transaction
+                        .query_row(
+                            "SELECT id FROM invocations
+                             WHERE evidence_state != 'pending' AND capture_state != 'pending'
+                               AND id NOT IN (SELECT invocation_id FROM active_process_invocations)
+                             ORDER BY COALESCE(completed_at_ms, started_at_ms) ASC, id ASC LIMIT 1",
+                            [],
+                            |row| row.get(0),
+                        )
+                        .optional()
+                        .context("failed to choose oldest complete invocation for retention")?;
+                    if let Some(id) = oldest {
+                        transaction
+                            .execute("DELETE FROM invocations WHERE id = ?1", [id])
+                            .context("failed to delete oldest complete invocation unit")?;
+                        recompute_summaries(&transaction)?;
+                        transaction
+                            .commit()
+                            .context("failed to commit Local size retention")?;
+                        true
+                    } else {
+                        false
+                    }
+                }
+            };
+            if !deleted {
+                break;
+            }
+            self.reclaim_pages()?;
+            over_budget = physical_store_size(&self.path)? > max_size_bytes;
+        }
+        over_budget = physical_store_size(&self.path)? > max_size_bytes;
+        self.set_retention_state(over_budget, None)?;
+        Ok(())
+    }
+
+    pub(super) fn physical_size(&self) -> Result<u64> {
+        physical_store_size(&self.path)
+    }
+
+    fn reclaim_pages(&self) -> Result<()> {
+        let connection = self.lock_connection();
+        let _checkpoint: (i64, i64, i64) = connection
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .context("failed to checkpoint Local history WAL")?;
+        let freelist: i64 = connection
+            .pragma_query_value(None, "freelist_count", |row| row.get(0))
+            .context("failed to inspect Local history freelist")?;
+        if freelist > 0 {
+            connection
+                .execute_batch(&format!("PRAGMA incremental_vacuum({freelist});"))
+                .context("failed to incrementally reclaim Local history pages")?;
+        }
+        Ok(())
+    }
+
+    fn recover_interrupted_capture(&self) -> Result<()> {
+        self.lock_connection()
+            .execute(
+                "UPDATE invocations
+                 SET evidence_state = CASE
+                         WHEN evidence_state = 'pending' THEN 'incomplete'
+                         ELSE evidence_state
+                     END,
+                     evidence_reason = CASE
+                         WHEN evidence_state = 'pending' THEN COALESCE(evidence_reason, 'previous Local runtime ended before invocation evidence completed')
+                         ELSE evidence_reason
+                     END,
+                     capture_state = CASE
+                         WHEN capture_state = 'pending' THEN 'incomplete'
+                         ELSE capture_state
+                     END,
+                     capture_reason = CASE
+                         WHEN capture_state = 'pending' THEN COALESCE(capture_reason, 'previous Local runtime ended before output capture completed')
+                         ELSE capture_reason
+                     END
+                 WHERE evidence_state = 'pending' OR capture_state = 'pending'",
+                [],
+            )
+            .context("failed to recover interrupted Local output captures")?;
+        Ok(())
+    }
+
+    fn lock_connection(&self) -> std::sync::MutexGuard<'_, Connection> {
+        self.connection
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+#[derive(Default)]
+struct ResultMetadata {
+    status: Option<String>,
+    cwd: Option<String>,
+    session_handle: Option<String>,
+    exit_code: Option<i64>,
+    termination_reason: Option<String>,
+}
+
+impl ResultMetadata {
+    fn from_json(value: &Value) -> Self {
+        let Some(object) = value.as_object() else {
+            return Self::default();
+        };
+        Self {
+            status: object
+                .get("status")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            cwd: object.get("cwd").and_then(Value::as_str).map(str::to_owned),
+            session_handle: object
+                .get("session_handle")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            exit_code: object.get("exit_code").and_then(Value::as_i64),
+            termination_reason: object
+                .get("termination_reason")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        }
+    }
+}
+
+fn resolve_agent(
+    transaction: &Transaction<'_>,
+    provider: Option<&ProviderCallMetadata>,
+    now: i64,
+    runtime_id: &str,
+    source: &AgentIdSource,
+) -> Result<Option<String>> {
+    let Some(provider) = provider else {
+        return Ok(None);
+    };
+    let existing: Option<String> = transaction
+        .query_row(
+            "SELECT id FROM agents WHERE provider_kind = ?1 AND provider_session_key = ?2",
+            params![provider.kind.as_ref(), provider.session_key.as_ref()],
+            |row| row.get(0),
+        )
+        .optional()
+        .context("failed to resolve Local Agent provider mapping")?;
+    if let Some(id) = existing {
+        transaction
+            .execute(
+                "UPDATE agents SET last_seen_at_ms = ?2, last_seen_runtime_id = ?3 WHERE id = ?1",
+                params![id, now, runtime_id],
+            )
+            .context("failed to update Local Agent last-seen evidence")?;
+        return Ok(Some(id));
+    }
+
+    for _ in 0..AGENT_ID_ATTEMPTS {
+        let candidate = source();
+        validate_agent_id(&candidate)?;
+        match transaction.execute(
+            "INSERT INTO agents(
+                id, provider_kind, provider_session_key, first_seen_at_ms, last_seen_at_ms,
+                last_seen_runtime_id
+             ) VALUES (?1, ?2, ?3, ?4, ?4, ?5)",
+            params![
+                candidate,
+                provider.kind.as_ref(),
+                provider.session_key.as_ref(),
+                now,
+                runtime_id,
+            ],
+        ) {
+            Ok(_) => return Ok(Some(candidate)),
+            Err(error) if is_unique_constraint(&error) => {
+                if let Some(existing) = transaction
+                    .query_row(
+                        "SELECT id FROM agents WHERE provider_kind = ?1 AND provider_session_key = ?2",
+                        params![provider.kind.as_ref(), provider.session_key.as_ref()],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .context("failed to recheck concurrent Local Agent mapping")?
+                {
+                    return Ok(Some(existing));
+                }
+            }
+            Err(error) => return Err(error).context("failed to create Local Agent mapping"),
+        }
+    }
+    bail!(
+        "failed to allocate unique four-character Local Agent ID after {AGENT_ID_ATTEMPTS} attempts"
+    )
+}
+
+fn update_agent_workdir_summary(
+    transaction: &Transaction<'_>,
+    agent_id: Option<&str>,
+    normalized_workdir: Option<&str>,
+    now: i64,
+    invocation_id: i64,
+) -> Result<bool> {
+    let (Some(agent_id), Some(normalized_workdir)) = (agent_id, normalized_workdir) else {
+        return Ok(false);
+    };
+    let existing: Option<i64> = transaction
+        .query_row(
+            "SELECT ordinal FROM agent_workdirs WHERE agent_id = ?1 AND normalized_workdir = ?2",
+            params![agent_id, normalized_workdir],
+            |row| row.get(0),
+        )
+        .optional()
+        .context("failed to inspect Local Agent workdir summary")?;
+    if existing.is_some() {
+        transaction
+            .execute(
+                "UPDATE agent_workdirs SET
+                    last_seen_at_ms = ?3, last_invocation_id = ?4,
+                    retained_invocation_count = retained_invocation_count + 1
+                 WHERE agent_id = ?1 AND normalized_workdir = ?2",
+                params![agent_id, normalized_workdir, now, invocation_id],
+            )
+            .context("failed to update Local Agent workdir summary")?;
+        return Ok(false);
+    }
+
+    let next_ordinal: i64 = transaction
+        .query_row(
+            "SELECT COALESCE(MAX(ordinal), 0) + 1 FROM agent_workdirs WHERE agent_id = ?1",
+            [agent_id],
+            |row| row.get(0),
+        )
+        .context("failed to allocate Local Agent workdir order")?;
+    transaction
+        .execute(
+            "INSERT INTO agent_workdirs(
+                agent_id, normalized_workdir, ordinal, first_seen_at_ms, last_seen_at_ms,
+                first_invocation_id, last_invocation_id, retained_invocation_count
+             ) VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?5, 1)",
+            params![
+                agent_id,
+                normalized_workdir,
+                next_ordinal,
+                now,
+                invocation_id
+            ],
+        )
+        .context("failed to create Local Agent workdir summary")?;
+    Ok(true)
+}
+
+fn recompute_summaries(transaction: &Transaction<'_>) -> Result<()> {
+    transaction
+        .execute("DELETE FROM agent_workdirs", [])
+        .context("failed to reset retained Local Agent workdir summaries")?;
+    let agent_ids = {
+        let mut statement = transaction
+            .prepare("SELECT id FROM agents ORDER BY id")
+            .context("failed to prepare retained Local Agent enumeration")?;
+        statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .context("failed to enumerate retained Local Agents")?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("failed to collect retained Local Agents")?
+    };
+    for agent_id in agent_ids {
+        let groups = {
+            let mut statement = transaction
+                .prepare(
+                    "SELECT declared_workdir_normalized, MIN(started_at_ms), MAX(started_at_ms),
+                            MIN(id), MAX(id), COUNT(*)
+                     FROM invocations
+                     WHERE agent_id = ?1 AND declared_workdir_normalized IS NOT NULL
+                     GROUP BY declared_workdir_normalized
+                     ORDER BY MIN(id) ASC",
+                )
+                .context("failed to prepare retained Agent workdir recomputation")?;
+            statement
+                .query_map([&agent_id], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, i64>(5)?,
+                    ))
+                })
+                .context("failed to query retained Agent workdirs")?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .context("failed to collect retained Agent workdirs")?
+        };
+        for (index, (workdir, first_seen, last_seen, first_id, last_id, count)) in
+            groups.into_iter().enumerate()
+        {
+            transaction
+                .execute(
+                    "INSERT INTO agent_workdirs(
+                        agent_id, normalized_workdir, ordinal, first_seen_at_ms, last_seen_at_ms,
+                        first_invocation_id, last_invocation_id, retained_invocation_count
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    params![
+                        agent_id,
+                        workdir,
+                        (index + 1) as i64,
+                        first_seen,
+                        last_seen,
+                        first_id,
+                        last_id,
+                        count,
+                    ],
+                )
+                .context("failed to rebuild retained Agent workdir summary")?;
+        }
+    }
+    transaction
+        .execute(
+            "DELETE FROM agents WHERE NOT EXISTS(
+                SELECT 1 FROM invocations WHERE invocations.agent_id = agents.id
+             )",
+            [],
+        )
+        .context("failed to prune unsupported retained Local Agents")?;
+    transaction
+        .execute(
+            "UPDATE agents SET
+                first_seen_at_ms = (SELECT MIN(started_at_ms) FROM invocations WHERE agent_id = agents.id),
+                last_seen_at_ms = (SELECT MAX(started_at_ms) FROM invocations WHERE agent_id = agents.id)
+             WHERE EXISTS(SELECT 1 FROM invocations WHERE invocations.agent_id = agents.id)",
+            [],
+        )
+        .context("failed to recompute retained Local Agent time bounds")?;
+    Ok(())
+}
+
+pub(super) fn canonical_json(value: &Value) -> Result<String> {
+    serde_json::to_string(&sort_json(value))
+        .context("failed to serialize canonical Local evidence JSON")
+}
+
+fn sort_json(value: &Value) -> Value {
+    match value {
+        Value::Object(object) => {
+            let mut keys = object.keys().collect::<Vec<_>>();
+            keys.sort();
+            let mut sorted = serde_json::Map::new();
+            for key in keys {
+                sorted.insert(key.clone(), sort_json(&object[key]));
+            }
+            Value::Object(sorted)
+        }
+        Value::Array(values) => Value::Array(values.iter().map(sort_json).collect()),
+        _ => value.clone(),
+    }
+}
+
+pub(super) fn normalize_declared_workdir(raw: &str) -> Option<String> {
+    let path = Path::new(raw);
+    if !path.is_absolute() {
+        return None;
+    }
+    if let Ok(canonical) = fs::canonicalize(path) {
+        return Some(canonical.display().to_string());
+    }
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::RootDir | Component::Prefix(_) | Component::Normal(_) => {
+                normalized.push(component.as_os_str())
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                let _ = normalized.pop();
+            }
+        }
+    }
+    Some(normalized.display().to_string())
+}
+
+pub(super) fn now_ms() -> Result<i64> {
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock is before Unix epoch")?;
+    i64::try_from(duration.as_millis()).context("system timestamp exceeds SQLite integer range")
+}
+
+fn random_agent_id() -> String {
+    rand::random::<[u8; 4]>()
+        .into_iter()
+        .map(|value| AGENT_ID_ALPHABET[value as usize % AGENT_ID_ALPHABET.len()] as char)
+        .collect()
+}
+
+fn validate_agent_id(value: &str) -> Result<()> {
+    if value.len() == 4
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+    {
+        return Ok(());
+    }
+    bail!(
+        "Agent ID source produced invalid ID `{value}`; expected four lowercase alphanumeric characters"
+    )
+}
+
+fn is_unique_constraint(error: &rusqlite::Error) -> bool {
+    matches!(
+        error,
+        rusqlite::Error::SqliteFailure(code, _)
+            if code.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_PRIMARYKEY
+                || code.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE
+    )
+}
+
+fn ensure_history_parent(path: &Path) -> Result<()> {
+    let parent = path
+        .parent()
+        .context("Local history database path has no parent")?;
+    fs::create_dir_all(parent).with_context(|| {
+        format!(
+            "failed to create Local history directory {}",
+            parent.display()
+        )
+    })?;
+    set_user_only_directory_permissions(parent)
+}
+
+pub(super) fn physical_store_size(path: &Path) -> Result<u64> {
+    let mut total = 0_u64;
+    for candidate in history_store_paths(path) {
+        if candidate.exists() {
+            total = total.saturating_add(
+                fs::metadata(&candidate)
+                    .with_context(|| format!("failed to stat {}", candidate.display()))?
+                    .len(),
+            );
+        }
+    }
+    Ok(total)
+}
+
+#[cfg(unix)]
+fn set_user_only_directory_permissions(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+        .with_context(|| format!("failed to set 0700 permissions on {}", path.display()))
+}
+
+#[cfg(not(unix))]
+fn set_user_only_directory_permissions(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_user_only_file_permissions(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+        .with_context(|| format!("failed to set 0600 permissions on {}", path.display()))
+}
+
+#[cfg(not(unix))]
+fn set_user_only_file_permissions(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
+pub(super) fn mark_retention_error_best_effort(store: &HistoryStore, error_message: &str) {
+    if let Err(error) = store.set_retention_state(false, Some(error_message)) {
+        error!(
+            event = "local_history_retention_state_persistence_failed",
+            error = %error,
+        );
+    }
+    warn!(
+        event = "local_history_retention_failed",
+        error = error_message
+    );
+}
+
+pub(super) fn distinct_invocation_ids(events: &[OutputEvent]) -> HashSet<i64> {
+    events
+        .iter()
+        .map(|event| match event {
+            OutputEvent::Chunk { invocation_id, .. } | OutputEvent::Complete { invocation_id } => {
+                *invocation_id
+            }
+        })
+        .collect()
+}

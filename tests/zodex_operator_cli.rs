@@ -4,6 +4,11 @@ use std::process::Command;
 
 use serde_json::Value;
 use tempfile::TempDir;
+use zodex::invocation::{
+    InvocationContext, InvocationEvidenceRecorder, InvocationOutcome, InvocationStart,
+    ProviderCallMetadata,
+};
+use zodex::local::{LocalHistoryRuntime, LocalHistoryRuntimeConfig};
 
 #[test]
 fn zodex_github_help_exposes_mode_commands() {
@@ -157,7 +162,7 @@ fn zodex_local_first_run_status_json_is_versioned_and_unconfigured() {
     assert!(output.status.success());
     let value: Value = serde_json::from_slice(&output.stdout).unwrap();
 
-    assert_eq!(value["schema_version"], 1);
+    assert_eq!(value["schema_version"], 2);
     assert_eq!(value["configured"], false);
     assert_eq!(value["state"], "unconfigured");
     assert_eq!(value["history"]["max_age"], "60d");
@@ -256,6 +261,152 @@ fn zodex_local_config_set_rejects_active_runtime_state_with_stop_hint() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("zodex local stop"), "{stderr}");
+}
+
+#[test]
+fn zodex_local_history_queries_exact_offline_evidence_and_clear_removes_store() {
+    let fixture = LocalCliFixture::new();
+    let database = fixture
+        .state_root
+        .join("zodex/local/history/history.sqlite3");
+    let history = LocalHistoryRuntime::open(LocalHistoryRuntimeConfig::new(
+        database.clone(),
+        "operator-cli-history-test",
+        365 * 24 * 60 * 60,
+        1024 * 1024 * 1024,
+    ))
+    .unwrap();
+    let invocation = history
+        .begin(
+            InvocationContext::default().with_provider(ProviderCallMetadata::new(
+                "openai/session",
+                "operator-cli-provider-session",
+            )),
+            InvocationStart::new(
+                "apply_patch",
+                serde_json::json!({
+                    "patch":"*** Begin Patch\n*** Add File: cli-history.txt\n+history\n*** End Patch\n",
+                    "workdir":fixture.home
+                }),
+            ),
+        )
+        .unwrap();
+    let invocation_id = invocation.invocation_id.unwrap();
+    let agent_id = invocation.agent_id.as_deref().unwrap().to_string();
+    history
+        .complete(
+            &invocation,
+            InvocationOutcome::Success(serde_json::json!({"output":"exact-handler-result"})),
+        )
+        .unwrap();
+    history.shutdown_blocking().unwrap();
+
+    let output = fixture
+        .command()
+        .args([
+            "local",
+            "history",
+            "--agent",
+            &agent_id,
+            "--workdir",
+            fixture.home.to_str().unwrap(),
+            "--format",
+            "json",
+            "--raw",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(records.as_array().unwrap().len(), 1);
+    assert_eq!(records[0]["id"], invocation_id);
+    assert_eq!(records[0]["agent_id"], agent_id);
+    assert_eq!(
+        records[0]["arguments"]["workdir"].as_str(),
+        fixture.home.to_str()
+    );
+    assert_eq!(
+        records[0]["result"],
+        serde_json::json!({"output":"exact-handler-result"})
+    );
+
+    let output = fixture
+        .command()
+        .args([
+            "local",
+            "history",
+            "--id",
+            &invocation_id.to_string(),
+            "--format",
+            "json",
+            "--raw",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let detail: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(detail[0]["id"], invocation_id);
+    assert_eq!(
+        detail[0]["provider_session_key"],
+        "operator-cli-provider-session"
+    );
+
+    let output = fixture
+        .command()
+        .args(["local", "history", "clear"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("requires --yes"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runtime_dir = fixture.state_root.join("zodex/local/runtime");
+    fs::create_dir_all(&runtime_dir).unwrap();
+    fs::write(runtime_dir.join("state.json"), "active").unwrap();
+    let output = fixture
+        .command()
+        .args(["local", "history", "clear", "--yes"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("zodex local stop"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    fs::remove_dir_all(runtime_dir).unwrap();
+
+    let output = fixture
+        .command()
+        .args(["local", "history", "clear", "--yes"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!database.exists());
+    assert!(!std::path::PathBuf::from(format!("{}-wal", database.display())).exists());
+    assert!(!std::path::PathBuf::from(format!("{}-shm", database.display())).exists());
+
+    let output = fixture
+        .command()
+        .args(["local", "history", "--last", "20"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "No Local history.\n"
+    );
 }
 
 #[cfg(target_os = "linux")]

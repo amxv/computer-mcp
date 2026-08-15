@@ -9,7 +9,7 @@ use tokio::sync::Notify;
 
 use crate::invocation::InvocationContext;
 
-use super::{SessionOutputChunk, SessionOutputObserver};
+use super::{SessionOutputChunk, SessionOutputCompletion, SessionOutputObserver};
 
 #[derive(Debug)]
 struct OutputState {
@@ -101,6 +101,7 @@ pub(super) fn spawn_reader(
         .name("zodex-pty-reader".to_string())
         .spawn(move || {
             let mut buf = [0_u8; 8192];
+            let mut sequence = 0_u64;
             loop {
                 let read = match reader.read(&mut buf) {
                     Ok(0) => break,
@@ -113,10 +114,17 @@ pub(super) fn spawn_reader(
                     internal_session_id,
                     session_handle: session_handle.clone(),
                     invocation: invocation.clone(),
+                    sequence,
                     text: chunk.to_string(),
                 });
+                sequence = sequence.saturating_add(1);
                 output.append(&chunk);
             }
+            observer.observe_output_complete(SessionOutputCompletion {
+                internal_session_id,
+                session_handle,
+                invocation,
+            });
             output.mark_reader_done();
         })
         .context("failed to start PTY output reader thread")?;

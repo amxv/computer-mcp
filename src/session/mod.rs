@@ -22,12 +22,13 @@ use crate::workdir::validate_absolute_existing_workdir;
 mod output;
 mod policy;
 mod process;
+mod query;
 
 use output::{OutputBuffer, next_char_boundary, spawn_reader};
 
 pub use policy::{
-    OwnedProcess, OwnedProcessObserver, SessionOutputChunk, SessionOutputObserver,
-    SessionRuntimePolicy,
+    OwnedProcess, OwnedProcessObserver, SessionOutputChunk, SessionOutputCompletion,
+    SessionOutputObserver, SessionRuntimePolicy,
 };
 pub use process::{
     ProcessBirthIdentity, ProcessControl, ProcessIdentity, ProcessInspector, ProcessSignal,

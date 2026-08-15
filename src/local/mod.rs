@@ -1,4 +1,5 @@
 mod config;
+mod history;
 mod parse;
 mod paths;
 mod process_registry;
@@ -13,6 +14,10 @@ mod tunnel_release;
 mod setup_tests;
 
 pub use config::{LocalConfig, LocalHistoryConfig, LocalTunnelConfig, ManagedTunnelClientRelease};
+pub use history::{
+    HISTORY_SCHEMA_VERSION, HistoryFormat, HistoryInvocation, HistoryQuery, HistoryStoreStatus,
+    LocalHistoryReader, LocalHistoryRuntime, LocalHistoryRuntimeConfig, clear_local_history,
+};
 pub use parse::{HumanDuration, StorageSize, parse_human_duration, parse_storage_size};
 pub use paths::LocalPaths;
 pub use process_registry::{
