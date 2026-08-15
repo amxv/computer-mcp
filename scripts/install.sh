@@ -336,7 +336,7 @@ install_runtime_prerequisites() {
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -y
     apt-get install -y --no-install-recommends \
-      curl ca-certificates systemd tar gzip git
+      curl ca-certificates systemd tar gzip git ccache ninja-build
 
     if [[ "${ZODEX_ENABLE_CERTBOT}" == "1" ]]; then
       apt-get install -y --no-install-recommends certbot || warn "certbot install failed"
@@ -345,7 +345,7 @@ install_runtime_prerequisites() {
   fi
 
   if command_exists dnf; then
-    dnf install -y curl ca-certificates systemd tar gzip git
+    dnf install -y curl ca-certificates systemd tar gzip git ccache ninja-build
     if [[ "${ZODEX_ENABLE_CERTBOT}" == "1" ]]; then
       dnf install -y certbot || warn "certbot install failed"
     fi
@@ -353,7 +353,7 @@ install_runtime_prerequisites() {
   fi
 
   if command_exists yum; then
-    yum install -y curl ca-certificates systemd tar gzip git
+    yum install -y curl ca-certificates systemd tar gzip git ccache ninja-build
     if [[ "${ZODEX_ENABLE_CERTBOT}" == "1" ]]; then
       yum install -y certbot || warn "certbot install failed"
     fi
@@ -631,6 +631,51 @@ configure_agent_git_identity() {
   fi
 }
 
+configure_agent_build_environment() {
+  local cache_root="${ZODEX_DEFAULT_WORKDIR}/.cache/zodex-agent"
+  local tmp_root="${ZODEX_DEFAULT_WORKDIR}/.tmp"
+  local profile_path="/etc/profile.d/zodex-agent-build-env.sh"
+
+  install -d -m 0700 -o "${ZODEX_AGENT_USER}" -g "${ZODEX_SERVICE_GROUP}" \
+    "${tmp_root}" \
+    "${cache_root}" \
+    "${cache_root}/go-build" \
+    "${cache_root}/go-mod" \
+    "${cache_root}/npm" \
+    "${cache_root}/bun" \
+    "${cache_root}/corepack" \
+    "${cache_root}/pnpm" \
+    "${cache_root}/ccache" \
+    "${cache_root}/pip" \
+    "${cache_root}/uv"
+
+  cat >"${profile_path}" <<EOF
+# Managed by the Zodex runtime installer. Applied only to the agent account.
+if [ "\$(id -un 2>/dev/null)" = "${ZODEX_AGENT_USER}" ]; then
+  export TMPDIR="${tmp_root}"
+  export GOCACHE="${cache_root}/go-build"
+  export GOMODCACHE="${cache_root}/go-mod"
+  export npm_config_cache="${cache_root}/npm"
+  export npm_config_prefer_offline="true"
+  export npm_config_audit="false"
+  export npm_config_fund="false"
+  export npm_config_progress="false"
+  export npm_config_update_notifier="false"
+  export npm_config_store_dir="${cache_root}/pnpm"
+  export BUN_INSTALL_CACHE_DIR="${cache_root}/bun"
+  export COREPACK_HOME="${cache_root}/corepack"
+  export CCACHE_DIR="${cache_root}/ccache"
+  export CCACHE_MAXSIZE="2G"
+  export PIP_CACHE_DIR="${cache_root}/pip"
+  export UV_CACHE_DIR="${cache_root}/uv"
+  if [ -d /usr/lib/ccache ]; then
+    export PATH="/usr/lib/ccache:\${PATH}"
+  fi
+fi
+EOF
+  chmod 0644 "${profile_path}"
+}
+
 detect_public_ip() {
   local ip=""
   ip="$(curl -fsS --max-time 5 https://api.ipify.org || true)"
@@ -736,6 +781,7 @@ run_runtime_install() {
   fi
   configure_agent_git_identity
   configure_agent_git_reader_helper
+  configure_agent_build_environment
   print_next_steps
 }
 

@@ -4,9 +4,6 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
-export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
-export CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-0}"
-
 if [[ "${ZODEX_ALLOW_RUSTC_WRAPPER:-0}" != "1" ]]; then
   unset RUSTC_WRAPPER
 fi
