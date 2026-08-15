@@ -1,6 +1,7 @@
 mod config;
 mod file_evidence;
 mod history;
+mod observability;
 mod parse;
 mod paths;
 mod presentation;
@@ -20,6 +21,9 @@ pub use history::{
     HISTORY_SCHEMA_VERSION, HistoryAgentSummary, HistoryAgentWorkdir, HistoryFileEvidence,
     HistoryFormat, HistoryInvocation, HistoryQuery, HistoryStoreStatus, LocalHistoryReader,
     LocalHistoryRuntime, LocalHistoryRuntimeConfig, clear_local_history,
+};
+pub use observability::{
+    LOCAL_OBSERVABILITY_API_VERSION, LocalObservabilityServer, start_local_observability_server,
 };
 pub use parse::{HumanDuration, StorageSize, parse_human_duration, parse_storage_size};
 pub use paths::LocalPaths;

@@ -28,16 +28,24 @@ pub(super) struct HistoryStore {
     agent_id_source: AgentIdSource,
 }
 
+pub(super) struct HistoryBeginResult {
+    pub(super) context: InvocationContext,
+    pub(super) agent_first_seen_in_runtime: bool,
+    pub(super) new_workdir: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub(super) enum OutputEvent {
     Chunk {
         invocation_id: i64,
+        agent_id: Option<String>,
         sequence: u64,
         observed_at_ms: i64,
         text: String,
     },
     Complete {
         invocation_id: i64,
+        agent_id: Option<String>,
     },
 }
 
@@ -80,11 +88,21 @@ impl HistoryStore {
         &self.path
     }
 
+    #[cfg(test)]
     pub(super) fn begin(
+        &self,
+        context: InvocationContext,
+        start: InvocationStart,
+    ) -> Result<InvocationContext> {
+        self.begin_with_metadata(context, start)
+            .map(|result| result.context)
+    }
+
+    pub(super) fn begin_with_metadata(
         &self,
         mut context: InvocationContext,
         start: InvocationStart,
-    ) -> Result<InvocationContext> {
+    ) -> Result<HistoryBeginResult> {
         let correlation_id = context
             .correlation_id
             .clone()
@@ -96,7 +114,7 @@ impl HistoryStore {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("failed to start mandatory Local invocation-envelope transaction")?;
 
-        let agent_id = resolve_agent(
+        let (agent_id, agent_first_seen_in_runtime) = resolve_agent(
             &transaction,
             context.provider.as_ref(),
             now,
@@ -186,7 +204,14 @@ impl HistoryStore {
         transaction
             .commit()
             .context("failed to commit mandatory Local invocation envelope")?;
-        Ok(context.with_invocation_id(invocation_id))
+        Ok(HistoryBeginResult {
+            context: context.with_invocation_id(invocation_id),
+            agent_first_seen_in_runtime,
+            new_workdir: is_new_workdir.then(|| {
+                declared_workdir_normalized
+                    .expect("new Local Agent workdir requires normalized workdir")
+            }),
+        })
     }
 
     pub(super) fn complete(
@@ -273,6 +298,7 @@ impl HistoryStore {
             match event {
                 OutputEvent::Chunk {
                     invocation_id,
+                    agent_id: _,
                     sequence,
                     observed_at_ms,
                     text,
@@ -288,7 +314,10 @@ impl HistoryStore {
                             format!("failed to persist output chunk for invocation {invocation_id}")
                         })?;
                 }
-                OutputEvent::Complete { invocation_id } => {
+                OutputEvent::Complete {
+                    invocation_id,
+                    agent_id: _,
+                } => {
                     transaction
                         .execute(
                             "UPDATE invocations
@@ -583,26 +612,28 @@ fn resolve_agent(
     now: i64,
     runtime_id: &str,
     source: &AgentIdSource,
-) -> Result<Option<String>> {
+) -> Result<(Option<String>, bool)> {
     let Some(provider) = provider else {
-        return Ok(None);
+        return Ok((None, false));
     };
-    let existing: Option<String> = transaction
+    let existing: Option<(String, String)> = transaction
         .query_row(
-            "SELECT id FROM agents WHERE provider_kind = ?1 AND provider_session_key = ?2",
+            "SELECT id, last_seen_runtime_id FROM agents
+             WHERE provider_kind = ?1 AND provider_session_key = ?2",
             params![provider.kind.as_ref(), provider.session_key.as_ref()],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()
         .context("failed to resolve Local Agent provider mapping")?;
-    if let Some(id) = existing {
+    if let Some((id, last_seen_runtime_id)) = existing {
+        let first_seen_in_runtime = last_seen_runtime_id != runtime_id;
         transaction
             .execute(
                 "UPDATE agents SET last_seen_at_ms = ?2, last_seen_runtime_id = ?3 WHERE id = ?1",
                 params![id, now, runtime_id],
             )
             .context("failed to update Local Agent last-seen evidence")?;
-        return Ok(Some(id));
+        return Ok((Some(id), first_seen_in_runtime));
     }
 
     for _ in 0..AGENT_ID_ATTEMPTS {
@@ -621,7 +652,7 @@ fn resolve_agent(
                 runtime_id,
             ],
         ) {
-            Ok(_) => return Ok(Some(candidate)),
+            Ok(_) => return Ok((Some(candidate), true)),
             Err(error) if is_unique_constraint(&error) => {
                 if let Some(existing) = transaction
                     .query_row(
@@ -632,7 +663,7 @@ fn resolve_agent(
                     .optional()
                     .context("failed to recheck concurrent Local Agent mapping")?
                 {
-                    return Ok(Some(existing));
+                    return Ok((Some(existing), false));
                 }
             }
             Err(error) => return Err(error).context("failed to create Local Agent mapping"),
@@ -804,7 +835,7 @@ fn sort_json(value: &Value) -> Value {
     }
 }
 
-pub(super) fn normalize_declared_workdir(raw: &str) -> Option<String> {
+pub(crate) fn normalize_declared_workdir(raw: &str) -> Option<String> {
     let path = Path::new(raw);
     if !path.is_absolute() {
         return None;
@@ -931,9 +962,8 @@ pub(super) fn distinct_invocation_ids(events: &[OutputEvent]) -> HashSet<i64> {
     events
         .iter()
         .map(|event| match event {
-            OutputEvent::Chunk { invocation_id, .. } | OutputEvent::Complete { invocation_id } => {
-                *invocation_id
-            }
+            OutputEvent::Chunk { invocation_id, .. }
+            | OutputEvent::Complete { invocation_id, .. } => *invocation_id,
         })
         .collect()
 }

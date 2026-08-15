@@ -424,18 +424,21 @@ fn exact_result_error_and_full_output_survive_restart_with_interrupted_capture_m
         .persist_output_batch(&[
             OutputEvent::Chunk {
                 invocation_id: exec_id,
+                agent_id: None,
                 sequence: 0,
                 observed_at_ms: timestamp,
                 text: "\u{1b}[31mraw".to_string(),
             },
             OutputEvent::Chunk {
                 invocation_id: exec_id,
+                agent_id: None,
                 sequence: 1,
                 observed_at_ms: timestamp + 1,
                 text: "-pty\u{1b}[0m\n".to_string(),
             },
             OutputEvent::Complete {
                 invocation_id: exec_id,
+                agent_id: None,
             },
         ])
         .unwrap();
@@ -728,12 +731,14 @@ fn retention_removes_whole_old_units_recomputes_summaries_and_keeps_newest_over_
         .persist_output_batch(&[
             OutputEvent::Chunk {
                 invocation_id: old_id,
+                agent_id: None,
                 sequence: 0,
                 observed_at_ms: now_ms().unwrap(),
                 text: "old-output".repeat(5000),
             },
             OutputEvent::Complete {
                 invocation_id: old_id,
+                agent_id: None,
             },
         ])
         .unwrap();
@@ -910,11 +915,15 @@ fn size_retention_after_restart_deletes_oldest_complete_unit_and_reclaims_physic
             .persist_output_batch(&[
                 OutputEvent::Chunk {
                     invocation_id,
+                    agent_id: None,
                     sequence: 0,
                     observed_at_ms: now_ms().unwrap(),
                     text: marker.repeat(768 * 1024),
                 },
-                OutputEvent::Complete { invocation_id },
+                OutputEvent::Complete {
+                    invocation_id,
+                    agent_id: None,
+                },
             ])
             .unwrap();
         complete_ok(&store, &context, marker);

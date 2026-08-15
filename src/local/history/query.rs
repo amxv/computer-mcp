@@ -4,7 +4,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use rusqlite::types::Value as SqlValue;
-use rusqlite::{Connection, OpenFlags, params_from_iter};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params_from_iter};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -138,6 +138,35 @@ pub struct HistoryAgentSummary {
     pub workdirs: Vec<HistoryAgentWorkdir>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HistoryAgentRecord {
+    pub summary: HistoryAgentSummary,
+    pub last_seen_runtime_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub(crate) struct HistoryOutputChunk {
+    pub sequence: u64,
+    pub observed_at_ms: i64,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub(crate) struct HistoryOutputPage {
+    pub chunks: Vec<HistoryOutputChunk>,
+    pub next_cursor: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub(crate) struct HistoryOutputMetadata {
+    pub available: bool,
+    pub chunk_count: u64,
+    pub size_bytes: u64,
+    pub capture_state: String,
+    pub capture_reason: Option<String>,
+    pub first_cursor: Option<u64>,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct HistoryStoreStatus {
     pub database_exists: bool,
@@ -151,6 +180,27 @@ pub struct HistoryStoreStatus {
 pub struct LocalHistoryReader;
 
 impl LocalHistoryReader {
+    pub(crate) fn agent_count(path: &Path, runtime_id: Option<&str>) -> Result<usize> {
+        if !path.exists() {
+            return Ok(0);
+        }
+        let connection = open_read_only(path)?;
+        verify_readable_schema(&connection)?;
+        let count: i64 = match runtime_id {
+            Some(runtime_id) => connection
+                .query_row(
+                    "SELECT COUNT(*) FROM agents WHERE last_seen_runtime_id = ?1",
+                    [runtime_id],
+                    |row| row.get(0),
+                )
+                .context("failed to count current-runtime Local Agents")?,
+            None => connection
+                .query_row("SELECT COUNT(*) FROM agents", [], |row| row.get(0))
+                .context("failed to count Local Agents")?,
+        };
+        Ok(usize::try_from(count).unwrap_or(usize::MAX))
+    }
+
     pub fn query(path: &Path, query: &HistoryQuery) -> Result<Vec<HistoryInvocation>> {
         if !path.exists() {
             return Ok(Vec::new());
@@ -240,6 +290,159 @@ impl LocalHistoryReader {
             .into_iter()
             .map(|agent_id| load_agent_summary(&connection, &agent_id))
             .collect()
+    }
+
+    pub(crate) fn agent_records(
+        path: &Path,
+        runtime_id: Option<&str>,
+    ) -> Result<Vec<HistoryAgentRecord>> {
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+        let connection = open_read_only(path)?;
+        verify_readable_schema(&connection)?;
+        let mut sql = String::from("SELECT id, last_seen_runtime_id FROM agents");
+        let mut parameters = Vec::<SqlValue>::new();
+        if let Some(runtime_id) = runtime_id {
+            sql.push_str(" WHERE last_seen_runtime_id = ?");
+            parameters.push(SqlValue::Text(runtime_id.to_string()));
+        }
+        sql.push_str(" ORDER BY first_seen_at_ms ASC, id ASC");
+        let mut statement = connection
+            .prepare(&sql)
+            .context("failed to prepare Local Agent enumeration")?;
+        let identities = statement
+            .query_map(params_from_iter(parameters), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .context("failed to enumerate Local Agents")?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("failed to decode Local Agent identities")?;
+        identities
+            .into_iter()
+            .map(|(id, last_seen_runtime_id)| {
+                Ok(HistoryAgentRecord {
+                    summary: load_agent_summary(&connection, &id)?,
+                    last_seen_runtime_id,
+                })
+            })
+            .collect()
+    }
+
+    pub(crate) fn agent_record(path: &Path, agent_id: &str) -> Result<Option<HistoryAgentRecord>> {
+        if !path.exists() {
+            return Ok(None);
+        }
+        let connection = open_read_only(path)?;
+        verify_readable_schema(&connection)?;
+        let last_seen_runtime_id = connection
+            .query_row(
+                "SELECT last_seen_runtime_id FROM agents WHERE id = ?1",
+                [agent_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .context("failed to query Local Agent detail")?;
+        last_seen_runtime_id
+            .map(|last_seen_runtime_id| {
+                Ok(HistoryAgentRecord {
+                    summary: load_agent_summary(&connection, agent_id)?,
+                    last_seen_runtime_id,
+                })
+            })
+            .transpose()
+    }
+
+    pub(crate) fn output_metadata(
+        path: &Path,
+        invocation_id: i64,
+    ) -> Result<Option<HistoryOutputMetadata>> {
+        if !path.exists() {
+            return Ok(None);
+        }
+        let connection = open_read_only(path)?;
+        verify_readable_schema(&connection)?;
+        let capture = connection
+            .query_row(
+                "SELECT capture_state, capture_reason FROM invocations WHERE id = ?1",
+                [invocation_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+            )
+            .optional()
+            .context("failed to query Local invocation output metadata")?;
+        let Some((capture_state, capture_reason)) = capture else {
+            return Ok(None);
+        };
+        let (chunk_count, size_bytes, first_cursor): (i64, i64, Option<i64>) = connection
+            .query_row(
+                "SELECT COUNT(*), COALESCE(SUM(length(CAST(text AS BLOB))), 0), MIN(sequence)
+                 FROM invocation_output_chunks WHERE invocation_id = ?1",
+                [invocation_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .context("failed to summarize Local invocation output")?;
+        Ok(Some(HistoryOutputMetadata {
+            available: chunk_count > 0,
+            chunk_count: u64::try_from(chunk_count).unwrap_or(0),
+            size_bytes: u64::try_from(size_bytes).unwrap_or(0),
+            capture_state,
+            capture_reason,
+            first_cursor: first_cursor.and_then(|value| u64::try_from(value).ok()),
+        }))
+    }
+
+    pub(crate) fn output_page(
+        path: &Path,
+        invocation_id: i64,
+        cursor: u64,
+        limit: usize,
+    ) -> Result<Option<HistoryOutputPage>> {
+        if !path.exists() {
+            return Ok(None);
+        }
+        let connection = open_read_only(path)?;
+        verify_readable_schema(&connection)?;
+        let exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM invocations WHERE id = ?1)",
+                [invocation_id],
+                |row| row.get(0),
+            )
+            .context("failed to check Local invocation for output page")?;
+        if !exists {
+            return Ok(None);
+        }
+        let limit = limit.max(1);
+        let sql_limit = i64::try_from(limit.saturating_add(1)).unwrap_or(i64::MAX);
+        let cursor = i64::try_from(cursor).unwrap_or(i64::MAX);
+        let mut statement = connection
+            .prepare(
+                "SELECT sequence, observed_at_ms, text FROM invocation_output_chunks
+                 WHERE invocation_id = ?1 AND sequence >= ?2
+                 ORDER BY sequence ASC LIMIT ?3",
+            )
+            .context("failed to prepare Local invocation output page")?;
+        let mut chunks = statement
+            .query_map(rusqlite::params![invocation_id, cursor, sql_limit], |row| {
+                let sequence: i64 = row.get(0)?;
+                Ok(HistoryOutputChunk {
+                    sequence: u64::try_from(sequence).unwrap_or(u64::MAX),
+                    observed_at_ms: row.get(1)?,
+                    text: row.get(2)?,
+                })
+            })
+            .context("failed to query Local invocation output page")?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("failed to decode Local invocation output page")?;
+        let next_cursor = if chunks.len() > limit {
+            chunks.pop().map(|chunk| chunk.sequence)
+        } else {
+            None
+        };
+        Ok(Some(HistoryOutputPage {
+            chunks,
+            next_cursor,
+        }))
     }
 
     pub fn status(path: &Path) -> Result<HistoryStoreStatus> {

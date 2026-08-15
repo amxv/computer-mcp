@@ -1,12 +1,13 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
+use serde_json::json;
 use tracing::{error, warn};
 
 use crate::invocation::{
@@ -15,13 +16,16 @@ use crate::invocation::{
 use crate::local::file_evidence::{
     CompletedFileEvidence, PendingFileEvidence, complete_file_evidence, prepare_file_evidence,
 };
+use crate::local::presentation::{PRESENTATION_SCHEMA_VERSION, sanitize_display_text};
 use crate::session::{
     OwnedProcess, OwnedProcessObserver, SessionOutputChunk, SessionOutputCompletion,
     SessionOutputObserver,
 };
 
+use super::events::{HistoryEventHub, HistoryLiveEvent};
 use super::store::{
-    HistoryStore, OutputEvent, distinct_invocation_ids, mark_retention_error_best_effort, now_ms,
+    HistoryStore, OutputEvent, distinct_invocation_ids, mark_retention_error_best_effort,
+    normalize_declared_workdir, now_ms,
 };
 
 const DEFAULT_OUTPUT_QUEUE_CAPACITY: usize = 4096;
@@ -42,6 +46,7 @@ pub struct LocalHistoryRuntimeConfig {
     pub max_age_seconds: u64,
     pub max_size_bytes: u64,
     pub output_queue_capacity: usize,
+    pub event_capacity: usize,
 }
 
 impl LocalHistoryRuntimeConfig {
@@ -57,11 +62,17 @@ impl LocalHistoryRuntimeConfig {
             max_age_seconds,
             max_size_bytes,
             output_queue_capacity: DEFAULT_OUTPUT_QUEUE_CAPACITY,
+            event_capacity: HistoryEventHub::default_capacity(),
         }
     }
 
     pub fn with_output_queue_capacity(mut self, capacity: usize) -> Self {
         self.output_queue_capacity = capacity.max(1);
+        self
+    }
+
+    pub fn with_event_capacity(mut self, capacity: usize) -> Self {
+        self.event_capacity = capacity.max(1);
         self
     }
 }
@@ -191,10 +202,14 @@ enum WorkerMessage {
 
 pub struct LocalHistoryRuntime {
     store: Arc<HistoryStore>,
+    runtime_id: Arc<str>,
+    events: Arc<HistoryEventHub>,
     sender: SyncSender<WorkerMessage>,
     worker: Mutex<Option<JoinHandle<()>>>,
     health: Arc<HistoryHealth>,
     file_evidence: Mutex<HashMap<i64, Vec<PendingFileEvidence>>>,
+    active_process_counts: Mutex<HashMap<String, u64>>,
+    active_process_count: AtomicU64,
 }
 
 impl LocalHistoryRuntime {
@@ -206,14 +221,20 @@ impl LocalHistoryRuntime {
         config: LocalHistoryRuntimeConfig,
         store_override: Option<Arc<HistoryStore>>,
     ) -> Result<Arc<Self>> {
+        let runtime_id = config.runtime_id.clone();
+        let events = HistoryEventHub::new(runtime_id.clone(), config.event_capacity);
         let store = match store_override {
             Some(store) => store,
-            None => Arc::new(HistoryStore::open(config.database_path, config.runtime_id)?),
+            None => Arc::new(HistoryStore::open(
+                config.database_path,
+                runtime_id.clone(),
+            )?),
         };
         let (sender, receiver) = std::sync::mpsc::sync_channel(config.output_queue_capacity.max(1));
         let health = Arc::new(HistoryHealth::new());
         let worker_store = store.clone();
         let worker_health = health.clone();
+        let worker_events = events.clone();
         let max_age_seconds = config.max_age_seconds;
         let max_size_bytes = config.max_size_bytes;
         let worker = std::thread::Builder::new()
@@ -223,17 +244,53 @@ impl LocalHistoryRuntime {
                     receiver,
                     worker_store,
                     worker_health,
+                    worker_events,
                     max_age_seconds,
                     max_size_bytes,
                 )
             })?;
         Ok(Arc::new(Self {
             store,
+            runtime_id,
+            events,
             sender,
             worker: Mutex::new(Some(worker)),
             health,
             file_evidence: Mutex::new(HashMap::new()),
+            active_process_counts: Mutex::new(HashMap::new()),
+            active_process_count: AtomicU64::new(0),
         }))
+    }
+
+    pub fn runtime_id(&self) -> &str {
+        &self.runtime_id
+    }
+
+    pub fn active_process_counts(&self) -> HashMap<String, u64> {
+        self.active_process_counts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    pub fn active_process_count(&self) -> u64 {
+        self.active_process_count.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn subscribe_live_events(
+        &self,
+    ) -> (u64, tokio::sync::broadcast::Receiver<HistoryLiveEvent>) {
+        (self.events.current_sequence(), self.events.subscribe())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn live_event_subscriber_count(&self) -> usize {
+        self.events.receiver_count()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn live_event_sequence(&self) -> u64 {
+        self.events.current_sequence()
     }
 
     pub fn database_path(&self) -> &std::path::Path {
@@ -381,8 +438,47 @@ impl InvocationEvidenceRecorder for LocalHistoryRuntime {
     ) -> Result<InvocationContext> {
         self.health.ensure_accepting()?;
         let pending_file_evidence = prepare_file_evidence(&start);
-        match self.store.begin(context, start) {
-            Ok(context) => {
+        let tool_name = start.tool_name.clone();
+        let normalized_workdir = start
+            .arguments
+            .get("workdir")
+            .and_then(serde_json::Value::as_str)
+            .and_then(normalize_declared_workdir);
+        match self.store.begin_with_metadata(context, start) {
+            Ok(begin) => {
+                let context = begin.context;
+                let invocation_id = context.invocation_id;
+                let agent_id = context.agent_id.as_deref();
+                if begin.agent_first_seen_in_runtime {
+                    self.events.emit_with(
+                        "agent_first_seen",
+                        agent_id,
+                        invocation_id,
+                        None,
+                        || json!({}),
+                    );
+                }
+                if let Some(new_workdir) = begin.new_workdir.as_deref() {
+                    self.events.emit_with(
+                        "agent_workdir_added",
+                        agent_id,
+                        invocation_id,
+                        Some(PRESENTATION_SCHEMA_VERSION),
+                        || json!({"normalized_workdir": new_workdir}),
+                    );
+                }
+                self.events.emit_with(
+                    "invocation_started",
+                    agent_id,
+                    invocation_id,
+                    Some(PRESENTATION_SCHEMA_VERSION),
+                    || {
+                        json!({
+                            "tool_name": tool_name.as_ref(),
+                            "normalized_workdir": normalized_workdir,
+                        })
+                    },
+                );
                 if let Some(invocation_id) = context.invocation_id
                     && !pending_file_evidence.is_empty()
                 {
@@ -446,9 +542,10 @@ impl InvocationEvidenceRecorder for LocalHistoryRuntime {
         // normal completions remain asynchronous and never block the response
         // path on the history writer.
         self.health.degrade_nonblocking(&reason);
-        match self.store.complete(context, outcome) {
+        match self.store.complete(context, outcome.clone()) {
             Ok(()) => {
                 persist_completed_file_evidence(&self.store, invocation_id, &file_evidence);
+                emit_completion_events(&self.events, context, &outcome);
                 self.health
                     .maintenance_requested
                     .store(true, Ordering::Release);
@@ -483,6 +580,7 @@ impl SessionOutputObserver for LocalHistoryRuntime {
         let _ = self.try_enqueue(
             WorkerMessage::Output(OutputEvent::Chunk {
                 invocation_id,
+                agent_id: chunk.invocation.agent_id.as_deref().map(str::to_owned),
                 sequence: chunk.sequence,
                 observed_at_ms,
                 text: chunk.text,
@@ -498,7 +596,10 @@ impl SessionOutputObserver for LocalHistoryRuntime {
             return;
         };
         let _ = self.try_enqueue(
-            WorkerMessage::Output(OutputEvent::Complete { invocation_id }),
+            WorkerMessage::Output(OutputEvent::Complete {
+                invocation_id,
+                agent_id: completion.invocation.agent_id.as_deref().map(str::to_owned),
+            }),
             invocation_id,
             "output",
             true,
@@ -512,15 +613,70 @@ impl OwnedProcessObserver for LocalHistoryRuntime {
             .created_by
             .invocation_id
             .context("active Local process is missing durable creator invocation ID")?;
-        self.store.protect_active_process_invocation(invocation_id)
+        self.store
+            .protect_active_process_invocation(invocation_id)?;
+        let active_process_count = self.active_process_count.fetch_add(1, Ordering::AcqRel) + 1;
+        let agent_id = process.created_by.agent_id.as_deref();
+        let agent_active_process_count = agent_id.map(|agent_id| {
+            let mut counts = self
+                .active_process_counts
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let count = counts.entry(agent_id.to_string()).or_default();
+            *count = count.saturating_add(1);
+            *count
+        });
+        self.events.emit_with(
+            "process_started",
+            agent_id,
+            Some(invocation_id),
+            None,
+            || {
+                json!({
+                    "active_process_count": active_process_count,
+                    "agent_active_process_count": agent_active_process_count,
+                })
+            },
+        );
+        Ok(())
     }
 
     fn process_ended(&self, process: &OwnedProcess) -> Result<()> {
         let Some(invocation_id) = process.created_by.invocation_id else {
             return Ok(());
         };
-        self.store
-            .unprotect_active_process_invocation(invocation_id)
+        let result = self
+            .store
+            .unprotect_active_process_invocation(invocation_id);
+        let active_process_count = self
+            .active_process_count
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                Some(count.saturating_sub(1))
+            })
+            .unwrap_or(0)
+            .saturating_sub(1);
+        let agent_id = process.created_by.agent_id.as_deref();
+        let agent_active_process_count = agent_id.map(|agent_id| {
+            let mut counts = self
+                .active_process_counts
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let count = counts.entry(agent_id.to_string()).or_default();
+            *count = count.saturating_sub(1);
+            let active = *count;
+            if active == 0 {
+                counts.remove(agent_id);
+            }
+            active
+        });
+        self.events
+            .emit_with("process_ended", agent_id, Some(invocation_id), None, || {
+                json!({
+                    "active_process_count": active_process_count,
+                    "agent_active_process_count": agent_active_process_count,
+                })
+            });
+        result
     }
 }
 
@@ -528,6 +684,7 @@ fn run_worker(
     receiver: Receiver<WorkerMessage>,
     store: Arc<HistoryStore>,
     health: Arc<HistoryHealth>,
+    events: Arc<HistoryEventHub>,
     max_age_seconds: u64,
     max_size_bytes: u64,
 ) {
@@ -560,7 +717,7 @@ fn run_worker(
             }
         }
 
-        process_messages(messages, &store, &health);
+        process_messages(messages, &store, &health, &events);
 
         let maintenance_due = health.maintenance_requested.load(Ordering::Acquire)
             && last_maintenance
@@ -581,7 +738,12 @@ fn run_worker(
     health.persist_degraded_state(&store);
 }
 
-fn process_messages(messages: Vec<WorkerMessage>, store: &HistoryStore, health: &HistoryHealth) {
+fn process_messages(
+    messages: Vec<WorkerMessage>,
+    store: &HistoryStore,
+    health: &HistoryHealth,
+    events: &HistoryEventHub,
+) {
     let mut output_events = Vec::new();
     for message in messages {
         match message {
@@ -591,9 +753,9 @@ fn process_messages(messages: Vec<WorkerMessage>, store: &HistoryStore, health: 
                 outcome,
                 file_evidence,
             } => {
-                flush_output_events(&mut output_events, store, health);
+                flush_output_events(&mut output_events, store, health, events);
                 let invocation_id = context.invocation_id;
-                if let Err(error) = store.complete(&context, outcome) {
+                if let Err(error) = store.complete(&context, outcome.clone()) {
                     if let Some(invocation_id) = invocation_id {
                         health.note_evidence_incomplete(invocation_id);
                     }
@@ -605,6 +767,7 @@ fn process_messages(messages: Vec<WorkerMessage>, store: &HistoryStore, health: 
                     if let Some(invocation_id) = invocation_id {
                         persist_completed_file_evidence(store, invocation_id, &file_evidence);
                     }
+                    emit_completion_events(events, &context, &outcome);
                     health.maintenance_requested.store(true, Ordering::Release);
                 }
             }
@@ -613,7 +776,7 @@ fn process_messages(messages: Vec<WorkerMessage>, store: &HistoryStore, health: 
             }
         }
     }
-    flush_output_events(&mut output_events, store, health);
+    flush_output_events(&mut output_events, store, health, events);
     if !health.accepting_new.load(Ordering::Acquire) {
         health.persist_degraded_state(store);
     }
@@ -648,6 +811,7 @@ fn flush_output_events(
     events: &mut Vec<OutputEvent>,
     store: &HistoryStore,
     health: &HistoryHealth,
+    live_events: &HistoryEventHub,
 ) {
     if events.is_empty() {
         return;
@@ -658,6 +822,66 @@ fn flush_output_events(
             health.note_capture_incomplete(invocation_id);
         }
         health.degrade_persisting(store, reason);
+    } else {
+        for event in events.iter() {
+            match event {
+                OutputEvent::Chunk {
+                    invocation_id,
+                    agent_id,
+                    sequence,
+                    text,
+                    ..
+                } => live_events.emit_with(
+                    "output",
+                    agent_id.as_deref(),
+                    Some(*invocation_id),
+                    None,
+                    || {
+                        json!({
+                            "output_sequence": sequence,
+                            "text": sanitize_display_text(text),
+                        })
+                    },
+                ),
+                OutputEvent::Complete {
+                    invocation_id,
+                    agent_id,
+                } => live_events.emit_with(
+                    "output_complete",
+                    agent_id.as_deref(),
+                    Some(*invocation_id),
+                    None,
+                    || json!({}),
+                ),
+            }
+        }
     }
     events.clear();
+}
+
+fn emit_completion_events(
+    events: &HistoryEventHub,
+    context: &InvocationContext,
+    outcome: &InvocationOutcome,
+) {
+    let invocation_id = context.invocation_id;
+    let agent_id = context.agent_id.as_deref();
+    let outcome_kind = match outcome {
+        InvocationOutcome::Success(_) => "success",
+        InvocationOutcome::Error(_) => "error",
+    };
+    events.emit_with(
+        "invocation_completed",
+        agent_id,
+        invocation_id,
+        Some(PRESENTATION_SCHEMA_VERSION),
+        || json!({"outcome": outcome_kind}),
+    );
+    events.emit_with(
+        "presentation_updated",
+        agent_id,
+        invocation_id,
+        Some(PRESENTATION_SCHEMA_VERSION),
+        || json!({}),
+    );
 }

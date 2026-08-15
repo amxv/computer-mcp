@@ -4,7 +4,10 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use super::{LocalConfig, LocalHistoryReader, LocalPaths};
+use super::{
+    LOCAL_OBSERVABILITY_API_VERSION, LocalConfig, LocalHistoryReader, LocalPaths,
+    PRESENTATION_SCHEMA_VERSION,
+};
 
 pub const LOCAL_STATUS_SCHEMA_VERSION: u32 = 2;
 pub const LOCAL_DISCOVERY_SCHEMA_VERSION: u32 = 1;
@@ -44,6 +47,19 @@ pub struct LocalObservabilityDiscovery {
     pub bearer_token_path: PathBuf,
     pub history_available: bool,
     pub sse_available: bool,
+}
+
+impl LocalObservabilityDiscovery {
+    pub fn active(base_url: impl Into<String>, bearer_token_path: impl Into<PathBuf>) -> Self {
+        Self {
+            api_version: LOCAL_OBSERVABILITY_API_VERSION,
+            presentation_version: PRESENTATION_SCHEMA_VERSION,
+            base_url: base_url.into(),
+            bearer_token_path: bearer_token_path.into(),
+            history_available: true,
+            sse_available: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -226,14 +242,10 @@ mod tests {
             start_directory: "/tmp/repo".into(),
             started_at: "2026-08-15T00:00:00Z".to_string(),
             expires_at: None,
-            observability: LocalObservabilityDiscovery {
-                api_version: 1,
-                presentation_version: 1,
-                base_url: "http://127.0.0.1:12345".to_string(),
-                bearer_token_path: paths.observability_bearer_file(),
-                history_available: true,
-                sse_available: true,
-            },
+            observability: LocalObservabilityDiscovery::active(
+                "http://127.0.0.1:12345",
+                paths.observability_bearer_file(),
+            ),
         };
         std::fs::write(
             paths.discovery_file(),

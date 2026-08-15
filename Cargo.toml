@@ -57,6 +57,7 @@ strip-ansi-escapes = "0.2.1"
 tempfile = "3.14"
 time = { version = "0.3", features = ["formatting", "local-offset"] }
 tokio = { version = "1.44", features = ["full"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
 tokio-util = "0.7"
 toml = "1.0"
 tower = { version = "0.5", features = ["util"] }

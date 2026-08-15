@@ -1,3 +1,4 @@
+mod events;
 mod file_store;
 mod query;
 mod schema;
@@ -17,6 +18,10 @@ pub use query::{
 };
 pub use schema::HISTORY_SCHEMA_VERSION;
 pub use worker::{LocalHistoryRuntime, LocalHistoryRuntimeConfig};
+
+pub(crate) use events::{HISTORY_LIVE_EVENT_SCHEMA_VERSION, HistoryLiveEvent};
+pub(crate) use query::{HistoryAgentRecord, HistoryOutputChunk, HistoryOutputMetadata};
+pub(crate) use store::normalize_declared_workdir;
 
 use std::fs;
 use std::path::Path;
