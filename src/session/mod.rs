@@ -16,7 +16,7 @@ use nix::unistd::{Pid, setpgid};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, RwLock};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::config::Config;
 use crate::protocol::{
@@ -148,6 +148,7 @@ struct SessionInner {
     pid: i32,
     last_known_cwd: String,
     child: Child,
+    reaped_exit_code: Option<i32>,
     pty_writer: Option<tokio::fs::File>,
     last_used_at: SystemTime,
     last_input_at: Instant,
@@ -194,7 +195,7 @@ impl SessionRuntime {
 
     async fn is_exited(&self) -> Result<bool> {
         let mut inner = self.inner.lock().await;
-        Ok(inner.child.try_wait()?.is_some())
+        Ok(reap_exit_code(&mut inner)?.is_some())
     }
 
     async fn continue_session(
@@ -309,9 +310,8 @@ impl SessionRuntime {
                     );
                 }
 
-                match inner.child.try_wait()? {
-                    Some(status) => {
-                        let code = status.code().unwrap_or(-1);
+                match reap_exit_code(&mut inner)? {
+                    Some(code) => {
                         let termination_reason = if inner.timed_out {
                             TerminationReason::Timeout
                         } else if inner.kill_requested || inner.force_killed {
@@ -503,6 +503,7 @@ impl SessionManager {
                 pid,
                 last_known_cwd: command_cwd_display.clone(),
                 child,
+                reaped_exit_code: None,
                 pty_writer: Some(master_writer),
                 last_used_at: now_system,
                 last_input_at: now,
@@ -520,6 +521,8 @@ impl SessionManager {
             sessions.insert(session_handle.clone(), runtime.clone());
         }
         drop(_admission_guard);
+
+        spawn_child_reaper(runtime.clone(), self.poll_interval);
 
         info!(
             event = "session_created",
@@ -622,6 +625,53 @@ impl SessionManager {
             }
         }
     }
+}
+
+fn reap_exit_code(inner: &mut SessionInner) -> Result<Option<i32>> {
+    if let Some(exit_code) = inner.reaped_exit_code {
+        return Ok(Some(exit_code));
+    }
+
+    let Some(status) = inner.child.try_wait()? else {
+        return Ok(None);
+    };
+    let exit_code = status.code().unwrap_or(-1);
+    inner.reaped_exit_code = Some(exit_code);
+    Ok(Some(exit_code))
+}
+
+fn spawn_child_reaper(runtime: Arc<SessionRuntime>, poll_interval: Duration) {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(poll_interval).await;
+            let reaped = {
+                let mut inner = runtime.inner.lock().await;
+                reap_exit_code(&mut inner)
+            };
+
+            match reaped {
+                Ok(Some(exit_code)) => {
+                    info!(
+                        event = "session_child_reaped",
+                        internal_session_id = runtime.internal_session_id,
+                        session_handle_prefix = runtime.handle_prefix(),
+                        exit_code,
+                    );
+                    break;
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    warn!(
+                        event = "session_child_reap_failed",
+                        internal_session_id = runtime.internal_session_id,
+                        session_handle_prefix = runtime.handle_prefix(),
+                        error = %err,
+                    );
+                    break;
+                }
+            }
+        }
+    });
 }
 
 fn generate_session_handle() -> String {
