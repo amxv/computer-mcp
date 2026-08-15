@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::fs::OpenOptions;
-use std::io::{self, Read, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::IpAddr;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -18,7 +18,11 @@ use clap::{Parser, Subcommand};
 #[cfg(unix)]
 use nix::errno::Errno;
 #[cfg(unix)]
+use nix::pty::openpty;
+#[cfg(unix)]
 use nix::sys::signal::{Signal, kill};
+#[cfg(unix)]
+use nix::sys::termios::{SetArg, cfmakeraw, tcgetattr, tcsetattr};
 #[cfg(unix)]
 use nix::unistd::{Group, Pid, Uid, User, chown, setsid};
 use rand::distr::{Alphanumeric, SampleString};
@@ -80,6 +84,10 @@ const GITHUB_PUSH_REWRITE_SOURCE: &str = "https://github.com/";
 const GITHUB_PUSH_REWRITE_TARGET: &str = "zodex::https://github.com/";
 const ZODEX_SPRITE_ENV: &str = "ZODEX_SPRITE";
 const OPERATOR_SPRITES_REGISTRY_RELATIVE_PATH: &str = ".config/zodex/sprites.json";
+const LOCAL_TARGET_STATE_RELATIVE_PATH: &str = ".config/zodex/local-target.json";
+const LOCAL_ACCESS_LEASE_RELATIVE_PATH: &str = ".config/zodex/local-access-lease.json";
+const LOCAL_LAST_READY_SETUP_RELATIVE_PATH: &str = ".config/zodex/local-last-ready-setup.json";
+const LOCAL_MACHINE_NAME: &str = "zodex-local";
 const GITHUB_API_BASE: &str = "https://api.github.com";
 const GITHUB_API_VERSION: &str = "2022-11-28";
 const GITHUB_OAUTH_DEVICE_CODE_URL: &str = "https://github.com/login/device/code";
@@ -153,9 +161,15 @@ enum Commands {
         #[command(subcommand)]
         command: PublisherCommand,
     },
+    /// Operate a remote Sprites.dev Zodex target.
     Sprite {
         #[command(subcommand)]
         command: SpriteCommand,
+    },
+    /// Operate the persistent isolated Apple Silicon Linux target for ChatGPT.
+    Local {
+        #[command(subcommand)]
+        command: LocalCommand,
     },
     Proxy {
         #[command(subcommand)]
@@ -263,6 +277,65 @@ enum SpriteCommand {
 }
 
 #[derive(Debug, Subcommand)]
+enum LocalCommand {
+    /// Create or reconcile the persistent isolated Local Zodex machine.
+    Setup {
+        /// GitHub repository in `owner/repo` form used for reader and publisher setup.
+        #[arg(long)]
+        repo: String,
+        /// Reader GitHub App ID with read-only repository contents access.
+        #[arg(long)]
+        reader_app_id: u64,
+        /// Path to the reader GitHub App private-key PEM on the operator Mac.
+        #[arg(long)]
+        reader_pem: PathBuf,
+        /// Publisher GitHub App ID used for PR publishing and approved direct pushes.
+        #[arg(long)]
+        publisher_app_id: u64,
+        /// Path to the publisher GitHub App private-key PEM on the operator Mac.
+        #[arg(long)]
+        publisher_pem: PathBuf,
+        /// Default base branch for publisher operations.
+        #[arg(long, default_value = "main")]
+        default_base: String,
+        /// Pre-created OpenAI Secure MCP Tunnel ID.
+        #[arg(long)]
+        tunnel_id: String,
+        /// Path to a restricted OpenAI tunnel runtime API key file.
+        #[arg(long)]
+        tunnel_runtime_key: PathBuf,
+        /// Override the Local machine CPU count.
+        #[arg(long)]
+        cpus: Option<u32>,
+        /// Override the Local machine memory (for example `32G`).
+        #[arg(long)]
+        memory: Option<String>,
+    },
+    /// Run an operator-controlled command as guest root outside the agent network namespace.
+    Exec {
+        #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
+    },
+    /// Open Secure MCP Tunnel access for a finite duration.
+    Start {
+        /// Required access duration (for example `30m`, `2h`, or `2d`).
+        #[arg(long)]
+        ttl: String,
+    },
+    /// Revoke MCP access and stop the Local machine while preserving its disk.
+    Stop,
+    /// Permanently erase Local machine storage and recreate it from the last known-good setup intent.
+    Reset,
+    /// Inspect Local configuration and Apple Container machine state without changing it.
+    Status,
+    #[command(hide = true)]
+    LeaseWorker {
+        #[arg(long)]
+        generation: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
 enum ProxyCommand {
     Inspect {
         #[arg(long)]
@@ -341,25 +414,40 @@ enum GithubCommand {
 
 #[derive(Debug, Subcommand)]
 enum GithubModeCommand {
+    /// Enable operator-controlled direct GitHub push policy on one Sprite or Local target.
     Yolo {
+        /// Target the configured persistent Local Apple Silicon guest.
+        #[arg(long, default_value_t = false, conflicts_with_all = ["sprite", "org"])]
+        local: bool,
         #[arg(long)]
         sprite: Option<String>,
         #[arg(long)]
         org: Option<String>,
+        /// Limit YOLO mode to one or more repositories instead of all writer-app installations.
         #[arg(long = "repo")]
         repos: Vec<String>,
+        /// Duration for the new YOLO grant window.
         #[arg(long, default_value = "2h")]
         ttl: String,
+        /// Keep the new YOLO grant active until the operator explicitly returns to default mode.
         #[arg(long, default_value_t = false)]
         no_ttl: bool,
     },
+    /// Disable YOLO mode on one Sprite or Local target without changing explicit push grants.
     Default {
+        /// Target the configured persistent Local Apple Silicon guest.
+        #[arg(long, default_value_t = false, conflicts_with_all = ["sprite", "org"])]
+        local: bool,
         #[arg(long)]
         sprite: Option<String>,
         #[arg(long)]
         org: Option<String>,
     },
+    /// Inspect YOLO policy on one Sprite or Local target.
     Status {
+        /// Target the configured persistent Local Apple Silicon guest.
+        #[arg(long, default_value_t = false, conflicts_with_all = ["sprite", "org"])]
+        local: bool,
         #[arg(long)]
         sprite: Option<String>,
         #[arg(long)]

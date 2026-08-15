@@ -200,9 +200,14 @@
         let script = github_yolo_agent_git_repair_script();
 
         assert!(script.contains(r#"helper_cmd="/usr/local/bin/zodex-agent --config /etc/zodex/config.toml git-credential-helper""#));
-        assert!(script.contains(r#"sudo -u zodex-agent env HOME="/home/zodex-agent" git config --global --replace-all credential.https://github.com.helper "$helper_cmd""#));
-        assert!(script.contains(r#"sudo -u zodex-agent env HOME="/home/zodex-agent" git config --global credential.https://github.com.useHttpPath true"#));
-        assert!(script.contains(r#"sudo -u zodex-agent env HOME="/home/zodex-agent" git config --global --replace-all url."zodex::https://github.com/".pushInsteadOf "https://github.com/""#));
+        assert!(script.contains(r#"agent_gitconfig="$agent_home/.gitconfig""#));
+        assert!(script.contains(r#"sudo git config --file "$agent_gitconfig" --replace-all credential.https://github.com.helper "$helper_cmd""#));
+        assert!(script.contains(r#"sudo git config --file "$agent_gitconfig" credential.https://github.com.useHttpPath true"#));
+        assert!(script.contains(r#"sudo git config --file "$agent_gitconfig" --replace-all url."zodex::https://github.com/".pushInsteadOf "https://github.com/""#));
+        assert!(script.starts_with("set -e\n"));
+        assert!(script.contains(r#"agent_group="$(id -gn "$agent_user")""#));
+        assert!(script.contains(r#"sudo chown "$agent_user:$agent_group" "$agent_gitconfig""#));
+        assert!(!script.contains("sudo -u zodex-agent"));
         assert!(!script.contains(".insteadOf https://github.com/"));
     }
 
@@ -210,24 +215,25 @@
     fn yolo_agent_git_inspect_script_reads_direct_push_plumbing() {
         let script = github_yolo_agent_git_inspect_script();
 
-        assert!(
-            script.contains(
-                r#"git config --global --get credential.https://github.com.helper || true"#
-            )
-        );
         assert!(script.contains(
-            r#"git config --global --get credential.https://github.com.useHttpPath || true"#
+            r#"sudo git config --file "$agent_gitconfig" --get credential.https://github.com.helper || true"#
         ));
-        assert!(script.contains(r#"git config --global --get-all url."zodex::https://github.com/".pushInsteadOf || true"#));
+        assert!(script.contains(
+            r#"sudo git config --file "$agent_gitconfig" --get credential.https://github.com.useHttpPath || true"#
+        ));
+        assert!(script.contains(r#"sudo git config --file "$agent_gitconfig" --get-all url."zodex::https://github.com/".pushInsteadOf || true"#));
+        assert!(!script.contains("sudo -u zodex-agent"));
         assert!(script.contains(r#"printf 'helper=%s\n' "$helper""#));
         assert!(script.contains(r#"printf 'use_http_path=%s\n' "$use_http_path""#));
         assert!(script.contains(r#"printf 'push_rewrite=%s\n' "$push_rewrite""#));
+        assert!(script.contains(r#"owner="$(sudo stat -c '%U' "$agent_gitconfig" 2>/dev/null || true)""#));
+        assert!(script.contains(r#"mode="$(sudo stat -c '%a' "$agent_gitconfig" 2>/dev/null || true)""#));
     }
 
     #[test]
     fn parse_yolo_agent_git_status_accepts_repaired_config() {
         let raw = format!(
-            "helper={}\nuse_http_path=TRUE\npush_rewrite=https://example.com/\nhttps://github.com/\n",
+            "helper={}\nuse_http_path=TRUE\npush_rewrite=https://example.com/\nhttps://github.com/\nowner=zodex-agent\nmode=600\n",
             expected_zodex_agent_git_helper()
         );
 
@@ -239,6 +245,8 @@
                 helper: expected_zodex_agent_git_helper(),
                 use_http_path: "TRUE".to_string(),
                 push_rewrite: "https://example.com/\nhttps://github.com/".to_string(),
+                owner: "zodex-agent".to_string(),
+                mode: "600".to_string(),
             }
         );
         assert!(status.helper_ok());
@@ -251,6 +259,7 @@
                 "agent-git-helper: ok".to_string(),
                 "agent-git-use-http-path: ok".to_string(),
                 "agent-git-push-rewrite: ok".to_string(),
+                "agent-git-config-access: ok".to_string(),
             ]
         );
     }
@@ -258,7 +267,7 @@
     #[test]
     fn parse_yolo_agent_git_status_reports_broken_config() {
         let status = parse_github_yolo_agent_git_status(
-            "helper=/usr/bin/git-credential-store\nuse_http_path=false\npush_rewrite=https://example.com/\n",
+            "helper=/usr/bin/git-credential-store\nuse_http_path=false\npush_rewrite=https://example.com/\nowner=root\nmode=600\n",
         );
 
         assert_eq!(
@@ -267,6 +276,8 @@
                 helper: "/usr/bin/git-credential-store".to_string(),
                 use_http_path: "false".to_string(),
                 push_rewrite: "https://example.com/".to_string(),
+                owner: "root".to_string(),
+                mode: "600".to_string(),
             }
         );
         assert!(!status.helper_ok());
@@ -279,6 +290,7 @@
                 "agent-git-helper: missing-or-mismatched".to_string(),
                 "agent-git-use-http-path: missing-or-mismatched".to_string(),
                 "agent-git-push-rewrite: missing".to_string(),
+                "agent-git-config-access: wrong-owner-or-mode".to_string(),
             ]
         );
     }
@@ -422,6 +434,10 @@
             Duration::from_secs(2 * 60 * 60)
         );
         assert_eq!(
+            parse_push_grant_ttl("2d").expect("2d should parse"),
+            Duration::from_secs(2 * 24 * 60 * 60)
+        );
+        assert_eq!(
             parse_push_grant_ttl("45").expect("bare seconds should parse"),
             Duration::from_secs(45)
         );
@@ -432,6 +448,432 @@
         assert!(parse_push_grant_ttl("").is_err());
         assert!(parse_push_grant_ttl("0m").is_err());
         assert!(parse_push_grant_ttl("30w").is_err());
+    }
+
+    #[test]
+    fn local_platform_support_is_runtime_classified() {
+        assert_eq!(
+            classify_local_platform("macos", "aarch64"),
+            LocalPlatformSupport::Supported
+        );
+        assert!(matches!(
+            classify_local_platform("linux", "aarch64"),
+            LocalPlatformSupport::Unsupported(message) if message.contains("Apple Silicon macOS")
+        ));
+        assert!(matches!(
+            classify_local_platform("macos", "x86_64"),
+            LocalPlatformSupport::Unsupported(message) if message.contains("Apple Silicon")
+        ));
+    }
+
+    #[test]
+    fn local_provider_missing_is_distinct_from_unsupported() {
+        let availability = probe_apple_provider_with(LocalPlatformSupport::Supported, |_program, _args| {
+            Err(io::Error::new(io::ErrorKind::NotFound, "missing"))
+        });
+        assert_eq!(availability, LocalProviderAvailability::Missing);
+
+        let unsupported = probe_apple_provider_with(
+            LocalPlatformSupport::Unsupported("wrong platform".to_string()),
+            |_program, _args| panic!("unsupported platforms must not invoke provider commands"),
+        );
+        assert_eq!(
+            unsupported,
+            LocalProviderAvailability::Unsupported("wrong platform".to_string())
+        );
+    }
+
+    #[test]
+    fn local_provider_version_and_home_mount_capability_are_classified_from_fixtures() {
+        let version_fixture = r#"[{"version":"0.8.0","buildType":"release","commit":"abc123","appName":"container"}]"#;
+        assert_eq!(
+            parse_apple_system_version(version_fixture).expect("version fixture should parse"),
+            "0.8.0"
+        );
+
+        let mut calls = 0;
+        let ready = probe_apple_provider_with(LocalPlatformSupport::Supported, |_program, args| {
+            calls += 1;
+            if args == ["system", "version", "--format", "json"] {
+                Ok(ProviderCommandOutput {
+                    success: true,
+                    stdout: version_fixture.to_string(),
+                    stderr: String::new(),
+                })
+            } else if args == ["machine", "create", "--help"] {
+                Ok(ProviderCommandOutput {
+                    success: true,
+                    stdout: "--home-mount <home-mount> User home mount (ro, rw, none)".to_string(),
+                    stderr: String::new(),
+                })
+            } else {
+                panic!("unexpected provider args: {args:?}");
+            }
+        });
+        assert_eq!(calls, 2);
+        assert_eq!(
+            ready,
+            LocalProviderAvailability::Ready {
+                version: "0.8.0".to_string()
+            }
+        );
+
+        let incompatible = probe_apple_provider_with(LocalPlatformSupport::Supported, |_program, args| {
+            if args == ["system", "version", "--format", "json"] {
+                Ok(ProviderCommandOutput {
+                    success: true,
+                    stdout: version_fixture.to_string(),
+                    stderr: String::new(),
+                })
+            } else {
+                Ok(ProviderCommandOutput {
+                    success: true,
+                    stdout: "machine create help without isolation option".to_string(),
+                    stderr: String::new(),
+                })
+            }
+        });
+        assert!(matches!(
+            incompatible,
+            LocalProviderAvailability::Incompatible(message)
+                if message.contains("--home-mount")
+        ));
+    }
+
+    #[test]
+    fn apple_machine_command_and_inspect_fixture_match_current_contract() {
+        assert_eq!(
+            apple_machine_inspect_args(LOCAL_MACHINE_NAME),
+            vec!["machine", "inspect", "zodex-local"]
+        );
+        assert_eq!(
+            apple_machine_create_help_args(),
+            vec!["machine", "create", "--help"]
+        );
+
+        let machine = parse_apple_machine_inspect(
+            r#"[{"id":"zodex-local","status":"running","cpus":12,"memory":34359738368,"homeMount":"none","diskSize":68719476736,"ipAddress":"192.0.2.2"}]"#,
+        )
+        .expect("current Apple machine inspect fixture should parse");
+        assert_eq!(machine.id, LOCAL_MACHINE_NAME);
+        assert!(machine_status_is_running(&machine.status));
+        assert_eq!(machine.home_mount, "none");
+        assert_eq!(
+            classify_local_home_mount(&machine.home_mount),
+            LocalHomeMountStatus::Isolated
+        );
+        assert_eq!(
+            classify_local_home_mount("rw"),
+            LocalHomeMountStatus::Unsafe("rw".to_string())
+        );
+        assert_eq!(format_bytes(machine.memory), "32 GiB");
+    }
+
+    #[test]
+    fn local_machine_creation_is_no_home_mount_and_resource_scoped() {
+        let args = local_machine_create_args(Some(12), Some("32G"));
+        assert_eq!(
+            args,
+            vec![
+                "machine",
+                "create",
+                "--no-boot",
+                "--name",
+                "zodex-local",
+                "--home-mount",
+                "none",
+                "--cpus",
+                "12",
+                "--memory",
+                "32G",
+                "local/zodex-machine:4",
+            ]
+        );
+        assert!(!args.iter().any(|arg| matches!(arg.as_str(), "--mount" | "--volume" | "-v")));
+
+        assert_eq!(
+            local_machine_set_args(Some(8), Some("16G")),
+            vec![
+                "machine",
+                "set",
+                "--name",
+                "zodex-local",
+                "home-mount=none",
+                "cpus=8",
+                "memory=16G",
+            ]
+        );
+    }
+
+    #[test]
+    fn local_operator_exec_preserves_command_token_boundaries() {
+        let command = vec![
+            "sudo".to_string(),
+            "printf".to_string(),
+            "%s\\n".to_string(),
+            "a b".to_string(),
+            "$(not-a-shell)".to_string(),
+        ];
+        let args = local_machine_run_args(&command);
+        assert_eq!(
+            &args[..6],
+            ["machine", "run", "--root", "--name", "zodex-local", "--"]
+        );
+        assert_eq!(
+            args[6],
+            "'sudo' 'printf' '%s\\n' 'a b' '$(not-a-shell)'"
+        );
+        assert_eq!(args.len(), 7);
+
+        let input_args = local_machine_run_with_input_args(&command);
+        assert_eq!(
+            &input_args[..7],
+            [
+                "machine",
+                "run",
+                "--root",
+                "--name",
+                "zodex-local",
+                "--interactive",
+                "--",
+            ]
+        );
+        assert_eq!(
+            input_args[7],
+            "'sudo' 'printf' '%s\\n' 'a b' '$(not-a-shell)'"
+        );
+        assert_eq!(input_args.len(), 8);
+
+        let full_pty_args = local_machine_full_pty_args(&command);
+        assert_eq!(&full_pty_args[..3], ["-q", "/dev/null", "container"]);
+        assert_eq!(&full_pty_args[3..], args);
+    }
+
+    #[test]
+    fn local_operator_upload_waits_for_guest_ready_and_done_markers() {
+        let mut reader = std::io::Cursor::new(b"boot prelude\n__ZODEX_UPLOAD_READY__\n");
+        let mut output = Vec::new();
+        assert!(
+            read_local_upload_marker(&mut reader, LOCAL_UPLOAD_READY_MARKER, &mut output).unwrap()
+        );
+        assert!(String::from_utf8(output).unwrap().contains("boot prelude"));
+
+        let mut done_reader = std::io::Cursor::new(b"__ZODEX_UPLOAD_DONE__\n");
+        assert!(
+            read_local_upload_marker(
+                &mut done_reader,
+                LOCAL_UPLOAD_DONE_MARKER,
+                &mut Vec::new(),
+            )
+            .unwrap()
+        );
+
+        let source = include_str!("../local_provider.rs");
+        assert!(source.contains("read_local_upload_marker("));
+        assert!(source.contains("LOCAL_UPLOAD_DONE_MARKER"));
+    }
+
+    #[test]
+    fn local_systemd_readiness_wait_is_bounded_and_accepts_degraded_boots() {
+        let command = local_systemd_ready_command();
+        assert_eq!(&command[..2], ["/bin/bash", "-lc"]);
+        assert!(command[2].contains("seq 1 120"));
+        assert!(command[2].contains("running|degraded"));
+        assert!(command[2].contains("sleep 0.25"));
+        assert!(command[2].contains("systemd did not become ready"));
+    }
+
+    #[test]
+    fn local_setup_completes_first_boot_before_interactive_uploads() {
+        let source = include_str!("../local_setup.rs");
+        assert!(source.contains(
+            "ensure_local_machine_systemd_ready()?;\n    provision_local_guest("
+        ));
+    }
+
+    #[test]
+    fn local_setup_reconciles_owned_targets_and_rejects_unmanaged_machine() {
+        let machine = parse_apple_machine_inspect(
+            r#"[{"id":"zodex-local","status":"stopped","cpus":8,"memory":17179869184,"homeMount":"none"}]"#,
+        )
+        .expect("machine fixture");
+        let state = LocalTargetRecord {
+            version: 1,
+            machine_id: LOCAL_MACHINE_NAME.to_string(),
+            setup_state: LocalSetupState::Provisioning,
+            image_reference: Some("local/zodex-machine:4".to_string()),
+            requested_cpus: None,
+            requested_memory: None,
+            network: Some(expected_local_network()),
+            setup_sources: None,
+        };
+
+        assert_eq!(classify_local_setup_action(None, None), LocalSetupAction::Create);
+        assert_eq!(
+            classify_local_setup_action(None, Some(&machine)),
+            LocalSetupAction::RejectUnmanaged
+        );
+        assert_eq!(
+            classify_local_setup_action(Some(&state), Some(&machine)),
+            LocalSetupAction::Reconcile
+        );
+        assert_eq!(
+            classify_local_setup_action(Some(&state), None),
+            LocalSetupAction::Create
+        );
+    }
+
+    #[test]
+    fn local_guest_setup_uses_runtime_installer_loopback_and_separate_identities() {
+        let sources = LocalSetupSources {
+            repo: "amxv/zodex".to_string(),
+            reader_app_id: 11,
+            reader_pem_path: "/Users/operator/reader.pem".to_string(),
+            reader_installation_id: 12,
+            publisher_app_id: 21,
+            publisher_pem_path: "/Users/operator/publisher.pem".to_string(),
+            publisher_installation_id: 22,
+            default_base: "main".to_string(),
+            tunnel_id: Some("tunnel_0123456789abcdef0123456789abcdef".to_string()),
+            tunnel_runtime_key_path: Some("/Users/operator/tunnel-runtime-key".to_string()),
+        };
+        let script = build_local_guest_setup_script(&sources).expect("setup script");
+
+        assert!(script.contains("ZODEX_INSTALL_MODE=runtime"));
+        assert!(script.contains("ZODEX_INSTALL_OPERATOR_CLI=0"));
+        assert!(script.contains("python3-tomli"));
+        assert!(script.contains("import tomli as tomllib"));
+        assert!(script.contains("chown root:zodex /var/lib/zodex/tls/cert.pem /var/lib/zodex/tls/key.pem"));
+        assert!(script.contains("chmod 0640 /var/lib/zodex/tls/key.pem"));
+        assert!(script.contains("chown root:root /etc/zodex"));
+        assert!(script.contains("chmod 0711 /etc/zodex"));
+        assert!(script.contains("/^publisher_targets = \\[\\]$/ { next }"));
+        assert!(script.contains("/^publisher_installations = \\[\\]$/ { next }"));
+        assert!(script.contains("bind_host = \\\"127.0.0.1\\\""));
+        assert!(script.contains("User=zodex-agent"));
+        assert!(script.contains("User=zodex-publisher"));
+        assert!(script.contains("NetworkNamespacePath=/run/netns/zodex-agent"));
+        assert!(script.contains("zodex-local-network.service"));
+        assert!(script.contains("/usr/local/libexec/zodex-local-network"));
+        assert!(script.contains("useradd --system --gid zodex-tunnel"));
+        assert!(script.contains("/etc/zodex/tunnel"));
+        assert!(!script.contains("/Users/operator/reader.pem"));
+        assert!(!script.contains("/Users/operator/publisher.pem"));
+        assert!(!script.contains("--volume"));
+        assert!(!script.contains("--mount"));
+    }
+
+    #[test]
+    fn local_setup_input_validation_is_conservative() {
+        assert_eq!(validate_local_repo("amxv/zodex").unwrap(), "amxv/zodex");
+        assert!(validate_local_repo("amxv/zodex;rm -rf /").is_err());
+        assert!(validate_local_default_base("main").is_ok());
+        assert!(validate_local_default_base("release/next").is_ok());
+        assert!(validate_local_default_base("bad\"branch").is_err());
+        assert!(validate_local_default_base("../escape").is_err());
+    }
+
+    #[test]
+    fn local_state_round_trips_with_atomic_private_files() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let target_path = local_target_state_path_from_home(temp.path());
+        let lease_path = local_access_lease_path_from_home(temp.path());
+        let target = LocalTargetRecord {
+            version: 1,
+            machine_id: LOCAL_MACHINE_NAME.to_string(),
+            setup_state: LocalSetupState::Provisioning,
+            image_reference: Some("local/zodex-machine:latest".to_string()),
+            requested_cpus: Some(12),
+            requested_memory: Some("32G".to_string()),
+            network: Some(expected_local_network()),
+            setup_sources: Some(LocalSetupSources {
+                repo: "amxv/zodex".to_string(),
+                reader_app_id: 1,
+                reader_pem_path: "/tmp/reader.pem".to_string(),
+                reader_installation_id: 2,
+                publisher_app_id: 3,
+                publisher_pem_path: "/tmp/publisher.pem".to_string(),
+                publisher_installation_id: 4,
+                default_base: "main".to_string(),
+                tunnel_id: Some("tunnel_0123456789abcdef0123456789abcdef".to_string()),
+                tunnel_runtime_key_path: Some("/tmp/tunnel-runtime-key".to_string()),
+            }),
+        };
+        save_local_target_record(&target_path, &target).expect("save target");
+        assert_eq!(
+            load_local_target_record(&target_path).expect("load target"),
+            Some(target.clone())
+        );
+
+        let ready = LocalTargetRecord {
+            setup_state: LocalSetupState::Ready,
+            ..target
+        };
+        save_local_target_record(&target_path, &ready).expect("replace target atomically");
+        assert_eq!(
+            load_local_target_record(&target_path).expect("reload target"),
+            Some(ready)
+        );
+
+        let lease = LocalAccessLease {
+            version: 1,
+            generation: "generation-1".to_string(),
+            created_at_epoch_seconds: 100,
+            expires_at_epoch_seconds: 200,
+            active: true,
+            revocation_pending: false,
+        };
+        save_local_access_lease(&lease_path, &lease).expect("save lease");
+        assert_eq!(
+            load_local_access_lease(&lease_path).expect("load lease"),
+            Some(lease)
+        );
+
+        #[cfg(unix)]
+        {
+            let target_mode = fs::metadata(&target_path).expect("target metadata").permissions().mode() & 0o777;
+            let lease_mode = fs::metadata(&lease_path).expect("lease metadata").permissions().mode() & 0o777;
+            assert_eq!(target_mode, 0o600);
+            assert_eq!(lease_mode, 0o600);
+        }
+    }
+
+    #[test]
+    fn local_state_fails_closed_on_wrong_identity_or_invalid_lease() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let target_path = local_target_state_path_from_home(temp.path());
+        let lease_path = local_access_lease_path_from_home(temp.path());
+        fs::create_dir_all(target_path.parent().expect("target parent")).expect("state dir");
+
+        fs::write(
+            &target_path,
+            r#"{"version":1,"machine_id":"other-machine","setup_state":"ready"}"#,
+        )
+        .expect("write wrong target identity");
+        let target_error = load_local_target_record(&target_path)
+            .expect_err("wrong machine identity must fail closed")
+            .to_string();
+        assert!(target_error.contains("expected `zodex-local`"));
+
+        fs::write(
+            &lease_path,
+            r#"{"version":1,"generation":"generation-1","created_at_epoch_seconds":200,"expires_at_epoch_seconds":100,"active":true}"#,
+        )
+        .expect("write invalid lease");
+        let lease_error = load_local_access_lease(&lease_path)
+            .expect_err("backwards lease must fail closed")
+            .to_string();
+        assert!(lease_error.contains("expiration must be after creation"));
+
+        fs::write(
+            &target_path,
+            r#"{"version":1,"machine_id":"zodex-local","setup_state":"ready"}"#,
+        )
+        .expect("write incomplete ready target");
+        let ready_error = load_local_target_record(&target_path)
+            .expect_err("ready target without setup sources must fail closed")
+            .to_string();
+        assert!(ready_error.contains("missing setup source references"));
     }
 
     #[test]
@@ -543,18 +985,4 @@
             resolve_publisher_client_id(&config, None),
             Some("Iv1.from-config".to_string())
         );
-    }
-
-    #[test]
-    fn browser_open_attempts_include_platform_fallback() {
-        let attempts = browser_open_attempts("https://github.com/login/device");
-        assert!(!attempts.is_empty());
-
-        if cfg!(target_os = "macos") {
-            assert_eq!(attempts[0].0, "open");
-        } else if cfg!(target_os = "windows") {
-            assert_eq!(attempts[0].0, "cmd");
-        } else {
-            assert!(attempts.iter().any(|(program, _)| *program == "xdg-open"));
-        }
     }

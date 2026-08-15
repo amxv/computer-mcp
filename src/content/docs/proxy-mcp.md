@@ -8,7 +8,7 @@ summary: How zodex serves `/mcp`, `/health`, and direct HTTP routes through the 
 
 ## Public entry point
 
-zodex assumes a proxy-backed public MCP front door for Sprite deployments. The proxy is preferred when the raw Sprite URL is not reliable enough for MCP clients on its own.
+This page is **Sprite-specific**. Zodex Sprite uses a proxy-backed public MCP front door when the raw Sprite URL is not reliable enough for MCP clients on its own. Zodex Local uses its dedicated Secure MCP Tunnel and finite Local access lease instead; see [Zodex Local on Apple Silicon](/docs/local-apple-silicon).
 
 The important routes are:
 

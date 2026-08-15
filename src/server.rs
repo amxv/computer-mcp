@@ -179,6 +179,14 @@ fn build_app(
 
     Router::new()
         .route("/health", get(health))
+        .route(
+            "/.well-known/oauth-protected-resource/mcp",
+            get(oauth_metadata_not_configured),
+        )
+        .route(
+            "/.well-known/oauth-protected-resource",
+            get(oauth_metadata_not_configured),
+        )
         .merge(protected_mcp_router)
         .merge(http_api_router)
 }
@@ -268,6 +276,10 @@ pub async fn run_server(config: Config) -> Result<()> {
 
 async fn health() -> Json<Value> {
     Json(json!({ "status": "ok" }))
+}
+
+async fn oauth_metadata_not_configured() -> StatusCode {
+    StatusCode::NOT_FOUND
 }
 
 fn rewrite_mcp_transport_root_uri(uri: &Uri) -> Option<Uri> {
@@ -391,9 +403,9 @@ mod tests {
             .map(|tool| tool.name.to_string())
             .collect();
 
-        assert!(names.iter().any(|name| name == "exec_command"));
-        assert!(names.iter().any(|name| name == "write_stdin"));
-        assert!(names.iter().any(|name| name == "apply_patch"));
+        let mut sorted = names.clone();
+        sorted.sort();
+        assert_eq!(sorted, ["apply_patch", "exec_command", "write_stdin"]);
         assert!(
             names.iter().all(|name| name != "publish-pr"),
             "publish-pr must not be exposed on remote MCP surface"
@@ -799,6 +811,35 @@ mod tests {
             .expect("body should be readable");
         let value: serde_json::Value = serde_json::from_slice(&body).expect("json body");
         assert_eq!(value, json!({ "status": "ok" }));
+    }
+
+    #[tokio::test]
+    async fn absent_oauth_metadata_is_public_not_found_for_plain_mcp_discovery() {
+        let config = test_config();
+        let service = ZodexService::new(config.clone());
+        let app = super::build_app(
+            config,
+            super::build_mcp_service(service.clone(), CancellationToken::new()),
+            service,
+        );
+
+        for path in [
+            "/.well-known/oauth-protected-resource/mcp",
+            "/.well-known/oauth-protected-resource",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("GET")
+                        .uri(path)
+                        .body(Body::empty())
+                        .expect("request build"),
+                )
+                .await
+                .expect("request should succeed");
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        }
     }
 
     #[tokio::test]

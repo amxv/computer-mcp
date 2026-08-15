@@ -1,6 +1,6 @@
 ---
 title: Command reference
-description: A complete command map for the operator CLI, Sprite commands, proxy commands, GitHub grant commands, agent helper, local service helpers, and direct HTTP client.
+description: A complete command map for the operator CLI, Sprite and Local targets, proxy commands, GitHub grant commands, agent helper, local service helpers, and direct HTTP client.
 order: 13
 category: Reference
 summary: The compact command index for day-to-day zodex operation.
@@ -47,6 +47,30 @@ zodex sprite health --sprite dev-sprite
 
 Add `--org engineering` to Sprite commands when the Sprite belongs to that organization.
 
+## Zodex Local commands
+
+Local is supported on Apple Silicon macOS with Apple Container:
+
+```bash
+zodex local setup \
+  --repo amxv/zodex \
+  --reader-app-id 123456 \
+  --reader-pem /secure/zodex/reader.pem \
+  --publisher-app-id 987654 \
+  --publisher-pem /secure/zodex/writer.pem \
+  --tunnel-id tunnel_<32-lowercase-hex> \
+  --tunnel-runtime-key /secure/zodex/local-tunnel-runtime-key \
+  --cpus 8 \
+  --memory 16G
+zodex local exec -- apt-get install -y clang mold pkg-config
+zodex local start --ttl 2d
+zodex local status
+zodex local stop
+zodex local reset
+```
+
+`setup` is the non-destructive create/reconcile path. `exec` is trusted guest-root operator administration and is not exposed through MCP. `start` requires a finite TTL. `stop` preserves the Local disk. `reset` permanently erases the Local machine storage and recreates it from the last known-good setup intent; successful reset leaves MCP access off.
+
 ## Proxy commands
 
 ```bash
@@ -72,9 +96,12 @@ zodex github mode yolo --sprite dev-sprite --no-ttl
 zodex github mode yolo --sprite dev-sprite --repo amxv/zodex
 zodex github mode status --sprite dev-sprite
 zodex github mode default --sprite dev-sprite
+zodex github mode yolo --local --repo amxv/zodex --ttl 4h
+zodex github mode status --local
+zodex github mode default --local
 ```
 
-`request-push` exists on the operator CLI too, but day-to-day agent sessions normally use `zodex-agent github request-push` on the Sprite. `github mode` is operator-only; it is intentionally not exposed by `zodex-agent`. When exactly one Sprite is registered locally, `--sprite` can be omitted for remote operator commands.
+`request-push` exists on the operator CLI too, but day-to-day agent sessions normally use `zodex-agent github request-push` inside the selected Linux target. `github mode` is operator-only; it is intentionally not exposed by `zodex-agent`. When only one eligible target exists, mode commands can infer it; when both Local and Sprite are plausible, select `--local` or `--sprite <name>` explicitly and ambiguity fails closed.
 
 ## Agent-side commands
 

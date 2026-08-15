@@ -352,15 +352,15 @@ fn expires_at_from_now(expires_in_seconds: u64) -> Result<(String, u64)> {
     ))
 }
 
-fn parse_push_grant_ttl(raw: &str) -> Result<Duration> {
+fn parse_duration(raw: &str, label: &str) -> Result<Duration> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
-        bail!("push grant TTL must not be empty");
+        bail!("{label} must not be empty");
     }
     let unit = trimmed
         .chars()
         .last()
-        .ok_or_else(|| anyhow!("push grant TTL must not be empty"))?;
+        .ok_or_else(|| anyhow!("{label} must not be empty"))?;
     let (value_part, multiplier_seconds) = if unit.is_ascii_alphabetic() {
         let value = &trimmed[..trimmed.len() - unit.len_utf8()];
         let multiplier = match unit {
@@ -368,7 +368,7 @@ fn parse_push_grant_ttl(raw: &str) -> Result<Duration> {
             'm' | 'M' => 60,
             'h' | 'H' => 60 * 60,
             'd' | 'D' => 60 * 60 * 24,
-            _ => bail!("unsupported push grant TTL unit `{unit}`; use s, m, h, or d"),
+            _ => bail!("unsupported {label} unit `{unit}`; use s, m, h, or d"),
         };
         (value, multiplier)
     } else {
@@ -376,14 +376,18 @@ fn parse_push_grant_ttl(raw: &str) -> Result<Duration> {
     };
     let amount = value_part
         .parse::<u64>()
-        .with_context(|| format!("failed to parse push grant TTL `{raw}`"))?;
+        .with_context(|| format!("failed to parse {label} `{raw}`"))?;
     if amount == 0 {
-        bail!("push grant TTL must be greater than zero");
+        bail!("{label} must be greater than zero");
     }
     let seconds = amount
         .checked_mul(multiplier_seconds)
-        .ok_or_else(|| anyhow!("push grant TTL is too large"))?;
+        .ok_or_else(|| anyhow!("{label} is too large"))?;
     Ok(Duration::from_secs(seconds))
+}
+
+fn parse_push_grant_ttl(raw: &str) -> Result<Duration> {
+    parse_duration(raw, "push grant TTL")
 }
 
 fn write_local_push_grant(repo: &str, grant: &PushGrantRecord) -> Result<()> {

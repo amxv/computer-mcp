@@ -212,6 +212,42 @@ pub(crate) async fn run() -> Result<()> {
                 }
             }
         }
+        Commands::Local { command } => match command {
+            LocalCommand::Setup {
+                repo,
+                reader_app_id,
+                reader_pem,
+                publisher_app_id,
+                publisher_pem,
+                default_base,
+                tunnel_id,
+                tunnel_runtime_key,
+                cpus,
+                memory,
+            } => {
+                local_setup::local_setup(local_setup::LocalSetupOptions {
+                    repo: &repo,
+                    reader_app_id,
+                    reader_pem: &reader_pem,
+                    publisher_app_id,
+                    publisher_pem: &publisher_pem,
+                    default_base: &default_base,
+                    tunnel_id: &tunnel_id,
+                    tunnel_runtime_key: &tunnel_runtime_key,
+                    cpus,
+                    memory: memory.as_deref(),
+                })
+                .await?;
+            }
+            LocalCommand::Exec { command } => local_setup::local_exec(&command)?,
+            LocalCommand::Start { ttl } => local_lifecycle::local_start(&ttl)?,
+            LocalCommand::Stop => local_lifecycle::local_stop()?,
+            LocalCommand::Reset => local_recovery::local_reset().await?,
+            LocalCommand::Status => print_local_status()?,
+            LocalCommand::LeaseWorker { generation } => {
+                local_lifecycle::local_lease_worker(&generation)?;
+            }
+        },
         Commands::Proxy { command } => match command {
             ProxyCommand::Inspect {
                 sprite,
@@ -301,13 +337,18 @@ pub(crate) async fn run() -> Result<()> {
                 }
                 GithubCommand::Mode { command } => match command {
                     GithubModeCommand::Yolo {
+                        local,
                         sprite,
                         org,
                         repos,
                         ttl,
                         no_ttl,
                     } => {
-                        let resolved = resolve_remote_sprite(sprite.as_deref(), org.as_deref())?;
+                        let target = operator_guest::resolve_github_mode_target(
+                            local,
+                            sprite.as_deref(),
+                            org.as_deref(),
+                        )?;
                         let ttl = if no_ttl {
                             None
                         } else if ttl == "2h" {
@@ -315,15 +356,23 @@ pub(crate) async fn run() -> Result<()> {
                         } else {
                             Some(parse_push_grant_ttl(&ttl)?)
                         };
-                        enable_github_yolo_mode(&resolved, &repos, ttl)?;
+                        enable_github_yolo_mode(&target, &repos, ttl)?;
                     }
-                    GithubModeCommand::Default { sprite, org } => {
-                        let resolved = resolve_remote_sprite(sprite.as_deref(), org.as_deref())?;
-                        disable_github_yolo_mode(&resolved)?;
+                    GithubModeCommand::Default { local, sprite, org } => {
+                        let target = operator_guest::resolve_github_mode_target(
+                            local,
+                            sprite.as_deref(),
+                            org.as_deref(),
+                        )?;
+                        disable_github_yolo_mode(&target)?;
                     }
-                    GithubModeCommand::Status { sprite, org } => {
-                        let resolved = resolve_remote_sprite(sprite.as_deref(), org.as_deref())?;
-                        print_github_mode_status(&resolved)?;
+                    GithubModeCommand::Status { local, sprite, org } => {
+                        let target = operator_guest::resolve_github_mode_target(
+                            local,
+                            sprite.as_deref(),
+                            org.as_deref(),
+                        )?;
+                        print_github_mode_status(&target)?;
                     }
                 },
             }

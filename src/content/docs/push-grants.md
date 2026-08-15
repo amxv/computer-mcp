@@ -3,7 +3,7 @@ title: Push modes and PRs
 description: Publish pull requests, request temporary push access, use normal Git commands after approval, list active grants, and understand when to use YOLO mode instead.
 order: 7
 category: GitHub Access
-summary: "The complete write workflow for ChatGPT inside a zodex Sprite: PRs, request-push, grant-push, revoke, and when to switch to YOLO."
+summary: "The complete write workflow inside Zodex Sprite or Local: PRs, request-push, operator grants, revoke, and when to switch to YOLO."
 ---
 
 ChatGPT can do almost all coding work before GitHub direct push is enabled: clone, inspect, edit, test, and commit. This page covers the write step after the local commit exists.
@@ -39,9 +39,9 @@ zodex-agent github publish-pr \
 
 `publish-pr` sends a bundle of the current committed `HEAD` to the publisher daemon. The daemon mints short-lived writer-app credentials, pushes a generated branch, opens the PR, and keeps credentials inside the daemon.
 
-## Request access from the Sprite
+## Request access from the agent target
 
-When a direct push should be allowed from inside the ChatGPT session, request a repo-scoped push grant:
+When a direct push should be allowed from inside a Sprite or Local ChatGPT session, request a repo-scoped push grant:
 
 ```bash
 zodex-agent github request-push --repo amxv/zodex
@@ -88,13 +88,13 @@ The zodex Git credential helper uses the active repo grant. It does not make unr
 
 ## List grants
 
-On the Sprite:
+Inside the selected Zodex target:
 
 ```bash
 zodex-agent github list-grants
 ```
 
-From the operator machine:
+For a Sprite, the operator can also inspect remote grants directly:
 
 ```bash
 zodex github list-grants --sprite dev-sprite
@@ -122,12 +122,16 @@ Use YOLO mode when direct push should remain available across repeated commits i
 
 ```bash
 zodex github mode yolo --sprite dev-sprite --repo amxv/zodex --ttl 4h
+zodex github mode yolo --local --repo amxv/zodex --ttl 4h
 ```
 
 Return to the default policy when finished:
 
 ```bash
 zodex github mode default --sprite dev-sprite
+zodex github mode default --local
 ```
+
+Choose the selector that matches the target. If both Sprite and Local are configured and inference would be ambiguous, zodex requires an explicit `--sprite <name>` or `--local` instead of changing both.
 
 For the full decision guide, see [Write modes](/docs/write-modes).

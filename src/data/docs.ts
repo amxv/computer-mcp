@@ -1,8 +1,8 @@
 export const siteConfig = {
   name: "zodex",
-  strapline: "ChatGPT-native remote coding workspace",
+  strapline: "ChatGPT-native coding workspace",
   description:
-    "Documentation for zodex, a ChatGPT-native remote coding workspace that gives GPT models a real Sprite-backed Linux machine, a familiar command/stdin/patch MCP surface, and operator-chosen GitHub write modes: PR-only, push-on-approval, or scoped YOLO.",
+    "Documentation for zodex, a ChatGPT-native coding workspace that gives GPT models a real Linux machine through Zodex Sprite or persistent Apple Silicon Zodex Local, the same command/stdin/patch MCP surface, and operator-chosen GitHub write modes.",
   repoUrl: "https://github.com/amxv/zodex",
   accentColor: "#e5482d",
   accentColorDark: "#ff684d",
@@ -10,12 +10,12 @@ export const siteConfig = {
     {
       title: "zodex",
       text:
-        "A ChatGPT-native remote coding workspace for real Linux work, normal Git workflows, and operator-controlled write autonomy."
+        "A ChatGPT-native coding workspace for real Linux work on Sprite or Apple Silicon Local, normal Git workflows, and operator-controlled write autonomy."
     },
     {
       title: "What this site covers",
       text:
-        "ChatGPT setup, Sprite deployment, write modes, GitHub permissions, MCP tooling, service operations, and the runtime behavior agents depend on."
+        "ChatGPT setup, Sprite deployment, Local isolation and lifecycle, write modes, GitHub permissions, MCP tooling, service operations, and the runtime behavior agents depend on."
     },
     {
       title: "Repository",
