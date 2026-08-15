@@ -650,6 +650,103 @@ async fn session_cleanup_after_exit_rejects_further_continuation() {
 }
 
 #[tokio::test]
+async fn yielded_child_is_reaped_without_a_follow_up_poll() {
+    let mgr = SessionManager::new(64, 20_000);
+    let cfg = Config::default();
+
+    let running = mgr
+        .exec_command(
+            ExecCommandInput {
+                cmd: "sleep 0.15; printf 'reaped-without-poll\\n'".to_string(),
+                yield_time_ms: Some(20),
+                workdir: None,
+                timeout_ms: None,
+            },
+            &cfg,
+            SessionOrigin::direct(),
+        )
+        .await
+        .expect("command should yield while running");
+    let handle = running.session_handle.expect("running session handle");
+
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let runtime = {
+                let sessions = mgr.sessions.read().await;
+                sessions.get(&handle).cloned().expect("retained session")
+            };
+            if runtime.inner.lock().await.reaped_exit_code.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("background reaper should observe child exit");
+
+    let completed = mgr
+        .write_stdin(
+            WriteStdinInput {
+                session_handle: handle,
+                chars: None,
+                yield_time_ms: Some(50),
+                kill_process: Some(false),
+            },
+            &cfg,
+        )
+        .await
+        .expect("reaped session should retain its final response");
+
+    assert_eq!(completed.status, CommandStatus::Exited);
+    assert_eq!(completed.exit_code, Some(0));
+    assert!(completed.output.contains("reaped-without-poll"));
+}
+
+#[tokio::test]
+async fn background_reaper_and_poll_share_the_terminal_status() {
+    let mgr = Arc::new(SessionManager::new(64, 20_000));
+    let cfg = Arc::new(Config::default());
+
+    let running = mgr
+        .exec_command(
+            ExecCommandInput {
+                cmd: "sleep 0.1; printf 'reaper-race-complete\\n'".to_string(),
+                yield_time_ms: Some(20),
+                workdir: None,
+                timeout_ms: None,
+            },
+            &cfg,
+            SessionOrigin::direct(),
+        )
+        .await
+        .expect("command should yield while running");
+    let handle = running.session_handle.expect("running session handle");
+
+    let poll_mgr = mgr.clone();
+    let poll_cfg = cfg.clone();
+    let completed = tokio::spawn(async move {
+        poll_mgr
+            .write_stdin(
+                WriteStdinInput {
+                    session_handle: handle,
+                    chars: None,
+                    yield_time_ms: Some(2_000),
+                    kill_process: Some(false),
+                },
+                &poll_cfg,
+            )
+            .await
+    })
+    .await
+    .expect("poll task should join")
+    .expect("poll should observe terminal status");
+
+    assert_eq!(completed.status, CommandStatus::Exited);
+    assert_eq!(completed.exit_code, Some(0));
+    assert!(completed.output.contains("reaper-race-complete"));
+}
+
+#[tokio::test]
 async fn output_reports_command_cwd() {
     let mgr = SessionManager::new(64, 20_000);
     let cfg = Config::default();
