@@ -934,6 +934,8 @@ async fn concurrent_commands_keep_explicit_workdirs_independent() {
     let b = root.path().join("worktree-b");
     std::fs::create_dir_all(&a).expect("create a");
     std::fs::create_dir_all(&b).expect("create b");
+    std::fs::write(a.join("same-repo-shape.txt"), "shared\n").expect("seed a repo shape");
+    std::fs::write(b.join("same-repo-shape.txt"), "shared\n").expect("seed b repo shape");
 
     let run = |dir: std::path::PathBuf, value: &'static str| {
         let mgr = mgr.clone();
@@ -941,7 +943,7 @@ async fn concurrent_commands_keep_explicit_workdirs_independent() {
         async move {
             mgr.exec_command(
                 ExecCommandInput {
-                    cmd: format!("printf '{value}' > rooted.txt; pwd"),
+                    cmd: format!("cat same-repo-shape.txt; printf '{value}' > rooted.txt; pwd"),
                     yield_time_ms: Some(2_000),
                     workdir: dir.display().to_string(),
                     timeout_ms: None,
@@ -959,6 +961,8 @@ async fn concurrent_commands_keep_explicit_workdirs_independent() {
     assert_eq!(std::fs::read_to_string(b.join("rooted.txt")).unwrap(), "b");
     assert_eq!(out_a.cwd, a.display().to_string());
     assert_eq!(out_b.cwd, b.display().to_string());
+    assert!(out_a.output.contains("shared"));
+    assert!(out_b.output.contains("shared"));
     assert!(out_a.output.contains(a.to_string_lossy().as_ref()));
     assert!(out_b.output.contains(b.to_string_lossy().as_ref()));
 }

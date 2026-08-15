@@ -221,6 +221,16 @@ fn workdir_is_required_in_model_visible_exec_and_patch_schemas() {
             required.iter().any(|entry| entry == "workdir"),
             "{name}.workdir must be required"
         );
+        let workdir_schema = tool
+            .input_schema
+            .get("properties")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|properties| properties.get("workdir"))
+            .expect("workdir property schema");
+        assert!(
+            workdir_schema.get("default").is_none(),
+            "{name}.workdir must not advertise a backend default"
+        );
     }
 }
 
@@ -628,6 +638,61 @@ async fn modern_stateless_tool_call_observes_openai_session_without_transport_se
         vec![ProviderMetadata {
             openai_session: Some("opaque-phase-1-session".to_string())
         }]
+    );
+
+    cancellation.cancel();
+    server.await.expect("stateless server task");
+}
+
+#[tokio::test]
+async fn modern_discover_publishes_runtime_workdir_guidance_without_session_state() {
+    let instructions = "runtime start directory: /tmp/zodex-runtime-start; use it as the suggested initial explicit workdir; every command/patch must still send an absolute workdir";
+    let policy = McpServerPolicy {
+        instructions: Arc::from(instructions),
+        ..stateless_policy(None)
+    };
+    let (client, url, cancellation, server) = spawn_stateless_mcp(policy).await;
+    let body = json!({
+        "jsonrpc": "2.0",
+        "id": 42,
+        "method": "server/discover",
+        "params": {
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientInfo": {
+                    "name": "zodex-phase-1-discovery-test",
+                    "version": "1.0"
+                },
+                "io.modelcontextprotocol/clientCapabilities": {}
+            }
+        }
+    });
+
+    let response = client
+        .post(&url)
+        .header("content-type", "application/json")
+        .header("accept", "application/json, text/event-stream")
+        .header("MCP-Protocol-Version", "2026-07-28")
+        .header("Mcp-Method", "server/discover")
+        .json(&body)
+        .send()
+        .await
+        .expect("modern stateless discovery request");
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert!(
+        response.headers().get("Mcp-Session-Id").is_none(),
+        "server/discover must not create a transport session"
+    );
+    let value: serde_json::Value = response.json().await.expect("discover JSON response");
+    assert_eq!(value["id"], 42);
+    assert_eq!(value["result"]["instructions"], instructions);
+    assert!(
+        value["result"]["supportedVersions"]
+            .as_array()
+            .expect("supported versions")
+            .iter()
+            .any(|version| version == "2026-07-28"),
+        "discovery should advertise modern stateless MCP support: {value}"
     );
 
     cancellation.cancel();

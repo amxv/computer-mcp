@@ -215,6 +215,21 @@ mod tests {
     }
 
     #[test]
+    fn relative_declared_workdir_is_rejected_before_patch_side_effect() {
+        let dir = tempdir().expect("tempdir");
+        let absolute = dir.path().join("must-not-exist.txt");
+        let patch = format!(
+            "*** Begin Patch\n*** Add File: {}\n+oops\n*** End Patch\n",
+            absolute.display()
+        );
+
+        let err = apply_patch(&patch, "relative/workdir")
+            .expect_err("relative declared workdir must be rejected");
+        assert!(err.to_string().contains("workdir must be an absolute path"));
+        assert!(!absolute.exists(), "patch side effect must not occur");
+    }
+
+    #[test]
     fn invalid_patch_returns_error() {
         let patch = "*** Begin Patch\n*** Add File: bad.txt\nbad-line\n*** End Patch\n";
         let workdir = std::env::current_dir().expect("test current directory");

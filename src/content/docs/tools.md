@@ -43,7 +43,7 @@ The annotations describe the MCP operation surface from the model/client perspec
 Description:
 
 ```text
-Run a shell command
+Run a shell command in a required absolute existing workdir
 ```
 
 Input:
@@ -108,7 +108,7 @@ Kill session:
 Description:
 
 ```text
-Apply a Codex-style patch to files
+Apply a Codex-style patch using a required absolute existing workdir
 ```
 
 Input:
