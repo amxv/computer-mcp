@@ -7,25 +7,27 @@
         build_github_yolo_mode_record_at, build_journalctl_args, build_operator_upgrade_shell_args,
         build_process_status_lines, build_publisher_status_lines, build_reader_status_lines,
         build_runtime_upgrade_shell_args, build_sprite_api_args,
-        build_sprite_services_status_lines, build_sprite_setup_script, build_sprite_upgrade_script,
-        build_status_summary_lines, build_systemctl_args, certbot_cert_name,
+        build_sprite_detached_stop_script, build_sprite_services_status_lines,
+        build_sprite_setup_script, build_sprite_upgrade_script, build_status_summary_lines,
+        build_systemctl_args, certbot_cert_name,
         credential_host_is_github, credential_url_host, credential_url_path,
         credential_url_protocol, ensure_http_listener_ready_for_start,
         expected_sprite_service_definitions, expected_zodex_agent_git_helper,
         generate_self_signed_certificate, git_credential_request_repo,
         git_credential_request_targets_github, github_mode_expired,
         github_yolo_agent_git_inspect_script, github_yolo_agent_git_repair_script,
-        load_matching_push_grant, load_push_grant_from_dir, merge_github_yolo_mode_records,
-        normalize_github_repo, normalize_github_repos, normalize_proxy_origin,
+        load_matching_push_grant, load_push_grant_from_dir, local_sprite_health_probe_script,
+        merge_github_yolo_mode_records, normalize_github_repo, normalize_github_repos,
+        normalize_proxy_origin,
         operator_sprites_registry_path_from_home, parse_git_credential_request,
         parse_github_yolo_agent_git_status, parse_push_grant_ttl, parse_push_grants,
         parse_systemctl_show, process_log_path, process_pid_path, proxy_mcp_status_looks_healthy,
         push_grant_expired, read_tail_lines, render_proxy_wrangler_config, render_systemd_unit,
         resolve_publisher_client_id, resolve_remote_sprite_from_registry, select_tls_san_ip,
         service_manager_from_pid1, shell_escape_single_quotes, sprite_service_logs_api_path,
-        sprite_service_supervisor_pids_from_ps, state_root_for_config, status_host_hint,
-        strip_sprite_api_prelude, tls_artifacts_exist, upsert_operator_sprite_record,
-        write_if_changed,
+        sprite_service_delete_order, sprite_service_supervisor_pids_from_ps,
+        state_root_for_config, status_host_hint, strip_sprite_api_prelude, tls_artifacts_exist,
+        upsert_operator_sprite_record, validate_installed_sprite_release, write_if_changed,
     };
     use crate::operator_cli::Cli;
     use clap::{CommandFactory, Parser};
@@ -447,6 +449,51 @@
     }
 
     #[test]
+    fn sprite_detached_stop_uses_exact_commands_in_dependency_order() {
+        let script = build_sprite_detached_stop_script(Path::new("/etc/zodex/custom.toml"));
+        let daemon = "pkill -f -x -- '/usr/local/bin/zodexd --config /etc/zodex/custom.toml'";
+        let publisher =
+            "pkill -f -x -- '/usr/local/bin/zodex-prd --config /etc/zodex/custom.toml'";
+
+        assert!(script.contains(daemon));
+        assert!(script.contains(publisher));
+        assert!(script.find(daemon) < script.find(publisher));
+        assert!(!script.contains("pkill -f --"));
+    }
+
+    #[test]
+    fn sprite_force_recreate_deletes_dependent_before_dependency() {
+        assert_eq!(
+            sprite_service_delete_order(),
+            [SPRITE_MAIN_SERVICE_LABEL, PUBLISHER_SERVICE_LABEL]
+        );
+    }
+
+    #[test]
+    fn local_sprite_health_probe_retries_bounded_startup() {
+        let script = local_sprite_health_probe_script();
+
+        assert!(script.contains("for attempt in $(seq 1 20)"));
+        assert!(script.contains("sleep 1"));
+        assert!(script.contains("did not become healthy within 20 seconds"));
+    }
+
+    #[test]
+    fn installed_sprite_release_validation_accepts_tags_and_rejects_drift() {
+        assert_eq!(
+            validate_installed_sprite_release("zodex-agent 0.3.1\n", "v0.3.1")
+                .expect("matching tag should pass"),
+            "0.3.1"
+        );
+        assert!(
+            validate_installed_sprite_release("zodex-agent 0.3.0\n", "v0.3.1")
+                .expect_err("version drift should fail")
+                .to_string()
+                .contains("expected 0.3.1")
+        );
+    }
+
+    #[test]
     fn build_sprite_api_args_include_scope_and_passthrough_curl_flags() {
         let args = build_sprite_api_args(
             "spritebox",
@@ -478,7 +525,7 @@
             .join("src")
             .join("bin")
             .join("zodex");
-        let source = ["sprite_proxy.rs"]
+        let source = ["sprite_proxy.rs", "sprite_services.rs"]
             .into_iter()
             .map(|file| {
                 std::fs::read_to_string(source_dir.join(file)).expect("read zodex source module")

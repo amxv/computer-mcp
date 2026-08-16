@@ -407,94 +407,6 @@ fn derive_remote_target_repo(
     }
 }
 
-fn sync_sprite_services(
-    sprite: &str,
-    org: Option<&str>,
-    config_path: &Path,
-    force_recreate: bool,
-    skip_stop_detached: bool,
-) -> Result<()> {
-    if !skip_stop_detached {
-        let stop_args = vec![
-            "sudo".to_string(),
-            "bash".to_string(),
-            "-lc".to_string(),
-            format!(
-                "pkill -f -- \"/usr/local/bin/zodexd --config {}\" || true; pkill -f -- \"/usr/local/bin/zodex-prd --config {}\" || true",
-                config_path.display(),
-                config_path.display()
-            ),
-        ];
-        if let Err(err) = run_sprite_exec(sprite, org, &stop_args, &[]) {
-            eprintln!("warning: failed to stop detached daemons before Sprite sync: {err}");
-        }
-    }
-
-    if force_recreate {
-        for service_name in [PUBLISHER_SERVICE_LABEL, SPRITE_MAIN_SERVICE_LABEL] {
-            let status = run_sprite_api(
-                sprite,
-                org,
-                &format!("/services/{service_name}"),
-                &[
-                    "-sS".to_string(),
-                    "-o".to_string(),
-                    "/dev/null".to_string(),
-                    "-w".to_string(),
-                    "%{http_code}\n".to_string(),
-                    "-X".to_string(),
-                    "DELETE".to_string(),
-                ],
-            )?;
-            let trimmed = status.trim();
-            if trimmed != "204" && trimmed != "404" {
-                bail!("failed to delete Sprite service {service_name} (HTTP {trimmed})");
-            }
-        }
-    }
-
-    for (service_name, definition) in expected_sprite_service_definitions(config_path) {
-        let payload = serde_json::to_string(&definition).context("failed to encode service")?;
-        run_sprite_api(
-            sprite,
-            org,
-            &format!("/services/{service_name}"),
-            &[
-                "-sS".to_string(),
-                "-X".to_string(),
-                "PUT".to_string(),
-                "-H".to_string(),
-                "Content-Type: application/json".to_string(),
-                "-d".to_string(),
-                payload,
-            ],
-        )?;
-    }
-
-    println!("sprite services synced for {sprite}");
-    Ok(())
-}
-
-fn verify_sprite_service_logs(sprite: &str, org: Option<&str>) -> Result<()> {
-    for service in [PUBLISHER_SERVICE_LABEL, SPRITE_MAIN_SERVICE_LABEL] {
-        let path = sprite_service_logs_api_path(service, Some(20), None);
-        run_sprite_api(sprite, org, &path, &["-sS".to_string()])?;
-    }
-    Ok(())
-}
-
-fn verify_local_sprite_health(sprite: &str, org: Option<&str>) -> Result<()> {
-    let exec_args = vec![
-        "sudo".to_string(),
-        "bash".to_string(),
-        "-lc".to_string(),
-        "curl -fsS http://127.0.0.1:8080/health | grep -F '\"status\":\"ok\"' >/dev/null"
-            .to_string(),
-    ];
-    run_sprite_exec(sprite, org, &exec_args, &[])?;
-    Ok(())
-}
-
 fn verify_agent_git_identity(sprite: &str, org: Option<&str>) -> Result<()> {
     let script = r#"set -euo pipefail
 smoke_dir=/workspace/.git-identity-zodex-smoke
@@ -722,6 +634,7 @@ fn sprite_upgrade(
         &[(script_file.path(), SPRITE_UPGRADE_REMOTE_SCRIPT_PATH)],
     )?;
 
+    verify_installed_sprite_release(sprite, org, version)?;
     sync_sprite_services(sprite, org, remote_config, false, false)?;
     verify_sprite_service_logs(sprite, org)?;
     verify_local_sprite_health(sprite, org)?;

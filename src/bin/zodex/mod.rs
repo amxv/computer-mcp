@@ -2,6 +2,7 @@ include!("prelude.rs");
 include!("local.rs");
 include!("dispatch.rs");
 include!("credentials.rs");
+include!("sprite_services.rs");
 include!("sprite_proxy.rs");
 include!("github_device.rs");
 include!("github_mode.rs");

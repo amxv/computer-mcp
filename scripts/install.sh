@@ -693,6 +693,7 @@ configure_agent_build_environment() {
 
   cat >"${profile_path}" <<EOF
 # Managed by the Zodex runtime installer. Applied only to the agent account.
+# Upgrades replace this file; keep site-specific toolchain policy in a separate profile fragment.
 if [ "\$(id -un 2>/dev/null)" = "${ZODEX_AGENT_USER}" ]; then
   export TMPDIR="${tmp_root}"
   export GOCACHE="${cache_root}/go-build"
@@ -710,6 +711,9 @@ if [ "\$(id -un 2>/dev/null)" = "${ZODEX_AGENT_USER}" ]; then
   export CCACHE_MAXSIZE="2G"
   export PIP_CACHE_DIR="${cache_root}/pip"
   export UV_CACHE_DIR="${cache_root}/uv"
+  if [ -d /.sprite/bin ]; then
+    export PATH="/.sprite/bin:\${PATH}"
+  fi
   if [ -d /usr/lib/ccache ]; then
     export PATH="/usr/lib/ccache:\${PATH}"
   fi

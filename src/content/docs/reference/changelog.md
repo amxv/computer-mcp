@@ -8,6 +8,13 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.3.1 - 2026-08-17
+
+- Made Sprite daemon cleanup match exact process commands, preventing the cleanup shell from terminating itself during upgrades.
+- Recreated Sprite services in dependency-safe order and added bounded health retries for clean startup transitions.
+- Verified the installed Sprite runtime version before restarting services, so requested release drift fails clearly.
+- Exposed Sprite-provided language shims to the agent account while keeping user-specific toolchain provisioning outside the public installer.
+
 ## 0.3.0 — 2026-08-17
 
 - Added Zodex Local for trusted direct ChatGPT coding on Apple Silicon Macs through a managed OpenAI Secure MCP Tunnel, Keychain-backed credentials, and explicit launchd lifecycle.
