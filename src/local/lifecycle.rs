@@ -18,8 +18,7 @@ use crate::session::{
 };
 
 use super::lifecycle_artifacts::{
-    append_lifecycle_diagnostic, set_user_only_directory, with_cleanup_error, write_private_bytes,
-    write_private_json,
+    append_lifecycle_diagnostic, set_user_only_directory, write_private_bytes, write_private_json,
 };
 use super::lifecycle_context::{
     canonicalize_start_directory, resolve_developer_shell, start_directory_error,
@@ -31,16 +30,14 @@ use super::{
     LOCAL_DISCOVERY_SCHEMA_VERSION, LOCAL_RUNTIME_STATE_SCHEMA_VERSION, LaunchdController,
     LocalConfig, LocalHostRuntime, LocalHostRuntimeOptions, LocalLaunchdJob,
     LocalObservabilityDiscovery, LocalPaths, LocalRuntimeDiscovery, LocalRuntimeHealth,
-    LocalRuntimeLifecycle, LocalRuntimeState, LocalStatusDocument, LocalTunnelProfile,
-    ManagedTunnelChild, RuntimeKey, StaleTunnelCleanup, cleanup_stale_tunnel_child,
-    consume_environment_handoff, load_runtime_discovery, load_runtime_state, probe_tunnel_health,
-    spawn_tunnel_client, start_local_host_runtime, terminate_matching_stale_processes,
-    write_environment_handoff, write_mcp_token, write_runtime_discovery, write_runtime_state,
-    write_tunnel_profile,
+    LocalRuntimeLifecycle, LocalRuntimeState, LocalTunnelProfile, ManagedTunnelChild, RuntimeKey,
+    StaleTunnelCleanup, cleanup_stale_tunnel_child, consume_environment_handoff,
+    load_runtime_discovery, load_runtime_state, probe_tunnel_health, spawn_tunnel_client,
+    start_local_host_runtime, terminate_matching_stale_processes, write_environment_handoff,
+    write_mcp_token, write_runtime_discovery, write_runtime_state, write_tunnel_profile,
 };
 
 pub const LOCAL_RUNTIME_BOOTSTRAP_SCHEMA_VERSION: u32 = 1;
-const START_READY_TIMEOUT: Duration = Duration::from_secs(60);
 const START_READY_POLL: Duration = Duration::from_millis(150);
 const STOP_GRACE: Duration = Duration::from_secs(20);
 const STOP_POLL: Duration = Duration::from_millis(100);
@@ -71,14 +68,6 @@ pub struct PreparedLocalLaunch {
     pub expires_at: Option<String>,
     pub bootstrap_path: PathBuf,
     pub plist_path: PathBuf,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LocalStartOutcome {
-    pub discovery: LocalRuntimeDiscovery,
-    pub already_running: bool,
-    pub current_runtime_agent_count: usize,
-    pub active_process_count: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -183,55 +172,6 @@ pub(super) fn prepare_local_launch_at(
         bootstrap_path,
         plist_path,
     })
-}
-
-pub async fn start_via_launchd(
-    paths: &LocalPaths,
-    executable: &Path,
-    requested_start_directory: &Path,
-    ttl_seconds: Option<u64>,
-    environment: &[(OsString, OsString)],
-    launchd: &dyn LaunchdController,
-) -> Result<LocalStartOutcome> {
-    let _lifecycle_lock = LocalLifecycleLock::acquire(paths)?;
-    if let Some(discovery) = healthy_existing_discovery(paths)? {
-        let status = LocalStatusDocument::inspect(paths)?;
-        return Ok(LocalStartOutcome {
-            discovery,
-            already_running: true,
-            current_runtime_agent_count: status.current_runtime_agent_count,
-            active_process_count: status.active_process_count,
-        });
-    }
-    cleanup_stale_runtime(paths, launchd)?;
-    let prepared = prepare_local_launch(
-        paths,
-        executable,
-        requested_start_directory,
-        ttl_seconds,
-        environment,
-    )?;
-    if let Err(error) = launchd.bootstrap(&prepared.plist_path) {
-        return Err(with_cleanup_error(
-            error.context("failed to bootstrap Zodex Local launchd runtime"),
-            cleanup_partial_start(paths, launchd),
-        ));
-    }
-    match wait_for_runtime_ready(paths, &prepared.runtime_id, START_READY_TIMEOUT).await {
-        Ok(discovery) => {
-            let status = LocalStatusDocument::inspect(paths)?;
-            Ok(LocalStartOutcome {
-                discovery,
-                already_running: false,
-                current_runtime_agent_count: status.current_runtime_agent_count,
-                active_process_count: status.active_process_count,
-            })
-        }
-        Err(error) => Err(with_cleanup_error(
-            error,
-            cleanup_partial_start(paths, launchd),
-        )),
-    }
 }
 
 pub async fn stop_via_launchd(
@@ -865,7 +805,9 @@ pub async fn wait_for_runtime_ready(
     )
 }
 
-fn healthy_existing_discovery(paths: &LocalPaths) -> Result<Option<LocalRuntimeDiscovery>> {
+pub(super) fn healthy_existing_discovery(
+    paths: &LocalPaths,
+) -> Result<Option<LocalRuntimeDiscovery>> {
     let Some(state) = load_runtime_state(paths)? else {
         return Ok(None);
     };
@@ -893,7 +835,10 @@ fn healthy_existing_discovery(paths: &LocalPaths) -> Result<Option<LocalRuntimeD
     Ok(Some(discovery))
 }
 
-fn cleanup_partial_start(paths: &LocalPaths, launchd: &dyn LaunchdController) -> Result<()> {
+pub(super) fn cleanup_partial_start(
+    paths: &LocalPaths,
+    launchd: &dyn LaunchdController,
+) -> Result<()> {
     let inspector = SystemProcessInspector;
     let state = load_runtime_state(paths)?;
     if let Some(state) = state.as_ref()

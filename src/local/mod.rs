@@ -7,6 +7,7 @@ mod lifecycle;
 mod lifecycle_artifacts;
 mod lifecycle_context;
 mod lifecycle_lock;
+mod lifecycle_start;
 #[cfg(test)]
 mod lifecycle_tests;
 mod observability;
@@ -37,14 +38,14 @@ pub use launchd::{
     LOCAL_LAUNCHD_LABEL, LaunchdController, LocalLaunchdJob, SystemLaunchdController,
 };
 pub use lifecycle::{
-    LOCAL_RUNTIME_BOOTSTRAP_SCHEMA_VERSION, LocalRuntimeBootstrap, LocalStartOutcome,
-    LocalStopOutcome, PreparedLocalLaunch, cleanup_stale_runtime, load_runtime_bootstrap,
-    prepare_local_launch, probe_local_mcp, run_hidden_runtime, start_via_launchd, stop_via_launchd,
-    wait_for_runtime_ready,
+    LOCAL_RUNTIME_BOOTSTRAP_SCHEMA_VERSION, LocalRuntimeBootstrap, LocalStopOutcome,
+    PreparedLocalLaunch, cleanup_stale_runtime, load_runtime_bootstrap, prepare_local_launch,
+    probe_local_mcp, run_hidden_runtime, stop_via_launchd, wait_for_runtime_ready,
 };
 pub use lifecycle_context::{
     paths_from_runtime_bootstrap, resolve_developer_shell, validate_runtime_start_directory,
 };
+pub use lifecycle_start::{LocalStartOutcome, start_via_launchd};
 pub use observability::{
     LOCAL_OBSERVABILITY_API_VERSION, LocalObservabilityServer, start_local_observability_server,
 };

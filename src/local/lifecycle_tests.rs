@@ -14,9 +14,10 @@ use time::OffsetDateTime;
 
 use super::lifecycle::{
     LOCAL_RUNTIME_BOOTSTRAP_SCHEMA_VERSION, LocalRuntimeBootstrap, cleanup_stale_runtime,
-    is_expired, prepare_local_launch_at, start_via_launchd, wait_for_runtime_ready,
+    is_expired, prepare_local_launch_at, wait_for_runtime_ready,
 };
 use super::lifecycle_context::{resolve_developer_shell, start_directory_error};
+use super::lifecycle_start::{start_via_launchd, start_via_launchd_with_timeout};
 use super::{
     LOCAL_DISCOVERY_SCHEMA_VERSION, LOCAL_RUNTIME_STATE_SCHEMA_VERSION, LaunchdController,
     LocalObservabilityDiscovery, LocalPaths, LocalRuntimeDiscovery, LocalRuntimeHealth,
@@ -236,6 +237,34 @@ fn two_concurrent_cold_starts_converge_to_one_runtime_and_one_launchd_bootstrap(
     assert_eq!(launchd.bootstrap_calls(), 1);
     assert!(!paths.environment_handoff_file().exists());
     assert!(paths.lifecycle_lock_file().exists());
+}
+
+#[tokio::test]
+async fn start_retries_once_when_launchd_never_publishes_a_process() {
+    let dir = tempdir().unwrap();
+    let paths = test_paths(dir.path());
+    let repo = dir.path().join("repo");
+    fs::create_dir(&repo).unwrap();
+    let launchd = ReadyOnBootstrapLaunchd::after_attempts(paths.clone(), 2);
+    let outcome = start_via_launchd_with_timeout(
+        &paths,
+        Path::new("/usr/local/bin/zodex"),
+        &repo,
+        None,
+        &[],
+        &launchd,
+        Duration::from_millis(20),
+    )
+    .await
+    .unwrap();
+
+    assert!(!outcome.already_running);
+    assert_eq!(launchd.bootstrap_calls(), 2);
+    assert_eq!(
+        outcome.discovery.start_directory,
+        fs::canonicalize(repo).unwrap()
+    );
+    assert!(!paths.environment_handoff_file().exists());
 }
 
 #[tokio::test]
@@ -733,6 +762,7 @@ impl LaunchdController for FakeLaunchd {
 struct ReadyOnBootstrapLaunchd {
     paths: LocalPaths,
     bootstrap_calls: AtomicUsize,
+    ready_after: usize,
 }
 
 impl ReadyOnBootstrapLaunchd {
@@ -740,6 +770,15 @@ impl ReadyOnBootstrapLaunchd {
         Self {
             paths,
             bootstrap_calls: AtomicUsize::new(0),
+            ready_after: 1,
+        }
+    }
+
+    fn after_attempts(paths: LocalPaths, ready_after: usize) -> Self {
+        Self {
+            paths,
+            bootstrap_calls: AtomicUsize::new(0),
+            ready_after,
         }
     }
 
@@ -754,7 +793,10 @@ impl LaunchdController for ReadyOnBootstrapLaunchd {
     }
 
     fn bootstrap(&self, _plist: &Path) -> anyhow::Result<()> {
-        self.bootstrap_calls.fetch_add(1, Ordering::AcqRel);
+        let attempt = self.bootstrap_calls.fetch_add(1, Ordering::AcqRel) + 1;
+        if attempt < self.ready_after {
+            return Ok(());
+        }
         let bootstrap =
             super::lifecycle::load_runtime_bootstrap(&self.paths.runtime_bootstrap_file())?;
         let inspector = SystemProcessInspector;
