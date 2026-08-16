@@ -1,9 +1,9 @@
 ---
-title: Development and release checks
-description: Build, test, inspect, and release the Rust runtime and the embedded Astro documentation site.
+title: "Maintainer: development and release checks"
+description: "Maintainer reference for building, testing, and releasing Zodex itself; not required to operate Sprite or Local."
 order: 15
 category: Reference
-summary: Commands maintainers should run before changing runtime behavior, CLI behavior, scripts, or docs.
+summary: "Repository-maintainer checks for runtime, CLI, scripts, releases, and docs."
 ---
 
 ## Rust checks
