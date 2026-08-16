@@ -101,6 +101,7 @@ pub(super) struct WatchApp {
     expanded: HashSet<CardKey>,
     raw_open: HashSet<i64>,
     automatic_scope: bool,
+    last_live_sequence: u64,
 }
 
 impl WatchApp {
@@ -141,6 +142,7 @@ impl WatchApp {
             expanded: HashSet::new(),
             raw_open: HashSet::new(),
             automatic_scope,
+            last_live_sequence: 0,
         }
     }
 
@@ -163,11 +165,13 @@ impl WatchApp {
     }
 
     pub(super) fn set_degraded(&mut self, message: impl Into<String>) {
-        self.connection = ConnectionState::Degraded(message.into());
+        self.connection = ConnectionState::Degraded(sanitize_display_text(&message.into()));
     }
 
-    pub(super) fn set_agents(&mut self, agents: Vec<ApiAgent>) -> Vec<WatchEffect> {
+    pub(super) fn set_agents(&mut self, mut agents: Vec<ApiAgent>) -> Vec<WatchEffect> {
         let previous_scope = self.scope.clone();
+        let previous_filter = self.stream_filter();
+        sanitize_agents_for_terminal(&mut agents);
         self.agents = agents;
         if self.automatic_scope && matches!(self.scope, WatchScope::Waiting) {
             self.scope = automatic_scope_for_agents(&self.agents);
@@ -180,9 +184,29 @@ impl WatchApp {
         }
         if self.scope != previous_scope {
             self.reset_selection();
+        }
+        if self.stream_filter() != previous_filter {
             return vec![WatchEffect::Resubscribe(self.stream_filter())];
         }
         Vec::new()
+    }
+
+    pub(super) fn should_process_live_event(&mut self, event: &HistoryLiveEvent) -> bool {
+        if event.sequence <= self.last_live_sequence {
+            return false;
+        }
+        let in_scope = event.event_type == "gap"
+            || match &self.scope {
+                WatchScope::Agent(id) => event.agent_id.as_deref() == Some(id.as_str()),
+                WatchScope::Waiting
+                | WatchScope::Picker
+                | WatchScope::All
+                | WatchScope::Unattributed => true,
+            };
+        if in_scope {
+            self.last_live_sequence = event.sequence;
+        }
+        in_scope
     }
 
     pub(super) fn set_status_active_process_count(&mut self, active_process_count: u64) {
@@ -250,7 +274,8 @@ impl WatchApp {
 
     pub(super) fn merge_detail(&mut self, detail: ApiInvocationDetail) {
         let invocation_id = detail.invocation.id;
-        for record in detail.presentation.records.iter().cloned() {
+        for mut record in detail.presentation.records.iter().cloned() {
+            sanitize_record_for_terminal(&mut record);
             self.merge_record(record);
         }
         self.live_output.remove(&invocation_id);
@@ -260,7 +285,7 @@ impl WatchApp {
 
     pub(super) fn append_live_output(&mut self, invocation_id: i64, text: &str) {
         let output = self.live_output.entry(invocation_id).or_default();
-        output.text.push_str(text);
+        output.text.push_str(&sanitize_display_text(text));
         let count = output.text.chars().count();
         if count > MAX_LIVE_OUTPUT_CHARS {
             let drop_chars = count - MAX_LIVE_OUTPUT_CHARS;
@@ -338,7 +363,7 @@ impl WatchApp {
 
     pub(super) fn set_recovered(&mut self, message: impl Into<String>) {
         self.connection = ConnectionState::Connected;
-        self.recovery_notice = Some(message.into());
+        self.recovery_notice = Some(sanitize_display_text(&message.into()));
         self.recovery_notice_expires_at = Some(Instant::now() + TRANSIENT_NOTICE_DURATION);
     }
 
@@ -358,7 +383,7 @@ impl WatchApp {
             return "TTL: no expiry".to_owned();
         };
         let Ok(expiry) = OffsetDateTime::parse(expires_at, &Rfc3339) else {
-            return format!("expires {expires_at}");
+            return format!("expires {}", sanitize_display_text(expires_at));
         };
         let seconds = (expiry - now).whole_seconds();
         if seconds <= 0 {
@@ -485,9 +510,10 @@ impl WatchApp {
     fn merge_record(&mut self, record: PresentationRecord) {
         let key = card_key(&record);
         if matches!(key, CardKey::Poll { .. })
-            && let Some(existing) = self.cards.iter_mut().find(|card| card.key == key)
+            && let Some(index) = self.cards.iter().position(|card| card.key == key)
         {
-            merge_poll_record(&mut existing.record, &record);
+            merge_poll_record(&mut self.cards[index].record, &record);
+            self.sort_cards();
             return;
         }
         if let Some(existing) = self.cards.iter_mut().find(|card| card.key == key) {
@@ -495,15 +521,19 @@ impl WatchApp {
             return;
         }
         self.cards.push(WatchCard { key, record });
+        self.sort_cards();
+        if self.cards.len() > MAX_LIVE_CARDS {
+            self.cards.remove(0);
+        }
+    }
+
+    fn sort_cards(&mut self) {
         self.cards.sort_by_key(|card| {
             (
                 card.record.started_at_ms,
                 card.record.raw_invocation_ids.first().copied().unwrap_or(0),
             )
         });
-        if self.cards.len() > MAX_LIVE_CARDS {
-            self.cards.remove(0);
-        }
     }
 
     fn card_in_scope(&self, card: &WatchCard) -> bool {
@@ -634,7 +664,149 @@ fn card_key(record: &PresentationRecord) -> CardKey {
 }
 
 fn selected_invocation_id(card: &WatchCard) -> Option<i64> {
-    card.record.raw_invocation_ids.last().copied()
+    match &card.key {
+        CardKey::Invocation(id) => (*id > 0).then_some(*id),
+        CardKey::Poll { .. } => card.record.raw_invocation_ids.last().copied(),
+    }
+}
+
+fn sanitize_agents_for_terminal(agents: &mut [ApiAgent]) {
+    for agent in agents {
+        for workdir in &mut agent.workdirs {
+            workdir.normalized_workdir = sanitize_display_text(&workdir.normalized_workdir);
+        }
+    }
+}
+
+fn sanitize_record_for_terminal(record: &mut PresentationRecord) {
+    record.agent_id = record
+        .agent_id
+        .take()
+        .map(|value| sanitize_display_text(&value));
+    record.declared_workdir = record
+        .declared_workdir
+        .take()
+        .map(|value| sanitize_display_text(&value));
+    record.normalized_workdir = record
+        .normalized_workdir
+        .take()
+        .map(|value| sanitize_display_text(&value));
+    record.new_workdir = record
+        .new_workdir
+        .take()
+        .map(|value| sanitize_display_text(&value));
+    record.evidence.evidence_state = sanitize_display_text(&record.evidence.evidence_state);
+    record.evidence.capture_state = sanitize_display_text(&record.evidence.capture_state);
+    record.evidence.reason = record
+        .evidence
+        .reason
+        .take()
+        .map(|value| sanitize_display_text(&value));
+
+    match &mut record.kind {
+        PresentationKind::Command {
+            command,
+            status,
+            effective_cwd,
+            termination_reason,
+            output,
+            polls,
+            ..
+        } => {
+            *command = sanitize_display_text(command);
+            *status = sanitize_display_text(status);
+            *effective_cwd = effective_cwd
+                .take()
+                .map(|value| sanitize_display_text(&value));
+            *termination_reason = termination_reason
+                .take()
+                .map(|value| sanitize_display_text(&value));
+            *output = output.take().map(|value| sanitize_display_text(&value));
+            if let Some(polls) = polls {
+                polls.final_status = polls
+                    .final_status
+                    .take()
+                    .map(|value| sanitize_display_text(&value));
+                for caller in &mut polls.caller_agent_ids {
+                    *caller = sanitize_display_text(caller);
+                }
+            }
+        }
+        PresentationKind::FileChanges {
+            source_tool,
+            changes,
+        } => {
+            *source_tool = sanitize_display_text(source_tool);
+            for change in changes {
+                change.path = sanitize_display_text(&change.path);
+                change.old_path = change
+                    .old_path
+                    .take()
+                    .map(|value| sanitize_display_text(&value));
+                for line in &mut change.lines {
+                    line.kind = sanitize_display_text(&line.kind);
+                    line.text = sanitize_display_text(&line.text);
+                }
+            }
+        }
+        PresentationKind::Stdin {
+            target_session_handle,
+            chars,
+            creator_agent_id,
+            result_status,
+            ..
+        } => {
+            *target_session_handle = sanitize_display_text(target_session_handle);
+            *chars = sanitize_display_text(chars);
+            *creator_agent_id = creator_agent_id
+                .take()
+                .map(|value| sanitize_display_text(&value));
+            *result_status = result_status
+                .take()
+                .map(|value| sanitize_display_text(&value));
+        }
+        PresentationKind::Kill {
+            target_session_handle,
+            creator_agent_id,
+            result_status,
+            ..
+        } => {
+            *target_session_handle = sanitize_display_text(target_session_handle);
+            *creator_agent_id = creator_agent_id
+                .take()
+                .map(|value| sanitize_display_text(&value));
+            *result_status = result_status
+                .take()
+                .map(|value| sanitize_display_text(&value));
+        }
+        PresentationKind::PollAggregate {
+            target_session_handle,
+            final_status,
+            creator_agent_id,
+            caller_agent_ids,
+            ..
+        } => {
+            *target_session_handle = sanitize_display_text(target_session_handle);
+            *final_status = final_status
+                .take()
+                .map(|value| sanitize_display_text(&value));
+            *creator_agent_id = creator_agent_id
+                .take()
+                .map(|value| sanitize_display_text(&value));
+            for caller in caller_agent_ids {
+                *caller = sanitize_display_text(caller);
+            }
+        }
+        PresentationKind::Generic {
+            tool_name,
+            status,
+            summary,
+        } => {
+            *tool_name = sanitize_display_text(tool_name);
+            *status = sanitize_display_text(status);
+            *summary = summary.take().map(|value| sanitize_display_text(&value));
+        }
+    }
 }
 
 fn merge_poll_record(existing: &mut PresentationRecord, incoming: &PresentationRecord) {

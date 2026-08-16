@@ -210,6 +210,7 @@ pub struct LocalHistoryRuntime {
     worker: Mutex<Option<JoinHandle<()>>>,
     health: Arc<HistoryHealth>,
     file_evidence: Mutex<HashMap<i64, Vec<PendingFileEvidence>>>,
+    active_process_invocation_ids: Mutex<HashSet<i64>>,
     active_process_counts: Mutex<HashMap<String, u64>>,
     active_process_count: AtomicU64,
 }
@@ -266,6 +267,7 @@ impl LocalHistoryRuntime {
             worker: Mutex::new(Some(worker)),
             health,
             file_evidence: Mutex::new(HashMap::new()),
+            active_process_invocation_ids: Mutex::new(HashSet::new()),
             active_process_counts: Mutex::new(HashMap::new()),
             active_process_count: AtomicU64::new(0),
         }))
@@ -284,6 +286,15 @@ impl LocalHistoryRuntime {
 
     pub fn active_process_count(&self) -> u64 {
         self.active_process_count.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn active_process_invocation_ids(&self) -> Vec<i64> {
+        self.active_process_invocation_ids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .copied()
+            .collect()
     }
 
     pub(crate) fn subscribe_live_events(
@@ -637,6 +648,10 @@ impl OwnedProcessObserver for LocalHistoryRuntime {
             .context("active Local process is missing durable creator invocation ID")?;
         self.store
             .protect_active_process_invocation(invocation_id)?;
+        self.active_process_invocation_ids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(invocation_id);
         let active_process_count = self.active_process_count.fetch_add(1, Ordering::AcqRel) + 1;
         let agent_id = process.created_by.agent_id.as_deref();
         let agent_active_process_count = agent_id.map(|agent_id| {
@@ -670,6 +685,10 @@ impl OwnedProcessObserver for LocalHistoryRuntime {
         let result = self
             .store
             .unprotect_active_process_invocation(invocation_id);
+        self.active_process_invocation_ids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&invocation_id);
         let active_process_count = self
             .active_process_count
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {

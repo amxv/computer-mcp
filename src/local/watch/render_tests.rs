@@ -2,6 +2,7 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use serde_json::json;
 
+use super::super::history::HistoryLiveEvent;
 use super::super::{
     PresentationDiffLine, PresentationFileChange, PresentationFileOperation, PresentationKind,
     PresentationWriteMode,
@@ -9,7 +10,9 @@ use super::super::{
 use super::input::WatchInput;
 use super::model::{WatchApp, WatchOptions};
 use super::render::render;
-use super::test_support::{agent, bootstrap, command_detail, detail, poll_detail, record};
+use super::test_support::{
+    RUNTIME_ID, agent, bootstrap, command_detail, detail, poll_detail, record,
+};
 
 fn render_text(app: &WatchApp, width: u16, height: u16) -> String {
     let backend = TestBackend::new(width, height);
@@ -62,6 +65,26 @@ fn renders_waiting_one_agent_and_multi_agent_picker_modes() {
     assert!(picker_text.contains("All Agents"));
     assert!(picker_text.contains("k7m2"));
     assert!(picker_text.contains("m4n8"));
+}
+
+#[test]
+fn renders_explicit_unattributed_activity_instead_of_idle_waiting() {
+    let mut app = WatchApp::new(&bootstrap(Vec::new()), WatchOptions::automatic());
+    app.note_live_event(&HistoryLiveEvent {
+        schema_version: 1,
+        runtime_id: RUNTIME_ID.to_owned(),
+        sequence: 1,
+        emitted_at_ms: 10,
+        event_type: "invocation_started".to_owned(),
+        agent_id: None,
+        invocation_id: Some(1),
+        presentation_revision: Some(1),
+        payload: json!({}),
+    });
+    let text = render_text(&app, 90, 18);
+    assert!(text.contains("Unattributed Local activity was observed"));
+    assert!(text.contains("No Agent identity is being inferred"));
+    assert!(!text.contains("Waiting for the first current-runtime Agent"));
 }
 
 #[test]
@@ -194,9 +217,26 @@ fn renders_one_poll_aggregate_and_cross_agent_stdin() {
             },
         ),
     ));
+    app.merge_detail(detail(
+        62,
+        Some("k7m2"),
+        "kill_session",
+        json!({"session_handle": "proc-3"}),
+        record(
+            62,
+            Some("k7m2"),
+            PresentationKind::Kill {
+                target_session_handle: "proc-3".to_owned(),
+                creator_agent_id: Some("m4n8".to_owned()),
+                cross_agent: true,
+                result_status: Some("success".to_owned()),
+            },
+        ),
+    ));
     let text = render_text(&app, 100, 22);
     assert_eq!(text.matches("poll proc-1 ×50").count(), 1);
     assert!(text.contains("stdin proc-2"));
+    assert!(text.contains("kill proc-3"));
     assert!(text.contains("cross-Agent"));
     assert!(text.contains("creator m4n8"));
 }

@@ -36,10 +36,11 @@ pub struct HistoryQuery {
     pub last: usize,
     pub since_ms: Option<i64>,
     /// Recovery-only window: include invocations that started or completed in
-    /// the window, plus any invocation that is still running. This lets a
-    /// from-now live observer recover a pre-existing command after an SSE gap
-    /// without preloading unrelated completed history.
+    /// the window, plus any logically in-flight invocation. Active process
+    /// creator IDs are supplied separately because an `exec_command` logical
+    /// invocation is already completed after it yields a running session.
     pub active_or_changed_since_ms: Option<i64>,
+    pub active_process_invocation_ids: Vec<i64>,
     pub agent_id: Option<String>,
     pub normalized_workdir: Option<String>,
     pub invocation_id: Option<i64>,
@@ -233,10 +234,27 @@ impl LocalHistoryReader {
         }
         if let Some(since_ms) = query.active_or_changed_since_ms {
             sql.push_str(
-                " AND (started_at_ms >= ? OR completed_at_ms >= ? OR completed_at_ms IS NULL)",
+                " AND (started_at_ms >= ? OR completed_at_ms >= ? OR completed_at_ms IS NULL",
             );
             parameters.push(SqlValue::Integer(since_ms));
             parameters.push(SqlValue::Integer(since_ms));
+            if !query.active_process_invocation_ids.is_empty() {
+                sql.push_str(" OR id IN (");
+                for (index, invocation_id) in query
+                    .active_process_invocation_ids
+                    .iter()
+                    .copied()
+                    .enumerate()
+                {
+                    if index > 0 {
+                        sql.push_str(", ");
+                    }
+                    sql.push('?');
+                    parameters.push(SqlValue::Integer(invocation_id));
+                }
+                sql.push(')');
+            }
+            sql.push(')');
         }
         if let Some(agent_id) = &query.agent_id {
             sql.push_str(" AND agent_id = ?");

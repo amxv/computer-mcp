@@ -232,6 +232,7 @@ async fn handle_local_command(command: LocalCommand) -> Result<()> {
                 last: last.unwrap_or(if invocation_id.is_some() { 1 } else { 20 }),
                 since_ms,
                 active_or_changed_since_ms: None,
+                active_process_invocation_ids: Vec::new(),
                 agent_id: agent,
                 normalized_workdir: None,
                 invocation_id,

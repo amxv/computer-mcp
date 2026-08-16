@@ -23,8 +23,10 @@ mod output;
 mod policy;
 mod process;
 mod query;
+mod shutdown;
 
 use output::{OutputBuffer, next_char_boundary, spawn_reader};
+use shutdown::wait_for_session_exits_until;
 
 pub use policy::{
     OwnedProcess, OwnedProcessObserver, SessionOutputChunk, SessionOutputCompletion,
@@ -702,23 +704,8 @@ impl SessionManager {
                 ),
             }
         }
-
         let deadline = Instant::now() + self.policy.shutdown_grace();
-        loop {
-            let mut survivors = 0;
-            for runtime in &runtimes {
-                let mut inner = runtime.inner.lock().await;
-                if reap_exit_code(&mut inner)?.is_some() {
-                    runtime.release_process_ownership();
-                } else {
-                    survivors += 1;
-                }
-            }
-            if survivors == 0 || Instant::now() >= deadline {
-                break;
-            }
-            tokio::time::sleep(self.poll_interval).await;
-        }
+        wait_for_session_exits_until(&runtimes, self.poll_interval, deadline).await?;
 
         let mut sessions_force_killed = 0;
         for runtime in &runtimes {
@@ -748,23 +735,10 @@ impl SessionManager {
         }
 
         let force_deadline = Instant::now() + Duration::from_secs(1);
-        loop {
-            let mut survivors = 0;
-            for runtime in &runtimes {
-                let mut inner = runtime.inner.lock().await;
-                if reap_exit_code(&mut inner)?.is_some() {
-                    runtime.release_process_ownership();
-                } else {
-                    survivors += 1;
-                }
-            }
-            if survivors == 0 {
-                break;
-            }
-            if Instant::now() >= force_deadline {
-                bail!("timed out waiting for {survivors} Local command process group(s) to exit");
-            }
-            tokio::time::sleep(self.poll_interval).await;
+        let survivors =
+            wait_for_session_exits_until(&runtimes, self.poll_interval, force_deadline).await?;
+        if survivors > 0 {
+            bail!("timed out waiting for {survivors} Local command process group(s) to exit");
         }
 
         self.sessions.write().await.clear();

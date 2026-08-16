@@ -7,7 +7,7 @@ use reqwest::{Client, Response, Url};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use super::super::history::HistoryLiveEvent;
+use super::super::history::{HISTORY_LIVE_EVENT_SCHEMA_VERSION, HistoryLiveEvent};
 use super::super::observability::{
     ApiAgent, ApiAgentList, ApiInvocationDetail, ApiInvocationList, ApiStatusDocument,
 };
@@ -89,6 +89,7 @@ impl ObserverClient {
     pub(super) async fn status(&self) -> Result<ApiStatusDocument> {
         let status: ApiStatusDocument = self.get_json("v1/status", &[]).await?;
         self.validate_runtime(&status.runtime_id)?;
+        validate_api_schema(status.schema_version, "status")?;
         if status.api_version != LOCAL_OBSERVABILITY_API_VERSION {
             bail!(
                 "Local observability API version changed from {} to {}; restart `zodex local watch` with a matching Zodex binary",
@@ -111,6 +112,7 @@ impl ObserverClient {
             .get_json("v1/agents", &[("runtime", "current")])
             .await?;
         self.validate_runtime(&list.runtime_id)?;
+        validate_api_schema(list.schema_version, "Agent list")?;
         Ok(list.agents)
     }
 
@@ -118,6 +120,7 @@ impl ObserverClient {
         let detail: ApiInvocationDetail =
             self.get_json(&format!("v1/invocations/{id}"), &[]).await?;
         self.validate_runtime(&detail.runtime_id)?;
+        validate_api_schema(detail.schema_version, "invocation detail")?;
         if detail.presentation_version != PRESENTATION_SCHEMA_VERSION {
             bail!(
                 "Local invocation presentation version {} is unsupported by this watch client",
@@ -143,6 +146,7 @@ impl ObserverClient {
         }
         let list: ApiInvocationList = self.get_json("v1/invocations", &query).await?;
         self.validate_runtime(&list.runtime_id)?;
+        validate_api_schema(list.schema_version, "recovery invocation list")?;
         if list.presentation_version != PRESENTATION_SCHEMA_VERSION {
             bail!(
                 "Local recovery presentation version {} is unsupported by this watch client",
@@ -229,6 +233,13 @@ impl ObserverClient {
                         event.runtime_id
                     );
                 }
+                if event.schema_version != HISTORY_LIVE_EVENT_SCHEMA_VERSION {
+                    bail!(
+                        "Local live-event schema version changed from {} to {}; reopen `zodex local watch` with a matching Zodex binary",
+                        HISTORY_LIVE_EVENT_SCHEMA_VERSION,
+                        event.schema_version
+                    );
+                }
                 if sender
                     .send(WatchNetworkEvent::Live(generation, event))
                     .await
@@ -278,6 +289,17 @@ impl ObserverClient {
         }
         Ok(())
     }
+}
+
+fn validate_api_schema(schema_version: u32, surface: &str) -> Result<()> {
+    if schema_version != LOCAL_OBSERVABILITY_API_VERSION {
+        bail!(
+            "Local {surface} schema version changed from {} to {}; reopen `zodex local watch` with a matching Zodex binary",
+            LOCAL_OBSERVABILITY_API_VERSION,
+            schema_version
+        );
+    }
+    Ok(())
 }
 
 async fn ensure_success(response: Response) -> Result<Response> {

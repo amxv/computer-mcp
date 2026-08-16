@@ -69,16 +69,51 @@ mod tests {
     #[test]
     fn maps_required_navigation_and_disclosure_keys() {
         assert_eq!(
+            map_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE), false),
+            Some(WatchInput::Quit)
+        );
+        assert_eq!(
             map_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE), false),
             Some(WatchInput::Move(1))
+        );
+        assert_eq!(
+            map_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE), false),
+            Some(WatchInput::Move(-1))
+        );
+        assert_eq!(
+            map_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), false),
+            Some(WatchInput::Enter)
+        );
+        assert_eq!(
+            map_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), false),
+            Some(WatchInput::CycleAgents(1))
         );
         assert_eq!(
             map_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT), false),
             Some(WatchInput::CycleAgents(-1))
         );
         assert_eq!(
+            map_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE), false),
+            Some(WatchInput::OpenPicker)
+        );
+        assert_eq!(
             map_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE), false),
             Some(WatchInput::ToggleRaw)
+        );
+        assert_eq!(
+            map_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE), false),
+            Some(WatchInput::Copy)
+        );
+        assert_eq!(
+            map_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE), false),
+            Some(WatchInput::Top)
+        );
+        assert_eq!(
+            map_key(
+                KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT),
+                false
+            ),
+            Some(WatchInput::Bottom)
         );
         assert_eq!(
             map_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE), false),

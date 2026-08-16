@@ -124,7 +124,46 @@ fn waiting_to_multiple_agents_keeps_all_agents_deliberate() {
         app.picker_index, 1,
         "the first Agent is highlighted, not All Agents"
     );
-    assert_eq!(effects, vec![WatchEffect::Resubscribe(None)]);
+    assert!(
+        effects.is_empty(),
+        "Waiting and picker both use the same global SSE stream"
+    );
+}
+
+#[test]
+fn waiting_to_one_agent_resubscribes_and_live_handover_is_scoped_and_deduplicated() {
+    let mut app = WatchApp::new(&bootstrap(Vec::new()), automatic());
+    let effects = app.set_agents(vec![agent("k7m2", &["/one"])]);
+    assert_eq!(app.scope, WatchScope::Agent("k7m2".to_owned()));
+    assert_eq!(
+        effects,
+        vec![WatchEffect::Resubscribe(Some("k7m2".to_owned()))]
+    );
+
+    let unrelated = HistoryLiveEvent {
+        schema_version: 1,
+        runtime_id: RUNTIME_ID.to_owned(),
+        sequence: 10,
+        emitted_at_ms: 10,
+        event_type: "invocation_started".to_owned(),
+        agent_id: Some("m4n8".to_owned()),
+        invocation_id: Some(10),
+        presentation_revision: Some(1),
+        payload: json!({}),
+    };
+    assert!(!app.should_process_live_event(&unrelated));
+
+    let selected = HistoryLiveEvent {
+        sequence: 9,
+        agent_id: Some("k7m2".to_owned()),
+        invocation_id: Some(9),
+        ..unrelated
+    };
+    assert!(app.should_process_live_event(&selected));
+    assert!(
+        !app.should_process_live_event(&selected),
+        "overlapping old/new SSE subscriptions must not duplicate one event"
+    );
 }
 
 #[test]
@@ -165,6 +204,35 @@ fn poll_only_calls_merge_into_one_compact_aggregate() {
         50,
         "re-fetching durable poll details during recovery must be idempotent"
     );
+}
+
+#[test]
+fn updated_poll_aggregate_is_resorted_by_latest_activity() {
+    let mut app = WatchApp::new(
+        &bootstrap(vec![agent("k7m2", &["/workspace"])]),
+        automatic(),
+    );
+    app.merge_detail(poll_detail(1, "k7m2", "proc-1"));
+    app.merge_detail(command_detail(
+        2,
+        Some("k7m2"),
+        "git status",
+        "success",
+        Some("clean"),
+    ));
+    app.merge_detail(poll_detail(3, "k7m2", "proc-1"));
+
+    let cards = app.visible_cards();
+    assert_eq!(cards.len(), 2);
+    assert!(matches!(
+        cards[0].record.kind,
+        PresentationKind::Command { .. }
+    ));
+    assert!(matches!(
+        cards[1].record.kind,
+        PresentationKind::PollAggregate { .. }
+    ));
+    assert_eq!(cards[1].record.raw_invocation_ids, vec![1, 3]);
 }
 
 #[test]
@@ -224,6 +292,10 @@ fn raw_evidence_is_hidden_until_disclosed_and_display_is_terminal_safe() {
     );
     app.merge_detail(command_detail(1, Some("k7m2"), dangerous, "running", None));
     let card = app.visible_cards()[0];
+    let PresentationKind::Command { command, .. } = &card.record.kind else {
+        panic!("expected command card");
+    };
+    assert!(!command.contains('\u{1b}'));
     assert!(!app.raw_is_open(card));
     assert!(app.raw_display_for(card).unwrap().contains("\\u001b"));
     assert!(!app.raw_display_for(card).unwrap().contains('\u{1b}'));
@@ -238,6 +310,31 @@ fn raw_evidence_is_hidden_until_disclosed_and_display_is_terminal_safe() {
         panic!("expected raw copy effect");
     };
     assert!(raw.contains("\\u001b"));
+}
+
+#[test]
+fn command_card_copy_and_raw_target_parent_invocation_not_folded_poll() {
+    let mut app = WatchApp::new(
+        &bootstrap(vec![agent("k7m2", &["/workspace"])]),
+        automatic(),
+    );
+    let mut detail = command_detail(1, Some("k7m2"), "sleep 30", "running", Some("started"));
+    detail.presentation.records[0].raw_invocation_ids = vec![1, 2];
+    app.merge_detail(detail);
+
+    assert_eq!(
+        app.apply_input(WatchInput::Copy),
+        vec![WatchEffect::Copy("sleep 30".to_owned())]
+    );
+    app.apply_input(WatchInput::ToggleRaw);
+    let card = app.visible_cards()[0];
+    assert!(app.raw_is_open(card));
+    let raw_copy = app.apply_input(WatchInput::Copy);
+    let WatchEffect::Copy(raw) = &raw_copy[0] else {
+        panic!("expected raw copy effect");
+    };
+    assert!(raw.contains("\"id\": 1"));
+    assert!(raw.contains("sleep 30"));
 }
 
 #[test]
@@ -265,6 +362,12 @@ fn live_output_is_bounded_and_search_filters_presented_cards() {
     let (output, truncated) = app.live_output_for(cargo).unwrap();
     assert!(truncated);
     assert!(output.chars().count() <= 32 * 1024);
+
+    app.append_live_output(1, "\u{1b}]8;;https://example.com\u{7}unsafe\u{1b}]8;;\u{7}");
+    let cargo = app.visible_cards()[0];
+    let (output, _) = app.live_output_for(cargo).unwrap();
+    assert!(!output.contains('\u{1b}'));
+    assert!(!output.contains('\u{7}'));
 
     app.apply_input(WatchInput::StartSearch);
     for ch in "git".chars() {

@@ -38,6 +38,11 @@ pub async fn run_local_watch(paths: &LocalPaths, options: WatchOptions) -> Resul
     if options.all && options.agent.is_some() {
         bail!("`zodex local watch` cannot combine `--all` and `--agent`")
     }
+    if let Some(agent_id) = options.agent.as_deref()
+        && !valid_agent_id(agent_id)
+    {
+        bail!("`zodex local watch --agent` expects an Agent ID matching [a-z0-9]{{4}}")
+    }
 
     let (client, bootstrap) = ObserverClient::discover(paths).await?;
     let mut app = WatchApp::new(&bootstrap, options);
@@ -52,9 +57,18 @@ pub async fn run_local_watch(paths: &LocalPaths, options: WatchOptions) -> Resul
     let run_result = run_loop(&mut terminal, client, &mut app).await;
     let restore_result =
         ratatui::try_restore().context("failed to restore terminal after Local watch");
-    restore_guard.disarm();
+    if restore_result.is_ok() {
+        restore_guard.disarm();
+    }
     restore_result?;
     run_result
+}
+
+fn valid_agent_id(value: &str) -> bool {
+    value.len() == 4
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
 }
 
 async fn run_loop(
@@ -126,6 +140,7 @@ async fn handle_network_event(
         WatchNetworkEvent::Connected(event_generation)
             if event_generation == current_generation =>
         {
+            subscription.mark_connected(event_generation);
             let recovering = !matches!(app.connection, ConnectionState::Connecting);
             app.set_connected();
             if recovering {
@@ -135,10 +150,16 @@ async fn handle_network_event(
                     ),
                     Err(error) => app.set_degraded(error),
                 }
-                let effects = refresh_agents(client, app).await;
-                let _ = apply_effects(effects, client, app, network_tx, subscription, generation)
-                    .await?;
             }
+            // Bootstrap status/Agent discovery is necessarily a snapshot taken
+            // before the SSE subscription is established. Refresh those facts
+            // at the connection boundary so an Agent first seen in that race
+            // window does not leave watch stuck in its stale waiting/picker
+            // state. Do not recover invocation history here on the first
+            // connection: the timeline remains strictly from-now.
+            let effects = refresh_agents(client, app).await;
+            let _ =
+                apply_effects(effects, client, app, network_tx, subscription, generation).await?;
         }
         WatchNetworkEvent::Disconnected(event_generation, message)
             if event_generation == current_generation =>
@@ -146,7 +167,7 @@ async fn handle_network_event(
             app.set_degraded(message);
         }
         WatchNetworkEvent::Live(event_generation, live)
-            if event_generation == current_generation =>
+            if subscription.accepts_generation(event_generation) =>
         {
             let effects = apply_live_update(client, app, &live).await;
             let _ =
@@ -162,6 +183,9 @@ async fn apply_live_update(
     app: &mut WatchApp,
     live: &crate::local::history::HistoryLiveEvent,
 ) -> Vec<WatchEffect> {
+    if !app.should_process_live_event(live) {
+        return Vec::new();
+    }
     let gap = live.event_type == "gap";
     let invocation_id = live.invocation_id;
     let known = invocation_id.is_some_and(|id| app.knows_invocation(id));
@@ -187,9 +211,13 @@ async fn apply_live_update(
         } else if matches!(
             live.event_type.as_str(),
             "presentation_updated" | "invocation_completed"
-        ) && let Ok(detail) = client.invocation(invocation_id).await
-        {
-            app.merge_detail(detail);
+        ) {
+            match client.invocation(invocation_id).await {
+                Ok(detail) => app.merge_detail(detail),
+                Err(error) => app.set_degraded(format!(
+                    "live invocation {invocation_id} could not be refreshed: {error:#}"
+                )),
+            }
         }
     }
     effects
@@ -291,9 +319,39 @@ async fn recover_from_history(client: &ObserverClient, app: &mut WatchApp) -> Re
     }
 }
 
-struct Subscription {
+struct EventStreamSubscription {
+    generation: u64,
     cancellation: CancellationToken,
     task: tokio::task::JoinHandle<()>,
+}
+
+impl EventStreamSubscription {
+    fn start(
+        client: &ObserverClient,
+        generation: u64,
+        filter: Option<String>,
+        sender: mpsc::Sender<WatchNetworkEvent>,
+    ) -> Self {
+        let cancellation = CancellationToken::new();
+        let task = client.spawn_event_stream(generation, filter, sender, cancellation.clone());
+        Self {
+            generation,
+            cancellation,
+            task,
+        }
+    }
+
+    fn stop(self) -> u64 {
+        self.cancellation.cancel();
+        self.task.abort();
+        self.generation
+    }
+}
+
+struct Subscription {
+    current: EventStreamSubscription,
+    previous: Option<EventStreamSubscription>,
+    draining_generation: Option<u64>,
 }
 
 impl Subscription {
@@ -303,9 +361,11 @@ impl Subscription {
         filter: Option<String>,
         sender: mpsc::Sender<WatchNetworkEvent>,
     ) -> Self {
-        let cancellation = CancellationToken::new();
-        let task = client.spawn_event_stream(generation, filter, sender, cancellation.clone());
-        Self { cancellation, task }
+        Self {
+            current: EventStreamSubscription::start(client, generation, filter, sender),
+            previous: None,
+            draining_generation: None,
+        }
     }
 
     fn replace(
@@ -315,16 +375,41 @@ impl Subscription {
         filter: Option<String>,
         sender: mpsc::Sender<WatchNetworkEvent>,
     ) {
-        self.cancellation.cancel();
-        self.task.abort();
-        *self = Self::start(client, generation, filter, sender);
+        if let Some(previous) = self.previous.take() {
+            self.draining_generation = Some(previous.stop());
+        }
+        let next = EventStreamSubscription::start(client, generation, filter, sender);
+        let previous = std::mem::replace(&mut self.current, next);
+        self.previous = Some(previous);
+    }
+
+    fn mark_connected(&mut self, generation: u64) {
+        if self.current.generation != generation {
+            return;
+        }
+        if let Some(previous) = self.previous.take() {
+            self.draining_generation = Some(previous.stop());
+        }
+    }
+
+    fn accepts_generation(&self, generation: u64) -> bool {
+        self.current.generation == generation
+            || self
+                .previous
+                .as_ref()
+                .is_some_and(|previous| previous.generation == generation)
+            || self.draining_generation == Some(generation)
     }
 }
 
 impl Drop for Subscription {
     fn drop(&mut self) {
-        self.cancellation.cancel();
-        self.task.abort();
+        self.current.cancellation.cancel();
+        self.current.task.abort();
+        if let Some(previous) = self.previous.as_mut() {
+            previous.cancellation.cancel();
+            previous.task.abort();
+        }
     }
 }
 

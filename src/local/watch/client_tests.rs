@@ -16,10 +16,10 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use super::super::{LocalObservabilityDiscovery, LocalPaths, LocalRuntimeDiscovery};
-use super::apply_live_update;
 use super::client::{NETWORK_EVENT_CAPACITY, ObserverClient, WatchNetworkEvent};
-use super::model::{ConnectionState, WatchApp, WatchEffect, WatchOptions};
+use super::model::{ConnectionState, WatchApp, WatchEffect, WatchOptions, WatchScope};
 use super::test_support::{RUNTIME_ID, agent, bootstrap, command_detail};
+use super::{RestoreGuard, Subscription, apply_live_update, handle_network_event, valid_agent_id};
 use crate::local::history::HistoryLiveEvent;
 use crate::local::observability::{
     ApiAgentList, ApiInvocationDetail, ApiInvocationList, ApiStatusDocument,
@@ -28,6 +28,33 @@ use crate::local::{PRESENTATION_SCHEMA_VERSION, PresentationDocument};
 
 const BEARER: &str = "watch-test-bearer-0123456789abcdef0123456789abcdef";
 type RecordedRequest = (Method, String, Option<String>);
+
+#[test]
+fn terminal_restore_guard_runs_during_unwind_and_can_be_disarmed() {
+    use std::cell::Cell;
+
+    let restored = Cell::new(0_u32);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = RestoreGuard::new(|| restored.set(restored.get() + 1));
+        panic!("exercise terminal restoration guard");
+    }));
+    assert!(result.is_err());
+    assert_eq!(restored.get(), 1);
+
+    {
+        let mut guard = RestoreGuard::new(|| restored.set(restored.get() + 1));
+        guard.disarm();
+    }
+    assert_eq!(restored.get(), 1);
+}
+
+#[test]
+fn dedicated_watch_agent_ids_use_the_public_four_character_shape() {
+    assert!(valid_agent_id("k7m2"));
+    assert!(!valid_agent_id("K7M2"));
+    assert!(!valid_agent_id("abc"));
+    assert!(!valid_agent_id("ab\u{1b}c"));
+}
 
 #[derive(Clone)]
 struct FakeState {
@@ -242,6 +269,65 @@ async fn discovery_bootstrap_is_get_only_and_does_not_preload_history() {
             .iter()
             .all(|(_, _, auth)| auth.as_deref() == Some(expected_auth.as_str()))
     );
+}
+
+#[tokio::test]
+async fn initial_sse_connection_refreshes_stale_agent_snapshot_without_history_preload() {
+    let fake = FakeObserver::start().await;
+    let (client, _) = ObserverClient::discover(&fake.paths).await.unwrap();
+    let mut app = WatchApp::new(&bootstrap(Vec::new()), WatchOptions::automatic());
+    let (network_tx, _network_rx) = mpsc::channel(NETWORK_EVENT_CAPACITY);
+    let mut generation = 1_u64;
+    let mut subscription =
+        Subscription::start(&client, generation, app.stream_filter(), network_tx.clone());
+    fake.clear_requests();
+
+    handle_network_event(
+        WatchNetworkEvent::Connected(generation),
+        generation,
+        &client,
+        &mut app,
+        &network_tx,
+        &mut subscription,
+        &mut generation,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(app.scope, WatchScope::Picker);
+    assert_eq!(generation, 1, "global Waiting->picker needs no resubscribe");
+    let requests = fake.requests();
+    assert!(
+        requests
+            .iter()
+            .any(|(_, path, _)| path.starts_with("/v1/agents"))
+    );
+    assert!(requests.iter().any(|(_, path, _)| path == "/v1/status"));
+    assert!(
+        requests
+            .iter()
+            .all(|(_, path, _)| !path.starts_with("/v1/invocations")),
+        "the first connection refreshes runtime facts but must not preload invocation history"
+    );
+}
+
+#[tokio::test]
+async fn subscription_handover_accepts_draining_generation_until_new_stream_connects() {
+    let fake = FakeObserver::start().await;
+    let (client, _) = ObserverClient::discover(&fake.paths).await.unwrap();
+    let (network_tx, _network_rx) = mpsc::channel(NETWORK_EVENT_CAPACITY);
+    let mut subscription = Subscription::start(&client, 1, None, network_tx.clone());
+
+    subscription.replace(&client, 2, Some("k7m2".to_owned()), network_tx);
+    assert!(subscription.accepts_generation(1));
+    assert!(subscription.accepts_generation(2));
+
+    subscription.mark_connected(2);
+    assert!(
+        subscription.accepts_generation(1),
+        "already queued events from the drained old stream remain admissible"
+    );
+    assert!(subscription.accepts_generation(2));
 }
 
 #[tokio::test]

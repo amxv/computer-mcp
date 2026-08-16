@@ -238,10 +238,16 @@ async fn invocations(
         })
         .transpose()?;
     let path = state.history.database_path().to_path_buf();
+    let active_process_invocation_ids = if query.recovery_since_ms.is_some() {
+        state.history.active_process_invocation_ids()
+    } else {
+        Vec::new()
+    };
     let history_query = HistoryQuery {
         last,
         since_ms: query.since_ms,
         active_or_changed_since_ms: query.recovery_since_ms,
+        active_process_invocation_ids,
         agent_id: query.agent_id,
         normalized_workdir,
         invocation_id: None,

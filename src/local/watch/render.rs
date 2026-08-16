@@ -57,7 +57,7 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &WatchApp) {
     let scope = match &app.scope {
         WatchScope::Waiting => "Waiting for Agent".to_owned(),
         WatchScope::Picker => "Choose Agent".to_owned(),
-        WatchScope::Agent(id) => format!("Agent {id}"),
+        WatchScope::Agent(id) => format!("Agent {}", sanitize_display_text(id)),
         WatchScope::All => "All Agents".to_owned(),
         WatchScope::Unattributed => "Unattributed".to_owned(),
     };
@@ -160,7 +160,9 @@ fn render_picker(frame: &mut Frame<'_>, area: Rect, app: &WatchApp) {
             .unwrap_or_else(|| "no declared workdir".to_owned());
         ListItem::new(format!(
             "{}  ·  {} process(es)  ·  {}",
-            agent.id, agent.active_process_count, workdir
+            sanitize_display_text(&agent.id),
+            agent.active_process_count,
+            workdir
         ))
     }));
     let mut state = ListState::default().with_selected(Some(app.picker_index));
@@ -446,11 +448,14 @@ fn expanded_card_lines(app: &WatchApp, card: &WatchCard) -> Vec<Line<'static>> {
 
 fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &WatchApp) {
     let line = if let Some(search) = app.search_input.as_deref() {
-        format!("/{search}  ·  Enter apply  Esc cancel")
+        format!(
+            "/{}  ·  Enter apply  Esc cancel",
+            sanitize_display_text(search)
+        )
     } else if !app.search_query.is_empty() {
         format!(
             "filter: /{}  ·  j/k move  Enter expand  Tab agents  a picker  r raw  y copy  g/G ends  / search  q quit",
-            app.search_query
+            sanitize_display_text(&app.search_query)
         )
     } else {
         "j/k move  Enter expand  Tab/Shift-Tab agents  a picker  r raw  y copy  g/G ends  / search  q quit".to_owned()
