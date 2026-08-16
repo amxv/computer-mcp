@@ -6,6 +6,8 @@ category: Architecture
 summary: "The complete one-time setup path for Zodex Local, from OpenAI Platform tunnel settings through a developer-mode ChatGPT app."
 ---
 
+Local connects ChatGPT through the OpenAI Secure MCP Tunnel. You do **not** need a Sprite proxy, Cloudflare Worker, public inbound port, or separate proxy URL for Local.
+
 This guide takes a new Apple Silicon Mac from “Zodex is installed” to “ChatGPT can call the three Zodex tools through an OpenAI Secure MCP Tunnel.”
 
 For the shorter path, start with [Local](/docs/local).

@@ -158,6 +158,8 @@ zodex local start
 
 Then open a fresh ChatGPT conversation/app context so it receives the new runtime guidance.
 
+Before opening that conversation, open the Zodex Local app in ChatGPT app settings and choose **Refresh**. ChatGPT caches MCP server instructions, so restarting Local from another directory does not automatically invalidate the app's previously cached start-directory guidance.
+
 Every `exec_command` and `apply_patch` request still has its own explicit absolute workdir.
 
 ## `watch` shows no Agent yet
@@ -223,6 +225,8 @@ Local promises cleanup for normal Zodex-owned foreground/background process tree
 
 Stop that process using the mechanism that owns it.
 
-## Building/debugging a custom Local observer client
+## Building/debugging a custom Local observability client
 
-For API/SSE authentication, discovery, event gaps, and output pagination, use the dedicated [Local observer client guide](/docs/local-watch-client).
+The built-in TUI uses the same public API as custom clients. If `zodex local watch` works but your client does not, compare your discovery/version/auth flow with [Local observability API](/docs/local-watch-client). For TUI-specific behavior, see [Local watch TUI](/docs/local-watch).
+
+The API guide covers Bearer authentication, runtime discovery, Agent/workdir filters, bounded invocation/output queries, live SSE, explicit `gap` events, durable recovery, browser CORS constraints, and version handling.

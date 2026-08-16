@@ -15,7 +15,7 @@ Zodex has two first-class ways to give ChatGPT a real coding machine:
 | Connection | Public Sprite MCP URL, optionally proxied | OpenAI Secure MCP Tunnel |
 | GitHub permissions | Reader App + publisher/grants/YOLO | Whatever Git/network credentials your Mac user already has |
 | Lifecycle | Remote Sprite services | One explicit Mac runtime, optional TTL |
-| Observability | Normal command/service tooling | Agent-aware watch + durable history |
+| Observability | Normal command/service tooling | Public localhost observability API + first-party TUI + durable history |
 
 Choose the machine/trust model first. The ChatGPT-facing coding workflow stays familiar in both cases.
 
@@ -100,6 +100,14 @@ The actual `exec_command` or `apply_patch` call still contains its own absolute 
 Zodex can group Local tool activity by ChatGPT conversation and show a short Agent ID such as `k7m2` in `watch` and history.
 
 That grouping does not create a separate sandbox, user account, or filesystem permission boundary. It exists so you can tell which conversation did what.
+
+## Local observability is a public client surface
+
+Local exposes a separate read-only localhost HTTP API for runtime state, Agents, invocations, output, and live SSE. It supports server-side Agent filtering, workdir filtering on invocation queries, bounded output pagination, versioned presentation data, and durable recovery after a stream gap or disconnect.
+
+The built-in `zodex local watch` TUI is the first client of that API, not a privileged special case. You can build another client in any language against the same contract: a web dashboard, Swift/menu-bar app, terminal UI, editor integration, desktop app, or automation surface.
+
+See [Local watch TUI](/docs/local-watch) and [Local observability API](/docs/local-watch-client).
 
 ## Advanced protocol notes
 

@@ -1,5 +1,5 @@
 ---
-title: "Local"
+title: "Quick Start: Local"
 description: "Run ChatGPT directly on your trusted Apple Silicon Mac with your normal shell, files, and developer tools."
 order: 2
 category: Start
@@ -10,9 +10,9 @@ Zodex Local lets ChatGPT work directly on a **trusted Apple Silicon Mac**. It us
 
 Local is intentionally **not a sandbox**. There is **no Zodex confinement boundary** around the repository you start from. If your user account can read, write, execute, or authenticate to something, a Local tool call can generally do the same, subject to normal macOS privacy controls.
 
-If you want an isolated remote Linux workspace with scoped GitHub write permissions instead, use [Sprite](/docs/quickstart).
+If you want an isolated remote Linux workspace with scoped GitHub write permissions instead, use [Quick Start: Zodex (Sprite)](/docs/quickstart).
 
-## Local quickstart
+## Local quick start
 
 ### 1. Install the Zodex operator CLI
 
@@ -34,6 +34,8 @@ Open [OpenAI Platform tunnel settings](https://platform.openai.com/settings/orga
 4. Copy the tunnel ID. It looks like `tunnel_...`.
 
 Creating or editing the tunnel requires **Tunnels Read + Manage**. That is an administrative setup permission; Zodex does not need to keep a Manage-capable key afterward.
+
+Local needs no Sprite proxy, Cloudflare Worker, public inbound port, or separate proxy URL. The OpenAI Secure MCP Tunnel is the ChatGPT connection path for Local.
 
 ### 3. Create a runtime API key with only tunnel Read + Use
 
@@ -103,7 +105,7 @@ zodex local start ~/code/my-project --ttl 4h
 
 The directory you start from is published to ChatGPT as the **suggested initial explicit workdir**. It is a convenience for the model, not a filesystem boundary. Every `exec_command` and `apply_patch` request still carries an explicit absolute workdir, and an Agent can intentionally use another accessible path later.
 
-ChatGPT caches MCP tool descriptions and server instructions in the app definition. If you stop Local and restart it from a different directory, open the Zodex Local app in ChatGPT app settings and choose **Refresh** before starting a fresh conversation. Restarting Local alone cannot invalidate ChatGPT's app cache.
+ChatGPT caches MCP server instructions and tool descriptions in the app definition. If you stop Local and restart it from a different directory, open the Zodex Local app in ChatGPT app settings and choose **Refresh** before starting a fresh conversation. Restarting Local alone cannot invalidate ChatGPT's app cache.
 
 ### 6. Add the tunnel to ChatGPT
 
@@ -170,7 +172,9 @@ The TTL is wall-clock time. Sleep does not pause it.
 
 ## See what ChatGPT is doing now
 
-Open the read-only terminal viewer:
+Local exposes a **first-class localhost observability API** for viewing ChatGPT tool activity in real time. It is a read-only HTTP API with live SSE, Agent/workdir filters, durable invocation queries, output pagination, and recovery after disconnects. You can build your own dashboard, menu-bar app, terminal UI, editor integration, or other client in any language that can speak HTTP and SSE.
+
+The built-in terminal viewer is the first-party client of that API:
 
 ```bash
 zodex local watch
@@ -191,6 +195,8 @@ zodex local watch --all
 ```
 
 `watch` is only a viewer. Opening or closing it does not start, stop, or extend Local.
+
+See [Local watch TUI](/docs/local-watch) for the full first-party interface, or [Local observability API](/docs/local-watch-client) to build your own client.
 
 ## Inspect durable history
 
@@ -243,4 +249,5 @@ You only need `zodex local setup` again when you want to replace tunnel credenti
 - [Configuration](/docs/local-configuration) — retention and non-secret Local settings.
 - [Local command reference](/docs/local-command-reference) — every `zodex local` command and flag.
 - [Local troubleshooting](/docs/local-troubleshooting) — tunnel, startup, Keychain, privacy, Agent, and history problems.
-- [Build a Local observer client](/docs/local-watch-client) — advanced read-only API/SSE guide for dashboard authors.
+- [Local watch TUI](/docs/local-watch) — the first-party real-time observability client.
+- [Local observability API](/docs/local-watch-client) — build your own web dashboard, Swift/menu-bar client, terminal UI, editor integration, or other read-only observer.

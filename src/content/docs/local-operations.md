@@ -45,6 +45,8 @@ cd ~/code/another-project
 zodex local start --ttl 2h
 ```
 
+After changing the start directory, open the Zodex Local app in ChatGPT app settings and choose **Refresh** before opening a fresh conversation. ChatGPT caches MCP server instructions, so restarting Local alone cannot replace the start-directory guidance already cached in the app definition.
+
 ## Check status
 
 Human-readable status:
@@ -79,6 +81,8 @@ The conversations can work concurrently in different repositories or worktrees. 
 Local does not restrict an Agent to its first workdir. A new declared workdir is recorded so unexpected workspace drift is visible, but it is not blocked.
 
 ## Watch live activity
+
+`zodex local watch` is the first-party client for Local's public read-only observability API. It discovers the running localhost API, authenticates automatically, subscribes to the live SSE stream, and uses the same Agent/invocation/presentation resources available to your own clients.
 
 ```bash
 zodex local watch
@@ -116,6 +120,8 @@ Useful keys include:
 - `q` — quit.
 
 Closing `watch` never stops the runtime.
+
+For the complete TUI behavior and keyboard map, see [Local watch TUI](/docs/local-watch). To build another interface on the same API, see [Local observability API](/docs/local-watch-client).
 
 ## Inspect history
 
@@ -214,6 +220,8 @@ That is intentional: access is something you turn on, optionally give a TTL, and
 
 ## Next
 
+- [Local watch TUI](/docs/local-watch)
+- [Local observability API](/docs/local-watch-client)
 - [Local command reference](/docs/local-command-reference)
 - [Local configuration](/docs/local-configuration)
 - [Local troubleshooting](/docs/local-troubleshooting)

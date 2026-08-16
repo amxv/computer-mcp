@@ -102,6 +102,8 @@ zodex local watch --agent k7m2
 zodex local watch --all
 ```
 
+`watch` is the first-party client of Local's public read-only observability API. See [Local watch TUI](/docs/local-watch) for the interface and [Local observability API](/docs/local-watch-client) to build another client.
+
 ## `zodex local history`
 
 ```text

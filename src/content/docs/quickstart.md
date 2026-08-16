@@ -1,12 +1,12 @@
 ---
-title: "Sprite"
+title: "Quick Start: Zodex (Sprite)"
 description: "Set up a remote Sprite-backed Linux workspace for ChatGPT with isolated GitHub read access and operator-controlled write modes."
 order: 1
 category: Start
 summary: "Install Zodex, create a Sprite, configure GitHub Apps, connect ChatGPT to MCP, and choose how much GitHub write autonomy the Agent gets."
 ---
 
-Sprite mode gives ChatGPT a remote Linux machine that is separate from your personal computer. It is the Zodex path for persistent remote workspaces, Linux tooling, and an explicit GitHub autonomy model.
+This is the standard Zodex quick start for the **Sprite** deployment path. Sprite mode gives ChatGPT a remote Linux machine that is separate from your personal computer, with persistent remote workspaces, Linux tooling, and an explicit GitHub autonomy model.
 
 If you want ChatGPT to use the files, credentials, and developer tools on your own Apple Silicon Mac instead, use [Zodex Local](/docs/local).
 
@@ -20,7 +20,7 @@ A Sprite deployment has three practical boundaries:
 
 That means an Agent can be productive immediately without automatically receiving permanent GitHub write credentials.
 
-## Sprite quickstart
+## Zodex quick start on Sprite
 
 ### 1. Install the Zodex operator CLI
 
