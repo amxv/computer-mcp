@@ -1,9 +1,9 @@
 ---
-title: Operator write controls
-description: Activate, inspect, and revoke direct-push access from the operator machine, including one-off push grants and scoped YOLO mode for trusted ChatGPT sessions.
+title: "Sprite operator write controls"
+description: "Open, inspect, and revoke Sprite direct-push access from the operator machine, including repo grants and scoped YOLO."
 order: 8
 category: GitHub Access
-summary: The operator-machine controls for grant-push, revoke-push, mode yolo, mode status, and mode default.
+summary: "Sprite operator controls for grant-push, revoke-push, mode yolo, mode status, and mode default."
 ---
 
 The operator CLI controls GitHub write autonomy from outside the ChatGPT session. Use it when the human should decide exactly when direct push opens, how wide the scope is, and how long it stays active.
@@ -13,13 +13,13 @@ The operator CLI controls GitHub write autonomy from outside the ChatGPT session
 The Sprite-side command is usually the clearest flow:
 
 ```bash
-zodex-agent github request-push --repo amxv/zodex
+zodex-agent github request-push --repo owner/repo
 ```
 
 The operator can also start the same write window remotely:
 
 ```bash
-zodex github grant-push --sprite dev-sprite --repo amxv/zodex
+zodex github grant-push --sprite dev-sprite --repo owner/repo
 ```
 
 When the publisher client ID is not already configured, pass it directly:
@@ -27,7 +27,7 @@ When the publisher client ID is not already configured, pass it directly:
 ```bash
 zodex github grant-push \
   --sprite dev-sprite \
-  --repo amxv/zodex \
+  --repo owner/repo \
   --publisher-client-id Iv1.real-device-flow-client-id
 ```
 
@@ -40,8 +40,8 @@ Use YOLO mode when repeated approvals are getting in the way and you trust the C
 ```bash
 zodex github mode yolo --sprite dev-sprite
 zodex github mode yolo --sprite dev-sprite --ttl 4h
-zodex github mode yolo --sprite dev-sprite --repo amxv/zodex
-zodex github mode yolo --sprite dev-sprite --repo amxv/zodex --repo amxv/webctx
+zodex github mode yolo --sprite dev-sprite --repo owner/repo
+zodex github mode yolo --sprite dev-sprite --repo owner/repo --repo owner/another-repo
 zodex github mode yolo --sprite dev-sprite --no-ttl
 ```
 
@@ -80,7 +80,7 @@ zodex github mode default --sprite dev-sprite
 When a one-off write step is finished:
 
 ```bash
-zodex github revoke-push --sprite dev-sprite --repo amxv/zodex
+zodex github revoke-push --sprite dev-sprite --repo owner/repo
 ```
 
 To clear local device-flow auth state as part of the remote revoke:
@@ -88,7 +88,7 @@ To clear local device-flow auth state as part of the remote revoke:
 ```bash
 zodex github revoke-push \
   --sprite dev-sprite \
-  --repo amxv/zodex \
+  --repo owner/repo \
   --forget-local-auth
 ```
 

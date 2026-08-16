@@ -1,63 +1,67 @@
 ---
-title: Zodex Local
-description: "Run ChatGPT directly on a trusted Apple Silicon Mac with one explicit Local runtime, one service-wide TTL, Agent-aware history/watch, and no persistent auto-start service."
+title: "Local"
+description: "Run ChatGPT directly on your trusted Apple Silicon Mac with your normal shell, files, and developer tools."
 order: 2
 category: Start
-summary: Set up and operate the trusted-host Local mode on an Apple Silicon Mac without creating a remote Sprite.
+summary: "Install Zodex, provision an OpenAI Secure MCP Tunnel, connect ChatGPT, start Local from a repo, and inspect what each ChatGPT Agent does."
 ---
 
-Zodex Local gives ChatGPT the same three familiar MCP tools as Sprite mode, but runs them **directly on your logged-in Apple Silicon Mac** instead of inside a remote Linux workspace.
+Zodex Local lets ChatGPT work directly on a **trusted Apple Silicon Mac**. It uses the same three Zodex tools as Sprite mode, but commands run with the logged-in Mac user's normal shell environment and filesystem permissions.
 
-Use Local when the Mac itself is the intended trusted coding machine. Use the [Sprite quickstart](/docs/quickstart) when you want a remote, isolated Linux workspace instead.
+Local is intentionally **not a sandbox**. There is **no Zodex confinement boundary** around the repository you start from. If your user account can read, write, execute, or authenticate to something, a Local tool call can generally do the same, subject to normal macOS privacy controls.
 
-## Trust model
+If you want an isolated remote Linux workspace with scoped GitHub write permissions instead, use [Sprite](/docs/quickstart).
 
-Local is deliberately powerful. A connected ChatGPT conversation can ask Zodex to run shell commands and edit files as your logged-in user. There is **no Zodex confinement boundary**. The declared `workdir` is routing evidence and an execution anchor, **not a sandbox**: a command can `cd` elsewhere or access other paths your macOS user can access.
+## Local quickstart
 
-macOS still enforces its own privacy controls. Desktop, Documents, Downloads, iCloud data, app containers, and other protected locations can require a normal user-approved Files & Folders or Full Disk Access grant for the effective runtime identity. `zodex local setup` does not edit TCC databases, bypass macOS privacy, or automatically grant access. The exact responsible app/process shown by macOS depends on the installed launch context, so this guide does not guess a grant target: if macOS denies a protected path, use the normal Privacy & Security UI for the identity macOS reports.
-
-Local is currently supported on **Apple Silicon (`aarch64-apple-darwin`) only**.
-
-## What Local runs
-
-There is one Local runtime for the Mac, shared by every connected ChatGPT conversation using that Local connector. It owns:
-
-- one authenticated loopback MCP server exposing exactly `exec_command`, `write_stdin`, and `apply_patch`;
-- one managed OpenAI Secure MCP Tunnel process for remote ChatGPT ingress;
-- one separate bearer-authenticated loopback observability server for `watch`, dashboards, and read-only clients;
-- one durable SQLite history/evidence store;
-- all command sessions and normally spawned child/background processes for the runtime.
-
-The runtime is explicitly started. It is **not installed as a persistent auto-start daemon** and does not use `KeepAlive`. Closing the terminal that ran `zodex local start` does not define its lifetime; `zodex local stop` or the optional runtime TTL does.
-
-## 1. Install the operator CLI
-
-Install the Apple Silicon release:
+### 1. Install the Zodex operator CLI
 
 ```bash
-curl -fsSL https://zodex.ashray.xyz/install.sh | sh
-zodex --version
+curl -fsSL https://zodex.ashray.xyz/install.sh | ZODEX_INSTALL_MODE=operator bash
+zodex --help
 zodex local --help
 ```
 
-The macOS operator package contains `zodex`. It does not bundle a Local daemon, tunnel credential, history database, runtime token, or tunnel-client state. The official tunnel-client bundle is provisioned later by `zodex local setup`.
+Local is supported on Apple Silicon macOS.
 
-Upgrading the operator binary while Local runtime state is active is refused. Stop Local first:
+### 2. Create an OpenAI Secure MCP Tunnel
 
-```bash
-zodex local stop
-curl -fsSL https://zodex.ashray.xyz/install.sh | sh
+Open [OpenAI Platform tunnel settings](https://platform.openai.com/settings/organization/tunnels) and sign in with the same OpenAI account/email you use for ChatGPT.
+
+1. Choose the Platform organization you want to use.
+2. Create a tunnel in **Organization settings → Tunnels**.
+3. Associate the tunnel with the ChatGPT workspace that should use Zodex Local.
+4. Copy the tunnel ID. It looks like `tunnel_...`.
+
+Creating or editing the tunnel requires **Tunnels Read + Manage**. That is an administrative setup permission; Zodex does not need to keep a Manage-capable key afterward.
+
+### 3. Create a runtime API key with only tunnel Read + Use
+
+Create a scoped Platform API key for the runtime. Give it only:
+
+- **Tunnels: Read**
+- **Tunnels: Use**
+
+Do not give the runtime key **Manage** unless you independently need that permission. Zodex Local uses the key to read the selected tunnel and run the tunnel client; it does not need an OpenAI admin key.
+
+Keep both values handy:
+
+```text
+Tunnel ID:   tunnel_...
+Runtime key: sk-...
 ```
 
-## 2. Provision Local
+### 4. Run Local setup
 
-You need an existing OpenAI Secure MCP Tunnel ID and its runtime key. Run setup interactively:
+The easiest setup is interactive:
 
 ```bash
 zodex local setup
 ```
 
-Or supply the tunnel ID and read the secret from stdin:
+Zodex prompts for the tunnel ID and runtime key. It stores the runtime key in macOS Keychain, installs and verifies the managed OpenAI tunnel client, and creates the Local state it needs. Setup does **not** leave your Mac remotely accessible when it exits.
+
+For automation, use one of the non-argv secret inputs:
 
 ```bash
 printf '%s\n' "$OPENAI_TUNNEL_RUNTIME_KEY" \
@@ -66,7 +70,7 @@ printf '%s\n' "$OPENAI_TUNNEL_RUNTIME_KEY" \
       --runtime-key-stdin
 ```
 
-Automation can also name an environment variable or an already-open file descriptor:
+or:
 
 ```bash
 zodex local setup \
@@ -74,248 +78,169 @@ zodex local setup \
   --runtime-key-env OPENAI_TUNNEL_RUNTIME_KEY
 ```
 
-Do not put the runtime key itself on argv. Setup stores the runtime credential behind the macOS Keychain boundary, installs and verifies the managed tunnel-client bundle, validates the configured tunnel, creates/reuses the localhost observability bearer, and persists only non-secret Local configuration.
+See [Local setup and ChatGPT connection](/docs/local-setup) for the full setup flow and every setup flag.
 
-Setup does not start a long-running Local runtime.
-
-## 3. Start from the workspace you want ChatGPT to see first
-
-The smoothest workflow is:
+### 5. Start Local from the repo you want ChatGPT to use
 
 ```bash
-cd ~/code/owner/repo
+cd ~/code/my-project
 zodex local start
 ```
 
-Or pass the path explicitly:
+Or choose a path explicitly:
 
 ```bash
-zodex local start ~/code/owner/repo
+zodex local start ~/code/my-project
 ```
 
-The start directory is published in the runtime's MCP instructions as the **suggested initial explicit workdir**. It is not silently substituted by the backend. Every `exec_command` and `apply_patch` request still contains an absolute existing `workdir` field.
+Add a wall-clock TTL when you want access to expire automatically:
 
-ChatGPT caches MCP tool descriptions and server instructions in the app definition. After starting Local from a different directory, open the Zodex Local app details in ChatGPT app settings and choose **Refresh** before opening a fresh conversation. This pulls the current runtime instructions and selected start directory. Restarting Local alone cannot invalidate ChatGPT's app cache.
+```bash
+zodex local start ~/code/my-project --ttl 4h
+```
 
-That distinction matters for observability: the declared workdir tells you where the model intentionally routed a call. A command can still access or `cd` to other places after it starts.
+`start` waits until the Local runtime and OpenAI tunnel are ready, then returns. You can close that terminal; Local keeps running until you stop it, its TTL expires, you log out/reboot, or the runtime fails.
 
-### One runtime-wide TTL
+The directory you start from is published to ChatGPT as the **suggested initial explicit workdir**. It is a convenience for the model, not a filesystem boundary. Every `exec_command` and `apply_patch` request still carries an explicit absolute workdir, and an Agent can intentionally use another accessible path later.
 
-Add an absolute wall-clock lifetime when you want the service to stop automatically:
+ChatGPT caches MCP tool descriptions and server instructions in the app definition. If you stop Local and restart it from a different directory, open the Zodex Local app in ChatGPT app settings and choose **Refresh** before starting a fresh conversation. Restarting Local alone cannot invalidate ChatGPT's app cache.
+
+### 6. Add the tunnel to ChatGPT
+
+ChatGPT developer-mode access and Platform tunnel permissions are separate.
+
+In ChatGPT on the web:
+
+1. Enable developer mode for your account/workspace if needed.
+2. Open **Settings → Apps → Create** (or the developer-mode Plugins page).
+3. Choose **Tunnel** as the connection method.
+4. Select your tunnel, or paste its `tunnel_...` ID.
+5. Scan the tools and create the app.
+6. Open a fresh chat, enable/select the Zodex app, and ask ChatGPT to inspect or work on the repo you started Local from.
+
+OpenAI currently documents full custom-MCP write/modify support for Business, Enterprise, and Edu workspaces. Pro developer mode supports read/fetch MCP actions, which is not sufficient for Zodex's command and patch tools. Workspace admins may also need to enable developer mode or approve the app.
+
+For workspace-specific steps and tunnel visibility troubleshooting, see [Local setup and ChatGPT connection](/docs/local-setup).
+
+## What Local gives ChatGPT
+
+The model sees exactly three Zodex tools:
+
+- `exec_command` — run a command in an explicit absolute workdir;
+- `write_stdin` — continue, poll, type into, or kill a long-running process;
+- `apply_patch` — apply a patch in an explicit absolute workdir.
+
+See [MCP tools](/docs/tools) for the shared tool contract.
+
+## The Local trust model
+
+Local is for a machine you intentionally trust ChatGPT to operate.
+
+Commands run as your logged-in macOS user with the environment captured when you run `zodex local start`. That means Homebrew, language toolchains, user-installed CLIs, credentials, Git configuration, and filesystem access work like they do from your normal shell.
+
+This also means the start directory is **not** a permission boundary. A command can use absolute paths, `cd` elsewhere, read another repo, or use credentials available to your account.
+
+macOS remains in charge of its own privacy permissions. Protected locations such as Desktop, Documents, Downloads, iCloud Drive, or app data may require a normal Files & Folders or Full Disk Access grant. Zodex **does not edit TCC databases** or bypass macOS privacy controls.
+
+If you want remote isolation and a GitHub-specific autonomy boundary, use [Sprite permissions and autonomy](/docs/access-model) instead.
+
+## One runtime, many ChatGPT Agents
+
+One Local runtime can serve multiple ChatGPT conversations at the same time. You do not start another daemon or tunnel for each chat.
+
+ChatGPT supplies `_meta["openai/session"]` automatically with tool calls. Zodex uses it to group calls from a conversation and assigns a short **four-character** Agent ID such as `k7m2`. The model does not need to send an Agent ID in tool arguments.
+
+Each Agent can work in a different repository or Git worktree as long as every command/patch supplies the intended absolute workdir.
+
+## One runtime-wide TTL
+
+**One runtime-wide TTL** controls access for the entire Local service.
+
+There is exactly **one** TTL for the whole Local runtime. Starting another chat, creating another Agent, running commands, or opening `watch` never extends it.
+
+Examples:
 
 ```bash
 zodex local start --ttl 30min
-zodex local start ~/code/owner/repo --ttl 4h
+zodex local start --ttl 4h
 zodex local start --ttl 2d
 ```
 
-There is exactly **one** TTL for the whole Local runtime. Creating Agents, running commands, attaching `watch`, opening API clients, or becoming active again does not reset, extend, pause, or create per-Agent TTLs. At expiry, remote ingress and all Agent/process work shut down together through the normal whole-runtime stop path.
+The TTL is wall-clock time. Sleep does not pause it.
 
-A healthy second `zodex local start` inspects/reuses the existing runtime; it does not renew the TTL.
+## See what ChatGPT is doing now
 
-## 4. Connect ChatGPT
-
-The OpenAI Secure MCP Tunnel created/provisioned for Local is the remote connector path. Zodex keeps its local MCP bearer out of the tunnel URL and tunnel profile as a literal query secret; the managed tunnel supplies the supported authenticated route to the loopback MCP server.
-
-Once the runtime is ready, ChatGPT sees exactly three tools:
-
-```text
-exec_command
-write_stdin
-apply_patch
-```
-
-Modern MCP calls are stateless at the transport layer. Zodex uses the provider-supplied request metadata `_meta["openai/session"]` to correlate calls from one ChatGPT conversation without adding Agent IDs to model-visible tool arguments.
-
-## One server, many Agents
-
-Each retained provider conversation key maps to one stable four-character lowercase-alphanumeric Agent ID such as `k7m2`. Different ChatGPT conversations can work concurrently through the same runtime, including in different repositories or Git worktrees.
-
-Important boundaries:
-
-- the model does not choose or send the Agent ID;
-- workdir/timing proximity is never used to merge conversations;
-- missing provider metadata remains explicitly unattributed rather than guessed;
-- `openai/session` represents the provider conversation correlation key; it should not be assumed to distinguish every possible subagent inside one conversation;
-- Agent mappings are observability/history identities, not separate runtime or TTL owners.
-
-## Watch live activity
-
-Open the read-only TUI:
+Open the read-only terminal viewer:
 
 ```bash
 zodex local watch
 ```
 
-With one Agent, it opens that Agent directly. With multiple Agents, the default view lets you pick. You can also open dedicated panes:
+With one Agent, it opens that Agent directly. With several Agents, it shows a picker.
+
+Watch one known Agent:
 
 ```bash
 zodex local watch --agent k7m2
+```
+
+Watch all Agents deliberately:
+
+```bash
 zodex local watch --all
 ```
 
-Useful controls include Agent switching/picking, search, expand/collapse, raw drill-down, copy, and normal terminal navigation. The viewer consumes the read-only localhost observability API and SSE stream; attaching viewers never changes the service TTL or command lifecycle.
-
-Agent workdir summaries are **ordered unique declared routing anchors**. Repeated or canonical-equivalent declarations do not invent extra workdirs. When an Agent deliberately declares a new workdir, Local records a new-workdir signal. That summary does not claim the process was confined to those paths.
+`watch` is only a viewer. Opening or closing it does not start, stop, or extend Local.
 
 ## Inspect durable history
 
-Compact recent history:
+History remains available after `watch` closes and after Local stops:
 
 ```bash
 zodex local history --last 20
-zodex local history --since 30min
-```
-
-Show what one Agent did in the last hour:
-
-```bash
 zodex local history --agent k7m2 --since 1h
-```
-
-Filter by declared workdir:
-
-```bash
 zodex local history --workdir /absolute/repo/path
-```
-
-Inspect exact logical evidence for one invocation:
-
-```bash
 zodex local history --id <invocation-id> --raw
-```
-
-Machine-readable output is available with:
-
-```bash
 zodex local history --format json
 ```
 
-The default Markdown/JSON presentation is a normalized, bounded view derived from immutable raw evidence. Full PTY output is stored separately from the bounded output returned to ChatGPT and is available through history/API drill-down. Incomplete/degraded capture is labeled rather than silently presented as complete evidence.
+The default history is compact and readable. `--raw` is for exact logical tool input/result evidence when you need to audit a specific invocation.
 
-Clear retained history only while Local is stopped:
+By default Local keeps history for 60 days or 500 MB, whichever requires cleanup first. See [Local configuration](/docs/local-configuration).
 
-```bash
-zodex local stop
-zodex local history clear --yes
-```
-
-## Cross-Agent process continuation
-
-`write_stdin` session handles are continuation capabilities in v1. If another Agent obtains a valid handle, Local does **not** reject the continuation merely because the caller Agent differs from the process creator.
-
-Instead, creator Agent, caller Agent, and cross-Agent status are retained and shown in history/presentation. Do not treat the four-character Agent ID as an authorization token.
-
-## Status, config, and logs
-
-Human status:
-
-```bash
-zodex local status
-```
-
-Stable machine-readable status:
-
-```bash
-zodex local status --json
-```
-
-Local config is user-scoped and separate from Sprite/server `/etc/zodex/config.toml`:
-
-```text
-${XDG_CONFIG_HOME:-~/.config}/zodex/local.toml
-```
-
-Default history retention is 60 days / 500 MB. Read or change non-secret settings:
-
-```bash
-zodex local config get
-zodex local config get history.max-age
-zodex local config set history.max-age 30d
-zodex local config set history.max-size 1gb
-```
-
-Local runtime credentials are not stored in this TOML file.
-
-Bounded lifecycle/tunnel diagnostics:
-
-```bash
-zodex local logs
-zodex local logs --lines 500
-```
-
-## Stop and process-cleanup scope
-
-Stop the whole Local runtime:
+## Stop access
 
 ```bash
 zodex local stop
 ```
 
-Stop closes new MCP side-effect admission, removes remote tunnel ingress, then terminates Zodex-owned command process groups and ordinary discoverable children/background jobs across all Agents before finalizing history/listeners.
+Stopping Local closes new MCP work, removes the tunnel connection, and attempts to **kill everything normally spawned by Zodex** across all Agents. Deliberately self-daemonized or separately launchd-registered processes are outside the containment promise.
 
-The ownership goal is practical, not adversarial containment: **kill everything normally spawned by Zodex**, not mathematically prevent a process from deliberately escaping through a separate launch service or self-daemonization scheme.
+`stop` is safe to run again if Local is already stopped.
 
-## Local files and durability
+## Your normal Local workflow
 
-With default XDG paths, durable Local state lives under:
-
-```text
-~/.config/zodex/local.toml
-~/.local/share/zodex/bin/                  managed tunnel bundle
-~/.local/state/zodex/local/credentials/   observer bearer
-~/.local/state/zodex/local/history/       SQLite evidence
-~/.local/state/zodex/local/logs/          diagnostics
-```
-
-Disposable runtime state is isolated under:
-
-```text
-~/.local/state/zodex/local/runtime/
-```
-
-That runtime directory contains discovery/state, ephemeral MCP/tunnel artifacts, process ownership state, and the generated launchd job. Stopping/stale cleanup can remove it without deleting durable history, config, logs, or the observer credential.
-
-## Troubleshooting
-
-### `start` says Local is not configured
-
-Run:
+A typical day looks like this:
 
 ```bash
-zodex local setup
-zodex local status --json
-```
+cd ~/code/my-project
+zodex local start --ttl 4h
 
-### A protected macOS path is denied
+# Use one or more ChatGPT conversations.
+# Optional: observe them in another terminal.
+zodex local watch
 
-This is a macOS privacy boundary, not a workdir-sandbox rule. Use the normal System Settings → Privacy & Security controls for the effective Zodex runtime identity. Do not disable or rewrite TCC. Ordinary unprotected workspaces should not need blanket Full Disk Access.
-
-### An upgrade says Local is running
-
-Stop the runtime before replacing the operator executable:
-
-```bash
+# When finished:
 zodex local stop
 ```
 
-### ChatGPT uses the wrong initial repository
+You only need `zodex local setup` again when you want to replace tunnel credentials/configuration or repair/update the managed tunnel setup.
 
-Check the active runtime's start directory:
+## Local guides
 
-```bash
-zodex local status --json
-```
-
-Then stop and restart from the intended workspace. In ChatGPT app settings, open the Zodex Local app details and choose **Refresh** before opening a fresh conversation. ChatGPT caches MCP server instructions until this explicit refresh. The runtime publishes the selected directory as guidance, but the actual tool call must still contain it explicitly as `workdir`.
-
-### Multiple conversations are hard to distinguish
-
-List status/history, then open dedicated viewers:
-
-```bash
-zodex local history --since 1h
-zodex local watch --agent <id>
-```
-
-For custom dashboards and API clients, see [Building a Local watch client](/docs/local-watch-client).
+- [Setup and connect ChatGPT](/docs/local-setup) — Platform tunnel, runtime key, setup flags, and ChatGPT app creation.
+- [Daily use](/docs/local-operations) — start, status, watch, history, logs, stop, multiple Agents, and TTLs.
+- [Configuration](/docs/local-configuration) — retention and non-secret Local settings.
+- [Local command reference](/docs/local-command-reference) — every `zodex local` command and flag.
+- [Local troubleshooting](/docs/local-troubleshooting) — tunnel, startup, Keychain, privacy, Agent, and history problems.
+- [Build a Local observer client](/docs/local-watch-client) — advanced read-only API/SSE guide for dashboard authors.

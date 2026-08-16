@@ -1,11 +1,12 @@
 ---
-title: Building a Local watch client
-description: "Build a read-only Zodex Local dashboard from runtime discovery, Agent/workdir resources, invocation history, paginated output, and Agent-filtered SSE without parsing OpenAI metadata."
+title: "Local observer client (advanced)"
+description: "Advanced reference for building a read-only Local dashboard or observer client from the supported localhost API and SSE stream."
 order: 1
 category: Local Clients
-summary: The versioned localhost observability contract used by `zodex local watch` and future dashboards.
+summary: "The versioned localhost observability contract used by `zodex local watch` and future dashboards."
 ---
 
+This is an advanced client-author reference. If you only want to run or inspect Zodex Local, use [Local](/docs/local), [Local daily use](/docs/local-operations), or the built-in `zodex local watch`.
 Zodex Local intentionally separates **control** from **observation**. ChatGPT uses the authenticated Local MCP listener to run the three tools. `zodex local watch` and custom dashboards use a different, read-only, bearer-authenticated loopback HTTP server.
 
 A dashboard should consume this public Local model. It should **not** parse `_meta["openai/session"]`, inspect the history SQLite schema directly, or depend on provider-specific opaque conversation keys.

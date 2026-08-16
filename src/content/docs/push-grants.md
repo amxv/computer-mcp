@@ -1,9 +1,9 @@
 ---
-title: Push modes and PRs
-description: Publish pull requests, request temporary push access, use normal Git commands after approval, list active grants, and understand when to use YOLO mode instead.
+title: "Sprite PRs and push grants"
+description: "Publish PRs from a Sprite, request temporary direct-push access, use normal Git after approval, and revoke the grant when finished."
 order: 7
 category: GitHub Access
-summary: "The complete write workflow for ChatGPT inside a zodex Sprite: PRs, request-push, grant-push, revoke, and when to switch to YOLO."
+summary: "The Agent-side Sprite write workflow: publish-pr, request-push, list-grants, normal Git push, and revocation."
 ---
 
 ChatGPT can do almost all coding work before GitHub direct push is enabled: clone, inspect, edit, test, and commit. This page covers the write step after the local commit exists.
@@ -21,7 +21,7 @@ After committing locally, ChatGPT can publish a generated branch and open a PR w
 
 ```bash
 zodex-agent github publish-pr \
-  --repo amxv/zodex \
+  --repo owner/repo \
   --title "Improve zodex runtime docs" \
   --base main \
   --body "Adds detailed runtime, grant, and operations documentation."
@@ -31,7 +31,7 @@ For a draft PR:
 
 ```bash
 zodex-agent github publish-pr \
-  --repo amxv/zodex \
+  --repo owner/repo \
   --title "Improve zodex runtime docs" \
   --base main \
   --draft
@@ -44,7 +44,7 @@ zodex-agent github publish-pr \
 When a direct push should be allowed from inside the ChatGPT session, request a repo-scoped push grant:
 
 ```bash
-zodex-agent github request-push --repo amxv/zodex
+zodex-agent github request-push --repo owner/repo
 ```
 
 The command runs a GitHub App device-flow authorization. It prints a verification URL and user code, tries to open the URL, and activates the grant after approval.
@@ -52,19 +52,19 @@ The command runs a GitHub App device-flow authorization. It prints a verificatio
 The default grant TTL is `30m`:
 
 ```bash
-zodex-agent github request-push --repo amxv/zodex --ttl 30m
+zodex-agent github request-push --repo owner/repo --ttl 30m
 ```
 
 For a longer grant:
 
 ```bash
-zodex-agent github request-push --repo amxv/zodex --ttl 2h
+zodex-agent github request-push --repo owner/repo --ttl 2h
 ```
 
 For a grant without TTL enforcement:
 
 ```bash
-zodex-agent github request-push --repo amxv/zodex --no-ttl
+zodex-agent github request-push --repo owner/repo --no-ttl
 ```
 
 Use `--no-ttl` only for an intentional operator-controlled window.
@@ -107,13 +107,13 @@ Use this before assuming a push failure is caused by code, branch protection, or
 Revoke after the push step:
 
 ```bash
-zodex-agent github revoke-push --repo amxv/zodex
+zodex-agent github revoke-push --repo owner/repo
 ```
 
 To also clear local device-flow auth state:
 
 ```bash
-zodex-agent github revoke-push --repo amxv/zodex --forget-local-auth
+zodex-agent github revoke-push --repo owner/repo --forget-local-auth
 ```
 
 ## When to use YOLO instead
@@ -121,7 +121,7 @@ zodex-agent github revoke-push --repo amxv/zodex --forget-local-auth
 Use YOLO mode when direct push should remain available across repeated commits in a trusted session:
 
 ```bash
-zodex github mode yolo --sprite dev-sprite --repo amxv/zodex --ttl 4h
+zodex github mode yolo --sprite dev-sprite --repo owner/repo --ttl 4h
 ```
 
 Return to the default policy when finished:

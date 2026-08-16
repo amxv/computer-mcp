@@ -1,9 +1,9 @@
 ---
-title: GitHub Apps setup
-description: Create the reader and writer GitHub Apps with the narrow permissions zodex expects for ChatGPT clone/fetch, PR publishing, push grants, and YOLO mode.
+title: "Sprite GitHub Apps"
+description: "Create the narrow reader and writer GitHub Apps used by Sprite mode for clone/fetch, PR publishing, push grants, and YOLO."
 order: 6
 category: GitHub Access
-summary: The one-time GitHub App checklist for read access, PR creation, device-flow push grants, writer-app credentials, app IDs, client IDs, and installation scope.
+summary: "The one-time Sprite checklist for reader/writer app permissions, device flow, private keys, IDs, and repository installation scope."
 ---
 
 ## Why there are two apps
@@ -54,7 +54,7 @@ Record both the app ID and the client ID. The app ID is used during setup. The c
 Install both apps on the same target repositories unless you intentionally want different read and writer scopes.
 
 ```text
-amxv/zodex
+owner/repo
 ```
 
 Avoid organization-wide installation unless every repository in the organization is allowed for ChatGPT access and for the write modes you plan to use.
@@ -64,7 +64,15 @@ Avoid organization-wide installation unless every repository in the organization
 Run setup with both app IDs and PEM paths:
 
 ```bash
-zodex sprite setup   --sprite dev-sprite   --repo amxv/zodex   --reader-app-id 123456   --reader-pem /secure/zodex/reader.pem   --publisher-app-id 987654   --publisher-pem /secure/zodex/writer.pem   --default-base main   --url-auth sprite
+zodex sprite setup \
+  --sprite dev-sprite \
+  --repo owner/repo \
+  --reader-app-id 123456 \
+  --reader-pem /secure/zodex/reader.pem \
+  --publisher-app-id 987654 \
+  --publisher-pem /secure/zodex/writer.pem \
+  --default-base main \
+  --url-auth sprite
 ```
 
 Then configure the push-grant client ID for day-to-day grants:
@@ -76,7 +84,7 @@ publisher_client_id = "Iv1.real-device-flow-client-id"
 or pass it directly:
 
 ```bash
-zodex-agent github request-push --repo amxv/zodex --publisher-client-id Iv1.real-device-flow-client-id
+zodex-agent github request-push --repo owner/repo --publisher-client-id Iv1.real-device-flow-client-id
 ```
 
 ## How the apps map to write modes

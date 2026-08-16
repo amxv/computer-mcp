@@ -1,73 +1,72 @@
 ---
-title: Access and autonomy model
-description: Learn how zodex separates read access, local workspace writes, PR publishing, one-off push grants, and scoped YOLO mode for ChatGPT sessions.
-order: 5
+title: "Sprite permissions and autonomy"
+description: "Understand the Sprite-only boundary between remote workspace access, GitHub reads, PR publishing, temporary push grants, and YOLO mode."
+order: 4
 category: GitHub Access
-summary: The security boundary behind reader apps, publisher apps, local commits, PR-only mode, push grants, YOLO mode, TTLs, repo scopes, and revocation.
+summary: "The security model behind the reader app, publisher app, PR path, push grants, TTLs, repository scopes, and revocation."
 ---
 
-This page describes the **Sprite GitHub access/autonomy model**. Zodex Local is a different trust boundary: it runs commands directly as the logged-in trusted Mac user and therefore can use Git/network credentials available in that developer environment. Local does not claim the Sprite reader/publisher grant model encloses host shell access.
+Sprite mode deliberately separates **working on code** from **writing back to GitHub**.
 
-For the direct-Mac model, see [Zodex Local](/docs/local).
+An Agent can edit files, run tests, and make local commits in the remote Linux workspace. GitHub clone/fetch comes from a reader App. GitHub writes are controlled separately by PR publishing, temporary push grants, or operator-controlled YOLO mode.
 
-zodex separates three things that are often blurred together:
-
-- **workspace writes**: ChatGPT can edit files, run tests, and commit inside the Sprite
-- **GitHub reads**: ChatGPT can clone and fetch through the reader app
-- **GitHub writes**: ChatGPT can push only when the selected write mode allows it
-
-That separation is what lets the same MCP connection support careful review-first sessions and trusted YOLO sessions.
+That separation is the main Sprite security boundary.
 
 ## Default state
 
-The default state is productive but conservative:
+After setup:
 
-- Git clone and fetch work through the reader GitHub App.
-- Shell execution, patching, tests, and local commits work in the Sprite workspace.
-- PR creation through `zodex-agent github publish-pr` works without a direct push grant.
-- Plain `git push` fails until a repo-scoped grant or operator-controlled YOLO mode is active.
-- Revocation or expiration closes direct push while read access and PR publishing remain available.
+- clone/fetch works for repositories installed on the reader App;
+- commands, patches, tests, and local commits work in the Sprite workspace;
+- `zodex-agent github publish-pr` can publish reviewed work through the writer App;
+- ordinary `git push` is blocked until a direct-push grant or YOLO policy allows it.
 
-In other words: ChatGPT can do real work immediately, but GitHub write autonomy is a policy choice.
+A coding session therefore starts useful but not fully autonomous on GitHub.
 
-## Reader app permissions
+## Tier 1: persistent read access
 
-The reader app should have:
+The reader GitHub App should have only:
 
 ```text
 Contents: Read-only
 ```
 
-Install it on `Only select repositories` unless broader read access is intentional. zodex mints clone/fetch tokens with read-only contents access.
+Install it on **Only select repositories** unless broader read access is intentional.
 
-## Writer app permissions
+This credential exists so the Sprite can use normal commands such as:
 
-The writer app is called the publisher / push-grant app in config because it powers both PR publishing and direct-push grants.
+```bash
+git clone https://github.com/owner/repo.git
+git fetch origin
+```
 
-It should have:
+It cannot be used for a GitHub contents write.
+
+## Tier 2: publisher-mediated PRs
+
+The writer/publisher App has:
 
 ```text
 Contents: Read & write
 Pull requests: Read & write
-Device Flow enabled
-User access token expiration enabled
 ```
 
-Install it on `Only select repositories` unless every installed repo is meant to be eligible for PR publishing, push grants, or YOLO mode.
-
-## PR publishing without shell write tokens
-
-`publish-pr` is the review-first write path:
+But the Agent does not need the App's installation token in its shell to publish a PR.
 
 ```bash
-zodex-agent github publish-pr --repo owner/repo --title "Describe the change" --base main
+zodex-agent github publish-pr \
+  --repo owner/repo \
+  --title "Describe the change" \
+  --base main
 ```
 
-The agent commits locally, then `zodex-agent` sends a bundle of the current `HEAD` to `zodex-prd`. The publisher daemon mints short-lived writer-app credentials, pushes a generated branch, and opens the PR. Those credentials stay inside the daemon.
+The publisher service receives the committed `HEAD`, pushes a generated branch, and opens the PR. This is the preferred review-first path because the powerful writer token stays inside the publisher boundary.
 
-## Direct push grants
+## Tier 3: direct-push autonomy
 
-For one-off direct push, open a repo-scoped grant:
+When normal `git push` is useful, open it deliberately.
+
+### One repository, temporary grant
 
 ```bash
 zodex-agent github request-push --repo owner/repo
@@ -76,34 +75,60 @@ zodex-agent github request-push --repo owner/repo
 or from the operator machine:
 
 ```bash
-zodex github grant-push --sprite dev-sprite --repo owner/repo
+zodex github grant-push --sprite dev --repo owner/repo
 ```
 
-The default active grant TTL is `30m`. Expired grants stop working in the credential-helper path even if a stale grant file remains.
+The default push-grant TTL is `30m`.
 
-## Operator YOLO mode
-
-YOLO mode is the trusted-session write path:
+### Trusted-session YOLO
 
 ```bash
-zodex github mode yolo --sprite dev-sprite
-zodex github mode yolo --sprite dev-sprite --ttl 4h
-zodex github mode yolo --sprite dev-sprite --repo owner/repo
-zodex github mode yolo --sprite dev-sprite --no-ttl
+zodex github mode yolo --sprite dev --ttl 2h
 ```
 
-`mode yolo` is operator-only. It defaults to a `2h` TTL and all installed repositories. Passing `--repo` narrows the scope to a repo allowlist. Repo-scoped grants are merged per repo and expire independently according to the TTL used when that repo was granted. Passing `--no-ttl` makes the new window indefinite until the operator returns to default mode.
-
-Disable YOLO mode with:
+YOLO is controlled from the operator side. By default it applies to repositories installed for the writer App; use `--repo` to narrow it:
 
 ```bash
-zodex github mode default --sprite dev-sprite
+zodex github mode yolo --sprite dev --repo owner/repo --ttl 4h
 ```
 
-`mode default` removes only YOLO state. It does not revoke explicit push grants.
+Use `--no-ttl` only when indefinite write autonomy is intentional.
 
-## Refresh-token cache
+## Revocation
 
-By default, Sprite-side `request-push` does not persist refresh-token state. Add `--cache-refresh-token` only when the operator deliberately wants local refresh reuse on the Sprite.
+Close one direct-push grant:
 
-Revocation normally removes the active repo grant. Add `--forget-local-auth` when you also want to clear cached device-flow auth state for that repo.
+```bash
+zodex-agent github revoke-push --repo owner/repo
+```
+
+or:
+
+```bash
+zodex github revoke-push --sprite dev --repo owner/repo
+```
+
+Return YOLO policy to default:
+
+```bash
+zodex github mode default --sprite dev
+```
+
+`mode default` removes YOLO state; it does not silently revoke unrelated explicit push grants.
+
+## Repository installation is part of the boundary
+
+A narrow permission on an App installed across an entire organization can still be broader than you intended. Prefer **Only select repositories** for both reader and writer Apps and add repos deliberately.
+
+The writer App installation determines the maximum repository set eligible for PR publishing/direct-push policy. Zodex grants can narrow that set further; they cannot expand beyond the App installation.
+
+## Which level should I use?
+
+Use:
+
+- **reader + PR publishing** for new Agents and important repositories;
+- **temporary push grants** when a trusted change needs normal Git push once;
+- **repo-scoped YOLO** for trusted iterative work where repeated approvals are just friction;
+- **broad/no-TTL YOLO** only in environments where that level of autonomy is a deliberate choice.
+
+See [Sprite write modes](/docs/write-modes) for examples and [Sprite GitHub Apps](/docs/github-apps) for the one-time permissions setup.
