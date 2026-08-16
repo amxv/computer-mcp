@@ -781,12 +781,14 @@ async fn output_reports_command_cwd() {
         .expect("pwd should complete");
 
     assert_eq!(finished.status, CommandStatus::Exited);
-    assert_eq!(finished.cwd, workdir);
-    assert!(
-        finished
-            .output
-            .contains(dir.path().to_string_lossy().as_ref())
-    );
+    // `ToolOutput.cwd` is the effective process cwd, not the lexical spelling
+    // of the declared workdir. This matters on macOS where /var -> /private/var.
+    let effective_workdir = std::fs::canonicalize(dir.path())
+        .expect("canonical test workdir")
+        .display()
+        .to_string();
+    assert_eq!(finished.cwd, effective_workdir);
+    assert!(finished.output.contains(&effective_workdir));
 }
 
 #[tokio::test]
@@ -965,10 +967,20 @@ async fn concurrent_commands_keep_explicit_workdirs_independent() {
     let (out_a, out_b) = tokio::join!(run(a.clone(), "a"), run(b.clone(), "b"));
     assert_eq!(std::fs::read_to_string(a.join("rooted.txt")).unwrap(), "a");
     assert_eq!(std::fs::read_to_string(b.join("rooted.txt")).unwrap(), "b");
-    assert_eq!(out_a.cwd, a.display().to_string());
-    assert_eq!(out_b.cwd, b.display().to_string());
+    // Live cwd inspection reports the effective physical path. Preserve the
+    // exact declared workdir separately; compare cwd using canonical identity.
+    let effective_a = std::fs::canonicalize(&a)
+        .expect("canonical worktree a")
+        .display()
+        .to_string();
+    let effective_b = std::fs::canonicalize(&b)
+        .expect("canonical worktree b")
+        .display()
+        .to_string();
+    assert_eq!(out_a.cwd, effective_a);
+    assert_eq!(out_b.cwd, effective_b);
     assert!(out_a.output.contains("shared"));
     assert!(out_b.output.contains("shared"));
-    assert!(out_a.output.contains(a.to_string_lossy().as_ref()));
-    assert!(out_b.output.contains(b.to_string_lossy().as_ref()));
+    assert!(out_a.output.contains(&effective_a));
+    assert!(out_b.output.contains(&effective_b));
 }

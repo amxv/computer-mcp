@@ -427,8 +427,20 @@ async fn local_http_exercises_all_three_tools_concurrently_and_preserves_provide
     let out_b = tool_output(&out_b);
     assert_eq!(out_a.status, CommandStatus::Exited);
     assert_eq!(out_b.status, CommandStatus::Exited);
-    assert_eq!(out_a.cwd, a.display().to_string());
-    assert_eq!(out_b.cwd, b.display().to_string());
+    assert_eq!(
+        out_a.cwd,
+        std::fs::canonicalize(&a)
+            .expect("canonical workdir a")
+            .display()
+            .to_string()
+    );
+    assert_eq!(
+        out_b.cwd,
+        std::fs::canonicalize(&b)
+            .expect("canonical workdir b")
+            .display()
+            .to_string()
+    );
     assert!(out_a.output.contains("from-a"));
     assert!(out_b.output.contains("from-b"));
 
