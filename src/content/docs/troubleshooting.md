@@ -1,10 +1,92 @@
 ---
 title: Troubleshooting
-description: Diagnose ChatGPT connection issues, setup failures, push-grant problems, YOLO mode mismatches, stale credentials, Sprite service failures, TLS errors, and proxy routing issues.
+description: Diagnose Zodex Local startup/privacy/Agent issues plus Sprite connection, setup, GitHub grant, TLS, service, and proxy failures.
 order: 14
 category: Reference
-summary: Practical failure modes and the commands that usually identify the cause.
+summary: Practical Local and Sprite failure modes and the commands that usually identify the cause.
 ---
+
+## Zodex Local status first
+
+For direct-Mac Local problems, start with:
+
+```bash
+zodex local status
+zodex local status --json
+zodex local logs --lines 200
+```
+
+`status --json` distinguishes unconfigured, stopped, running, and stale runtime state and includes the active start directory, whole-runtime expiry, Agent/process counts, and history health when available.
+
+## Local setup succeeds but start says it is unconfigured
+
+Run setup again and inspect non-secret config:
+
+```bash
+zodex local setup
+zodex local config get
+zodex local status --json
+```
+
+Do not put the OpenAI tunnel runtime key directly on argv. Use the hidden prompt, stdin, a named environment variable, or an already-open file descriptor.
+
+## Local cannot read Desktop/Documents/Downloads/iCloud or app data
+
+Local runs as the logged-in Mac user but macOS TCC/privacy controls still apply. The start directory is not a sandbox bypass.
+
+Use the normal System Settings → Privacy & Security grant path for the effective Zodex runtime identity when macOS denies a protected location. Do not modify TCC databases or disable privacy protection. Ordinary unprotected repositories should not require blanket Full Disk Access.
+
+## Local upgrade refuses to replace `zodex`
+
+The macOS operator installer refuses to replace the executable while Local runtime state is active. Stop Local first:
+
+```bash
+zodex local stop
+curl -fsSL https://zodex.ashray.xyz/install.sh | sh
+```
+
+## Local starts in the wrong repository
+
+The runtime start directory is published to ChatGPT as suggested explicit routing guidance. Check it:
+
+```bash
+zodex local status --json
+```
+
+If it is wrong, stop and restart from the intended directory:
+
+```bash
+zodex local stop
+cd ~/code/owner/repo
+zodex local start
+```
+
+The backend still requires the model's actual `exec_command`/`apply_patch` tool call to contain an absolute `workdir`; successful execution should never be used as evidence of a hidden cwd fallback.
+
+## Local has multiple ChatGPT conversations and activity is mixed together
+
+Use the Agent-aware surfaces instead of inferring identity from repo path or timing:
+
+```bash
+zodex local history --since 1h
+zodex local watch
+zodex local watch --agent k7m2
+zodex local history --agent k7m2 --since 1h
+```
+
+Different Agents may deliberately share a workdir. Missing provider correlation remains unattributed rather than being guessed.
+
+## A Local dashboard cannot connect from a web page
+
+The observer is intentionally loopback-only, Bearer-authenticated, and does not enable arbitrary-origin CORS. Browser `EventSource` also cannot set the required Authorization header.
+
+Use a trusted same-origin localhost wrapper or a native/extension client with explicit localhost access, and stream SSE with an authorized `fetch`-style request. See [Building a Local watch client](/docs/local-watch-client).
+
+## Local stop leaves an intentionally self-daemonized program
+
+The supported cleanup scope is ordinary Zodex-owned foreground, child, and background processes. Local does not promise adversarial containment of a program that deliberately escapes through a separate launch service/self-daemonization mechanism.
+
+For normal jobs, a shell leader exiting does not make its still-live process-group members unowned; they remain part of the Local shutdown boundary.
 
 ## ChatGPT cannot connect
 

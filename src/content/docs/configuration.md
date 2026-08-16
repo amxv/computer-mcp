@@ -1,12 +1,12 @@
 ---
 title: Configuration
-description: Configure bind addresses, TLS, API keys, workspace defaults, session limits, GitHub App credentials, publisher settings, and grant behavior.
+description: Configure Sprite/server bind addresses, TLS, session limits and GitHub access, plus the separate non-secret user-scoped Zodex Local settings.
 order: 4
 category: Architecture
-summary: The `/etc/zodex/config.toml` fields that control the daemon, tools, GitHub access, and publisher service.
+summary: The Sprite/server `/etc/zodex/config.toml` boundary and the separate `~/.config/zodex/local.toml` Local configuration.
 ---
 
-## Config path
+## Sprite/server config path
 
 All CLIs accept a config path. The default is:
 
@@ -22,6 +22,8 @@ zodex-agent --config /etc/zodex/config.toml github list-grants
 ```
 
 If the file is missing, zodex loads its built-in defaults.
+
+This `/etc/zodex/config.toml` file belongs to the Sprite/server deployment model. **Zodex Local does not put its user runtime credential or observer bearer here.** Its separate user-scoped config is described below.
 
 ## Server and API settings
 
@@ -60,7 +62,9 @@ max_output_chars = 200000
 default_workdir = "/workspace"
 ```
 
-`exec_command` resolves its working directory from the tool input first, then from `default_workdir`. Long-running commands can keep a session open and return a `session_handle` for later polling or stdin writes.
+`default_workdir` remains a Sprite/server process/setup default used by operator/runtime lifecycle code. It is **not** an MCP execution fallback. `exec_command` and `apply_patch` require an explicit absolute existing `workdir` in every request. Long-running commands can keep a session open and return a `session_handle` for later polling or stdin writes.
+
+Local follows the same explicit-workdir rule. Its runtime start directory is published to the model as suggested routing guidance only; the backend never substitutes it for a missing field.
 
 ## Guest users and paths
 
@@ -124,3 +128,62 @@ installation_id = 22222222
 `publisher_targets` is the explicit allowlist used by `publish-pr`. `publisher_installations` records account-level installations so operator-only GitHub modes can represent an all-installed-repos scope while still staying inside the GitHub App installation boundary.
 
 The day-to-day `request-push` flow uses the repo argument and active grant state. Publish targets are still useful for internal publisher flows and explicit repo allowlists.
+
+## Zodex Local config
+
+Local uses a separate non-secret TOML file:
+
+```text
+${XDG_CONFIG_HOME:-~/.config}/zodex/local.toml
+```
+
+Inspect it through the CLI rather than depending on its serialized layout:
+
+```bash
+zodex local config get
+zodex local config get history.max-age
+zodex local config get history.max-size
+zodex local config get tunnel.id
+zodex local config get tunnel.client-path
+```
+
+Writable keys are:
+
+```text
+history.max-age
+history.max-size
+tunnel.id
+```
+
+Defaults:
+
+```text
+history.max-age  = 60d
+history.max-size = 500mb
+```
+
+Change settings only while Local is stopped:
+
+```bash
+zodex local config set history.max-age 30d
+zodex local config set history.max-size 1gb
+```
+
+The OpenAI tunnel runtime key is stored behind the macOS Keychain boundary. The observer bearer is a user-only credential under Local state. Neither is serialized into `local.toml`.
+
+With default XDG roots, Local's durable paths are:
+
+```text
+~/.local/share/zodex/bin/                  managed tunnel bundle
+~/.local/state/zodex/local/credentials/   observer bearer
+~/.local/state/zodex/local/history/       history.sqlite3
+~/.local/state/zodex/local/logs/          local-runtime.log
+```
+
+Ephemeral runtime/discovery/tunnel/process state lives separately under:
+
+```text
+~/.local/state/zodex/local/runtime/
+```
+
+That separation is deliberate: runtime cleanup must not delete Local config, credentials, durable history, or logs.

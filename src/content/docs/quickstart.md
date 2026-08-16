@@ -1,12 +1,14 @@
 ---
-title: Quickstart
-description: "Set up zodex for ChatGPT: install the operator CLI, create a Sprite, install the guest runtime, expose the MCP URL, add it to ChatGPT, and choose a GitHub write mode."
+title: Sprite quickstart
+description: "Set up the remote Sprite mode for ChatGPT: install the operator CLI, create a Sprite, install the guest runtime, expose the MCP URL, add it to ChatGPT, and choose a GitHub write mode."
 order: 1
 category: Start
-summary: A no-clone path for installing zodex end to end and connecting ChatGPT to a real Sprite-backed coding workspace.
+summary: A no-clone path for connecting ChatGPT to a remote Sprite-backed Linux coding workspace.
 ---
 
-This is the canonical setup document for a local operator or agent helping a user connect ChatGPT to zodex. The goal is to install the local `zodex` operator CLI, create or select a Sprite, install the zodex guest runtime, expose the MCP URL, add it to ChatGPT, and verify GitHub reads plus the selected write mode.
+This is the setup document for **Sprite mode**, where ChatGPT works on a remote Sprite-backed Linux machine. If you instead want ChatGPT to work directly on a trusted Apple Silicon Mac, use [Zodex Local](/docs/local) rather than creating a Sprite.
+
+The Sprite goal is to install the local `zodex` operator CLI, create or select a Sprite, install the zodex guest runtime, expose the MCP URL, add it to ChatGPT, and verify GitHub reads plus the selected write mode.
 
 For this project's own deployment and release paths, the canonical repository slug is `amxv/zodex`. The public Git URL is `https://github.com/amxv/zodex.git`; substitute `--repo amxv/zodex` into setup, PR, grant, and YOLO examples when operating this repository itself.
 
@@ -42,6 +44,8 @@ curl -fsSL https://zodex.ashray.xyz/install.sh | sh
 ```
 
 The installer detects macOS/Linux and CPU architecture, downloads the matching GitHub Release artifact, verifies its checksum, and installs the operator binary. If `zodex` is not on `PATH` after install, add the printed install directory, usually `~/.local/bin`, to the shell profile.
+
+Current macOS releases support Apple Silicon only. Linux release artifacts remain available for x86_64 and aarch64.
 
 Verify:
 

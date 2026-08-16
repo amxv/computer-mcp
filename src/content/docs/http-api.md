@@ -6,6 +6,10 @@ category: Operations
 summary: The `/v1/*` API routes, Bearer auth model, request shapes, and thin client commands.
 ---
 
+This page documents the traditional command-execution JSON API served alongside `zodexd` in direct/Sprite service deployments. It is **not** the Zodex Local observability API.
+
+Local keeps observation on a separate loopback-only, GET-only Bearer API with no execution routes. See [Building a Local watch client](/docs/local-watch-client) for `/v1/status`, Agents, invocation history/output, and SSE.
+
 ## HTTP routes
 
 In addition to MCP, `zodexd` serves direct JSON routes:

@@ -6,6 +6,10 @@ category: GitHub Access
 summary: The security boundary behind reader apps, publisher apps, local commits, PR-only mode, push grants, YOLO mode, TTLs, repo scopes, and revocation.
 ---
 
+This page describes the **Sprite GitHub access/autonomy model**. Zodex Local is a different trust boundary: it runs commands directly as the logged-in trusted Mac user and therefore can use Git/network credentials available in that developer environment. Local does not claim the Sprite reader/publisher grant model encloses host shell access.
+
+For the direct-Mac model, see [Zodex Local](/docs/local).
+
 zodex separates three things that are often blurred together:
 
 - **workspace writes**: ChatGPT can edit files, run tests, and commit inside the Sprite

@@ -1,14 +1,19 @@
 # zodex
 
-`zodex` is a ChatGPT-native remote coding workspace.
+`zodex` puts ChatGPT on real coding machines through a tiny, familiar MCP surface.
 
-It gives ChatGPT a real Sprite-backed Linux machine and a tiny MCP tool surface that GPT models already know how to use well:
+It has two supported execution modes:
+
+- **Sprite** — a remote Sprite-backed Linux workspace with isolated GitHub read/write policy.
+- **Local** — trusted direct execution on an Apple Silicon Mac, with one runtime shared by many ChatGPT conversations plus Agent-aware history and live observability.
+
+Both modes expose the same three tools GPT models already know how to use well:
 
 - `exec_command`
 - `write_stdin`
 - `apply_patch`
 
-ChatGPT can clone repos, inspect code, edit files, run tests, keep long-lived sessions alive, and commit locally. The operator decides how GitHub writes happen:
+ChatGPT can inspect code, edit files, run tests, and keep long-lived sessions alive. Sprite mode additionally provides the repository GitHub access/write-control model described below:
 
 - PR-only publishing without direct shell write tokens
 - one-off repo-scoped push approval from the Sprite
@@ -23,12 +28,14 @@ The supported repository slug for this project is `amxv/zodex`.
 
 ChatGPT coding works best when the model has familiar tools and a real machine. zodex gives it both:
 
-1. a Sprite Linux workspace instead of a simulated sandbox
+1. real machine execution instead of a simulated coding sandbox
 2. command/stdin/patch tools that fit GPT coding behavior
-3. normal Git history and normal test commands
-4. operator-controlled GitHub write autonomy
+3. a remote Linux option for isolated/persistent workspace work
+4. a trusted direct-Mac option when the host itself is the intended workspace
+5. normal Git history and normal test commands
+6. operator-controlled GitHub write autonomy in Sprite deployments
 
-Sprites are a good fit for this because coding-agent work is bursty. You can run real remote work when ChatGPT is active instead of renting an always-on VPS for a full month and leaving it idle most of the time.
+Sprites are a good fit when you want remote Linux. Local is a good fit when the code, toolchains, credentials, and files you deliberately want ChatGPT to use already live on a trusted Apple Silicon Mac.
 
 ## Write modes
 
@@ -80,9 +87,39 @@ zodex github mode default --sprite dev-sprite
 
 `mode yolo` defaults to a `2h` TTL and all installed repositories. Passing `--repo` changes the scope to a repo allowlist; repeated repo-scoped YOLO commands merge with active repo grants instead of replacing them, and each repo keeps its own TTL. Passing `--no-ttl` makes the new window indefinite until the operator disables it. `mode default` removes only YOLO state and leaves explicit push grants alone.
 
-## Quick setup shape
+## Choose a setup path
 
-See the Quickstart for the no-clone installer path. The setup flow is:
+Install the `zodex` operator CLI in either case:
+
+```bash
+curl -fsSL https://zodex.ashray.xyz/install.sh | sh
+zodex --version
+```
+
+### Zodex Local
+
+On an Apple Silicon Mac, provision an existing OpenAI Secure MCP Tunnel and start from the workspace you want published to ChatGPT as the suggested initial explicit workdir:
+
+```bash
+zodex local setup
+cd ~/code/owner/repo
+zodex local start --ttl 4h
+zodex local status
+```
+
+Every `exec_command` and `apply_patch` call still declares an absolute workdir; the start directory is guidance, not a backend cwd fallback. Inspect concurrent conversations with:
+
+```bash
+zodex local watch
+zodex local history --agent k7m2 --since 1h
+zodex local stop
+```
+
+See [Zodex Local](https://zodex.ashray.xyz/docs/local) for the trusted-host model, one runtime-wide TTL, Agent correlation, history, macOS privacy boundary, and process-cleanup scope.
+
+### Sprite mode
+
+See the [Sprite quickstart](https://zodex.ashray.xyz/docs/quickstart) for the no-clone remote-Linux path. The setup flow is:
 
 1. install the local `zodex` operator CLI
 2. install and authenticate the Sprite CLI
@@ -120,6 +157,12 @@ https://<sprite-host>/mcp?key=<zodex-api-key>
 ## Core commands
 
 ```bash
+zodex local setup
+zodex local start ~/code/owner/repo --ttl 4h
+zodex local status --json
+zodex local watch --agent k7m2
+zodex local history --agent k7m2 --since 1h
+zodex local stop
 zodex sprite status --sprite zodex-dev
 zodex sprite logs --sprite zodex-dev --service zodexd --lines 100
 zodex sprite sync --sprite zodex-dev --force-recreate
@@ -136,7 +179,7 @@ zodex-agent show-url --host <public-host>
 
 ## Documentation site
 
-This repository includes an Astro documentation site for zodex. It covers ChatGPT setup, Sprite runtime architecture, GitHub App access, write modes, proxy and MCP front door, direct HTTP API, command reference, troubleshooting, and docs maintenance.
+This repository includes an Astro documentation site for zodex. It covers Zodex Local, Local observer/dashboard clients, Sprite setup and runtime architecture, GitHub App access, write modes, MCP tooling, direct HTTP APIs, command reference, troubleshooting, and docs maintenance.
 
 Run it locally with:
 

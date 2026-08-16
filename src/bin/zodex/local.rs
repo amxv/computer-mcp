@@ -15,7 +15,7 @@ use zodex::local::{
 };
 
 #[derive(Debug, Subcommand)]
-#[command(after_help = "Agent inspection examples:\n  zodex local status --json\n  zodex local history --last 20\n  zodex local history --since 30min\n  zodex local watch --agent k7m2")]
+#[command(after_help = "Agent inspection examples:\n  zodex local status --json\n  zodex local history --last 20\n  zodex local watch\n  zodex local watch --agent k7m2\n  zodex local history --agent k7m2 --since 1h\n  zodex local history --workdir /absolute/repo/path\n  zodex local history --id <invocation-id> --raw")]
 enum LocalCommand {
     /// Provision Local configuration, credentials, and the managed tunnel client.
     #[command(after_help = "Examples:\n  zodex local setup\n  printf '%s\\n' \"$OPENAI_TUNNEL_RUNTIME_KEY\" | zodex local setup --tunnel-id tunnel_<id> --runtime-key-stdin\n  zodex local setup --tunnel-id tunnel_<id> --runtime-key-env OPENAI_TUNNEL_RUNTIME_KEY\n\nThe OpenAI tunnel runtime key is read from a hidden terminal prompt by default. For automation, pass it via stdin, an environment variable name, or an already-open file descriptor; never put the secret itself on argv.\n\nmacOS privacy: setup does not bypass or configure TCC. Protected folders or app data may later require a normal user-approved Files & Folders or Full Disk Access grant for the effective Zodex runtime identity. Ordinary unprotected workspaces do not require blanket Full Disk Access.")]
@@ -74,7 +74,7 @@ enum LocalCommand {
         all: bool,
     },
     /// Inspect durable Local invocation history without opening the TUI.
-    #[command(after_help = "Examples:\n  zodex local history --last 20\n  zodex local history --since 30min\n  zodex local history --agent k7m2\n  zodex local history --format markdown\n  zodex local history clear --yes")]
+    #[command(after_help = "Examples:\n  zodex local history --last 20\n  zodex local history --agent k7m2 --since 1h\n  zodex local history --workdir /absolute/repo/path\n  zodex local history --id <invocation-id> --raw\n  zodex local history --format json\n  zodex local history clear --yes")]
     History {
         /// Show only the most recent N normalized records.
         #[arg(long)]

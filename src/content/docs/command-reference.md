@@ -1,9 +1,9 @@
 ---
 title: Command reference
-description: A complete command map for the operator CLI, Sprite commands, proxy commands, GitHub grant commands, agent helper, local service helpers, and direct HTTP client.
+description: A complete command map for Zodex Local, Sprite commands, proxy commands, GitHub grants, agent helper, direct service helpers, and HTTP client.
 order: 13
 category: Reference
-summary: The compact command index for day-to-day zodex operation.
+summary: The compact command index for direct Mac Local mode and remote Sprite operation.
 ---
 
 ## Global option
@@ -15,7 +15,35 @@ zodex --config /etc/zodex/config.toml status
 zodex-agent --config /etc/zodex/config.toml github list-grants
 ```
 
-## Local service commands
+## Zodex Local (Apple Silicon Mac)
+
+```bash
+zodex local setup
+zodex local start
+zodex local start ~/code/owner/repo --ttl 4h
+zodex local status
+zodex local status --json
+zodex local watch
+zodex local watch --agent k7m2
+zodex local watch --all
+zodex local history --last 20
+zodex local history --agent k7m2 --since 1h
+zodex local history --workdir /absolute/repo/path
+zodex local history --id <invocation-id> --raw
+zodex local history --format json
+zodex local config get
+zodex local config set history.max-age 30d
+zodex local logs --lines 500
+zodex local stop
+```
+
+`local start` accepts one optional start path. That path is published as the suggested initial **explicit** workdir; it never makes the MCP `workdir` field optional. `--ttl` is one runtime-wide absolute lifetime shared by all Agents.
+
+See [Zodex Local](/docs/local) for setup/trust/lifecycle and [Building a Local watch client](/docs/local-watch-client) for the separate read-only observer API.
+
+## Direct server service commands
+
+These operate the traditional direct `zodexd` service configuration, not the new `zodex local` trusted-host runtime:
 
 ```bash
 zodex install
