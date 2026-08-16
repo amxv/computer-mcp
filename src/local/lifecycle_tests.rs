@@ -3,7 +3,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 #[cfg(target_os = "linux")]
 use std::process::Stdio;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+#[cfg(target_os = "linux")]
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -17,13 +19,19 @@ use super::lifecycle::{
 use super::lifecycle_context::{resolve_developer_shell, start_directory_error};
 use super::{
     LOCAL_DISCOVERY_SCHEMA_VERSION, LOCAL_RUNTIME_STATE_SCHEMA_VERSION, LaunchdController,
-    LocalConfig, LocalObservabilityDiscovery, LocalPaths, LocalProcessRegistryDocument,
-    LocalRuntimeDiscovery, LocalRuntimeHealth, LocalRuntimeLifecycle, LocalRuntimeState,
-    ManagedTunnelClientRelease, RuntimeKey, active_process_record_count,
-    ensure_observability_bearer, load_runtime_state, paths_from_runtime_bootstrap,
-    prepare_local_launch, run_hidden_runtime, write_runtime_discovery, write_runtime_state,
+    LocalObservabilityDiscovery, LocalPaths, LocalRuntimeDiscovery, LocalRuntimeHealth,
+    LocalRuntimeLifecycle, LocalRuntimeState, load_runtime_state, write_runtime_discovery,
+    write_runtime_state,
 };
-use crate::session::{ProcessInspector, SystemProcessInspector, identity_matches};
+#[cfg(target_os = "linux")]
+use super::{
+    LocalConfig, LocalProcessRegistryDocument, ManagedTunnelClientRelease, RuntimeKey,
+    active_process_record_count, ensure_observability_bearer, paths_from_runtime_bootstrap,
+    prepare_local_launch, run_hidden_runtime,
+};
+#[cfg(target_os = "linux")]
+use crate::session::identity_matches;
+use crate::session::{ProcessInspector, SystemProcessInspector};
 
 #[test]
 fn launch_artifacts_keep_environment_out_of_plist_and_bootstrap() {
