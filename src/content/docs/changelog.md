@@ -8,6 +8,10 @@ summary: Version-by-version changes for the zodex CLI, agent runtime, proxy, pub
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.2.27 — 2026-08-16
+
+- Allowed authenticated public Sprite MCP requests to pass RMCP 3's loopback-oriented host validation, restoring direct and proxy-backed connector access while retaining strict host validation for Local loopback servers.
+
 ## 0.2.26 — 2026-08-16
 
 - Upgraded the shared MCP server from RMCP 1.2 to RMCP 3.1.2, adding modern stateless MCP `2026-07-28` support while retaining legacy Sprite client compatibility.
