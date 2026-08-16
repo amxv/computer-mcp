@@ -376,7 +376,9 @@ fn system_descendant_identities(_pid: i32, _limit: usize) -> Result<Vec<ProcessI
 
 #[cfg(test)]
 mod tests {
-    use super::{ProcessBirthIdentity, ProcessInspector, SystemProcessInspector};
+    #[cfg(target_os = "linux")]
+    use super::ProcessBirthIdentity;
+    use super::{ProcessInspector, SystemProcessInspector};
 
     #[test]
     fn current_process_has_stable_identity_and_cwd_on_supported_host() {

@@ -72,6 +72,7 @@ struct McpServerPolicy {
     legacy_session_mode: bool,
     json_response: bool,
     stateless_protocol_metadata_required: bool,
+    disable_allowed_hosts: bool,
     instructions: Arc<str>,
     provider_metadata_observer: Option<ProviderMetadataObserver>,
     invocation_recorder: Option<Arc<dyn InvocationEvidenceRecorder>>,
@@ -83,6 +84,7 @@ impl Default for McpServerPolicy {
             legacy_session_mode: true,
             json_response: false,
             stateless_protocol_metadata_required: false,
+            disable_allowed_hosts: true,
             instructions: Arc::from(DEFAULT_MCP_INSTRUCTIONS),
             provider_metadata_observer: None,
             invocation_recorder: None,
@@ -319,11 +321,14 @@ fn build_mcp_service_with_policy(
     let instructions = policy.instructions.clone();
     let provider_metadata_observer = policy.provider_metadata_observer.clone();
     let invocation_recorder = policy.invocation_recorder.clone();
-    let config = StreamableHttpServerConfig::default()
+    let mut config = StreamableHttpServerConfig::default()
         .with_legacy_session_mode(policy.legacy_session_mode)
         .with_json_response(policy.json_response)
         .with_stateless_protocol_metadata_required(policy.stateless_protocol_metadata_required)
         .with_cancellation_token(cancellation_token);
+    if policy.disable_allowed_hosts {
+        config = config.disable_allowed_hosts();
+    }
     StreamableHttpService::new(
         move || {
             Ok(ZodexMcpService::with_options(

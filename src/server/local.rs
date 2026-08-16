@@ -108,6 +108,7 @@ pub(super) async fn start_local_mcp_server_with_observer(
             legacy_session_mode: false,
             json_response: true,
             stateless_protocol_metadata_required: true,
+            disable_allowed_hosts: false,
             instructions,
             provider_metadata_observer,
             invocation_recorder: config.invocation_recorder,

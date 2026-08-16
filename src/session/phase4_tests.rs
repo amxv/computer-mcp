@@ -6,9 +6,10 @@ use crate::config::Config;
 use crate::invocation::{InvocationContext, ProviderCallMetadata};
 use crate::protocol::{CommandStatus, ExecCommandInput, TerminationReason, WriteStdinInput};
 
+#[cfg(target_os = "linux")]
+use super::{ProcessInspector, SystemProcessInspector};
 use super::{
-    ProcessInspector, SessionManager, SessionOrigin, SessionOutputChunk, SessionOutputObserver,
-    SessionRuntimePolicy, SystemProcessInspector,
+    SessionManager, SessionOrigin, SessionOutputChunk, SessionOutputObserver, SessionRuntimePolicy,
 };
 
 fn workdir() -> String {

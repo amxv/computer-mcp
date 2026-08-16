@@ -38,6 +38,7 @@ fn stateless_policy(observer: Option<ProviderMetadataObserver>) -> McpServerPoli
         legacy_session_mode: false,
         json_response: true,
         stateless_protocol_metadata_required: true,
+        disable_allowed_hosts: false,
         instructions: Arc::from("phase-1 stateless test server"),
         provider_metadata_observer: observer,
         invocation_recorder: None,
@@ -841,34 +842,36 @@ async fn mcp_routes_accept_both_with_and_without_trailing_slash() {
         }
     });
 
-    for path in [
-        format!("/mcp?key={api_key}"),
-        format!("/mcp/?key={api_key}"),
-    ] {
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(&path)
-                    .header("host", "localhost")
-                    .header("content-type", "application/json")
-                    .header("accept", "application/json, text/event-stream")
-                    .body(Body::from(initialize_request.to_string()))
-                    .expect("request build"),
-            )
-            .await
-            .expect("request should succeed");
-
-        let status = response.status();
-        if status != StatusCode::OK {
-            let body = to_bytes(response.into_body(), usize::MAX)
+    for host in ["localhost", "zodex.example"] {
+        for path in [
+            format!("/mcp?key={api_key}"),
+            format!("/mcp/?key={api_key}"),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(&path)
+                        .header("host", host)
+                        .header("content-type", "application/json")
+                        .header("accept", "application/json, text/event-stream")
+                        .body(Body::from(initialize_request.to_string()))
+                        .expect("request build"),
+                )
                 .await
-                .expect("failure body");
-            panic!(
-                "expected initialize to succeed for {path}; got {status}: {}",
-                String::from_utf8_lossy(&body)
-            );
+                .expect("request should succeed");
+
+            let status = response.status();
+            if status != StatusCode::OK {
+                let body = to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .expect("failure body");
+                panic!(
+                    "expected initialize to succeed for {path} with host {host}; got {status}: {}",
+                    String::from_utf8_lossy(&body)
+                );
+            }
         }
     }
 }
