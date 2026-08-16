@@ -41,6 +41,7 @@ fn stateless_policy(observer: Option<ProviderMetadataObserver>) -> McpServerPoli
         disable_allowed_hosts: false,
         instructions: Arc::from("phase-1 stateless test server"),
         provider_metadata_observer: observer,
+        invocation_recorder: None,
     }
 }
 
@@ -157,8 +158,12 @@ fn server_info_accepts_runtime_supplied_workdir_guidance() {
     let instructions = Arc::<str>::from(
         "runtime start directory: /tmp/example; use it as the suggested initial explicit workdir; every command/patch must still send an absolute workdir",
     );
-    let service =
-        ZodexMcpService::with_options(ZodexService::new(test_config()), instructions.clone(), None);
+    let service = ZodexMcpService::with_options(
+        ZodexService::new(test_config()),
+        instructions.clone(),
+        None,
+        None,
+    );
 
     assert_eq!(
         service.get_info().instructions.as_deref(),

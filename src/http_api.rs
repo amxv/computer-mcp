@@ -253,7 +253,7 @@ mod tests {
             "/v1/exec-command",
             json!({
                 "cmd": "echo http-exit",
-                "yield_time_ms": 2_000,
+                "yield_time_ms": 60_000,
                 "workdir": test_workdir()
             }),
             Some(&auth),
@@ -269,7 +269,7 @@ mod tests {
             &app,
             "/v1/exec-command",
             json!({
-                "cmd": "sleep 5",
+                "cmd": "sleep 60",
                 "yield_time_ms": 50,
                 "workdir": test_workdir()
             }),
@@ -417,7 +417,7 @@ mod tests {
         let auth = format!("Bearer {TEST_API_KEY}");
         let input = ExecCommandInput {
             cmd: "printf 'http-parity-exec\\n'".to_string(),
-            yield_time_ms: Some(2_000),
+            yield_time_ms: Some(60_000),
             workdir: test_workdir(),
             timeout_ms: None,
         };

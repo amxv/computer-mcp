@@ -165,6 +165,11 @@ enum Commands {
         #[command(subcommand)]
         command: GithubCommand,
     },
+    /// Run and inspect Zodex directly on the logged-in Mac.
+    Local {
+        #[command(subcommand)]
+        command: LocalCommand,
+    },
 }
 
 #[derive(Debug, Subcommand)]

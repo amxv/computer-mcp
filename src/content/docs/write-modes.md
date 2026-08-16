@@ -6,6 +6,8 @@ category: Start
 summary: The decision guide for PR-only workflows, push grants, and scoped YOLO mode.
 ---
 
+These write modes are the **Sprite GitHub autonomy model**. Zodex Local runs normal shell commands as the trusted logged-in Mac user and can therefore use Git/network credentials already available in that developer environment; the Sprite reader/publisher grant boundary should not be assumed to constrain Local shell access.
+
 zodex is safe by default, but it is not approval-only by design. The operator chooses how much GitHub autonomy ChatGPT gets for the current session, repo, and risk level.
 
 The core idea is:

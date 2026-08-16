@@ -59,7 +59,7 @@ die() {
 
 cleanup() {
   if [[ -n "${TMP_DIR}" && -d "${TMP_DIR}" ]]; then
-    rm -rf "${TMP_DIR}"
+    /bin/rm -rf "${TMP_DIR}"
   fi
 }
 
@@ -224,6 +224,47 @@ resolve_release_checksum_url() {
   printf '%s.sha256\n' "${asset_url}"
 }
 
+operator_local_runtime_dir() {
+  local state_home="${XDG_STATE_HOME:-${HOME}/.local/state}"
+  printf '%s/zodex/local/runtime\n' "${state_home}"
+}
+
+ensure_local_stopped_before_operator_replace() {
+  local installed_zodex="$1"
+
+  # Fresh installs cannot be replacing the executable that owns an active
+  # Local runtime. Linux operator installs have no Local host runtime.
+  [[ -e "${installed_zodex}" ]] || return 0
+  [[ "$(uname -s)" == "Darwin" ]] || return 0
+
+  local runtime_dir
+  runtime_dir="$(operator_local_runtime_dir)"
+  local marker
+  for marker in state.json discovery.json bootstrap.json; do
+    if [[ -e "${runtime_dir}/${marker}" ]]; then
+      die "Zodex Local runtime state is present at ${runtime_dir}; run 'zodex local stop' before upgrading or replacing ${installed_zodex}"
+    fi
+  done
+}
+
+install_operator_binary_atomically() {
+  local source="$1"
+  local destination="$2"
+  local destination_dir
+  destination_dir="$(dirname "${destination}")"
+  local temporary
+  temporary="$(mktemp "${destination_dir}/.zodex-install.XXXXXX")"
+
+  if ! install -m 0755 "${source}" "${temporary}"; then
+    /bin/rm -f "${temporary}"
+    return 1
+  fi
+  if ! mv -f "${temporary}" "${destination}"; then
+    /bin/rm -f "${temporary}"
+    return 1
+  fi
+}
+
 install_operator_binaries_from_dir() {
   local src_dir="$1"
   local install_dir="${ZODEX_INSTALL_DIR}"
@@ -235,9 +276,10 @@ install_operator_binaries_from_dir() {
 
   [[ -x "${src_dir}/zodex" ]] || die "missing executable ${src_dir}/zodex"
   install -d -m 0755 "${install_dir}"
-  install -m 0755 "${src_dir}/zodex" "${install_dir}/zodex"
+  ensure_local_stopped_before_operator_replace "${install_dir}/zodex"
+  install_operator_binary_atomically "${src_dir}/zodex" "${install_dir}/zodex"
   if [[ -x "${src_dir}/zodex-client" ]]; then
-    install -m 0755 "${src_dir}/zodex-client" "${install_dir}/zodex-client"
+    install_operator_binary_atomically "${src_dir}/zodex-client" "${install_dir}/zodex-client"
   fi
 
   cat <<EOF
@@ -336,7 +378,7 @@ install_runtime_prerequisites() {
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -y
     apt-get install -y --no-install-recommends \
-      curl ca-certificates systemd tar gzip git
+      curl ca-certificates systemd tar gzip git ccache ninja-build
 
     if [[ "${ZODEX_ENABLE_CERTBOT}" == "1" ]]; then
       apt-get install -y --no-install-recommends certbot || warn "certbot install failed"
@@ -345,7 +387,7 @@ install_runtime_prerequisites() {
   fi
 
   if command_exists dnf; then
-    dnf install -y curl ca-certificates systemd tar gzip git
+    dnf install -y curl ca-certificates systemd tar gzip git ccache ninja-build
     if [[ "${ZODEX_ENABLE_CERTBOT}" == "1" ]]; then
       dnf install -y certbot || warn "certbot install failed"
     fi
@@ -353,7 +395,7 @@ install_runtime_prerequisites() {
   fi
 
   if command_exists yum; then
-    yum install -y curl ca-certificates systemd tar gzip git
+    yum install -y curl ca-certificates systemd tar gzip git ccache ninja-build
     if [[ "${ZODEX_ENABLE_CERTBOT}" == "1" ]]; then
       yum install -y certbot || warn "certbot install failed"
     fi
@@ -442,7 +484,7 @@ install_binaries_from_dir() {
   if [[ "${ZODEX_INSTALL_OPERATOR_CLI}" == "1" ]]; then
     install -m 0755 "${cli_src}" "${ZODEX_INSTALL_DIR}/zodex"
   else
-    rm -f "${ZODEX_INSTALL_DIR}/zodex"
+    /bin/rm -f "${ZODEX_INSTALL_DIR}/zodex"
   fi
   install -m 0755 "${src_dir}/zodex-agent" "${ZODEX_INSTALL_DIR}/zodex-agent"
   install -m 0755 "${src_dir}/git-remote-zodex" "${ZODEX_INSTALL_DIR}/git-remote-zodex"
@@ -631,6 +673,51 @@ configure_agent_git_identity() {
   fi
 }
 
+configure_agent_build_environment() {
+  local cache_root="${ZODEX_DEFAULT_WORKDIR}/.cache/zodex-agent"
+  local tmp_root="${ZODEX_DEFAULT_WORKDIR}/.tmp"
+  local profile_path="/etc/profile.d/zodex-agent-build-env.sh"
+
+  install -d -m 0700 -o "${ZODEX_AGENT_USER}" -g "${ZODEX_SERVICE_GROUP}" \
+    "${tmp_root}" \
+    "${cache_root}" \
+    "${cache_root}/go-build" \
+    "${cache_root}/go-mod" \
+    "${cache_root}/npm" \
+    "${cache_root}/bun" \
+    "${cache_root}/corepack" \
+    "${cache_root}/pnpm" \
+    "${cache_root}/ccache" \
+    "${cache_root}/pip" \
+    "${cache_root}/uv"
+
+  cat >"${profile_path}" <<EOF
+# Managed by the Zodex runtime installer. Applied only to the agent account.
+if [ "\$(id -un 2>/dev/null)" = "${ZODEX_AGENT_USER}" ]; then
+  export TMPDIR="${tmp_root}"
+  export GOCACHE="${cache_root}/go-build"
+  export GOMODCACHE="${cache_root}/go-mod"
+  export npm_config_cache="${cache_root}/npm"
+  export npm_config_prefer_offline="true"
+  export npm_config_audit="false"
+  export npm_config_fund="false"
+  export npm_config_progress="false"
+  export npm_config_update_notifier="false"
+  export npm_config_store_dir="${cache_root}/pnpm"
+  export BUN_INSTALL_CACHE_DIR="${cache_root}/bun"
+  export COREPACK_HOME="${cache_root}/corepack"
+  export CCACHE_DIR="${cache_root}/ccache"
+  export CCACHE_MAXSIZE="2G"
+  export PIP_CACHE_DIR="${cache_root}/pip"
+  export UV_CACHE_DIR="${cache_root}/uv"
+  if [ -d /usr/lib/ccache ]; then
+    export PATH="/usr/lib/ccache:\${PATH}"
+  fi
+fi
+EOF
+  chmod 0644 "${profile_path}"
+}
+
 detect_public_ip() {
   local ip=""
   ip="$(curl -fsS --max-time 5 https://api.ipify.org || true)"
@@ -736,6 +823,7 @@ run_runtime_install() {
   fi
   configure_agent_git_identity
   configure_agent_git_reader_helper
+  configure_agent_build_environment
   print_next_steps
 }
 

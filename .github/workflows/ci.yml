@@ -1,0 +1,121 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - zodex-local
+    paths:
+      - .github/workflows/ci.yml
+      - .github/workflows/release.yml
+      - Cargo.toml
+      - Cargo.lock
+      - gg/zodex-local/zodex-local-implementation-plan-2026-08-15.md
+      - gg/zodex-local/zodex-local-acceptance.md
+      - scripts/check.sh
+      - scripts/check-local-contract.sh
+      - scripts/install.sh
+      - src/**
+      - tests/**
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/ci.yml
+      - .github/workflows/release.yml
+      - Cargo.toml
+      - Cargo.lock
+      - gg/zodex-local/zodex-local-implementation-plan-2026-08-15.md
+      - gg/zodex-local/zodex-local-acceptance.md
+      - scripts/check.sh
+      - scripts/check-local-contract.sh
+      - scripts/install.sh
+      - src/**
+      - tests/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Linux validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Validate Local and RMCP contract
+        run: bash scripts/check-local-contract.sh
+
+      - name: Run repository validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          log="$(mktemp)"
+          if bash scripts/check.sh 2>&1 | tee "$log"; then
+            exit 0
+          fi
+
+          python3 - "$log" <<'PY'
+          import pathlib
+          import sys
+
+          text = pathlib.Path(sys.argv[1]).read_text(errors="replace")
+          tail = text[-6000:]
+          escaped = (
+              tail.replace("%", "%25")
+              .replace("\r", "%0D")
+              .replace("\n", "%0A")
+          )
+          print(f"::error title=Repository validation failed::{escaped}")
+          PY
+          exit 1
+
+  macos:
+    name: macOS Apple Silicon validation
+    runs-on: macos-15
+    env:
+      CARGO_BUILD_TARGET: aarch64-apple-darwin
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust for target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Validate Local and RMCP contract
+        run: bash scripts/check-local-contract.sh
+
+      - name: Run repository validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          log="$(mktemp)"
+          if bash scripts/check.sh 2>&1 | tee "$log"; then
+            exit 0
+          fi
+
+          python3 - "$log" <<'PY'
+          import pathlib
+          import sys
+
+          text = pathlib.Path(sys.argv[1]).read_text(errors="replace")
+          tail = text[-6000:]
+          escaped = (
+              tail.replace("%", "%25")
+              .replace("\r", "%0D")
+              .replace("\n", "%0A")
+          )
+          print(f"::error title=Repository validation failed::{escaped}")
+          PY
+          exit 1

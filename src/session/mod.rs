@@ -1,37 +1,53 @@
 use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Context, Result, anyhow, bail};
 #[cfg(unix)]
-use nix::errno::Errno;
-#[cfg(unix)]
 use nix::pty::openpty;
-#[cfg(unix)]
-use nix::sys::signal::{Signal, killpg};
-#[cfg(unix)]
-use nix::unistd::{Pid, setpgid};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
-use tokio::process::{Child, Command};
+use tokio::io::AsyncWriteExt;
+use tokio::process::Child;
 use tokio::sync::{Mutex, RwLock};
 use tracing::{info, warn};
 
 use crate::config::Config;
+use crate::invocation::InvocationContext;
 use crate::protocol::{
     CommandStatus, ExecCommandInput, TerminationReason, ToolOutput, WriteStdinInput,
 };
 use crate::workdir::validate_absolute_existing_workdir;
 
+mod output;
+mod policy;
+mod process;
+mod query;
+mod shutdown;
+
+use output::{OutputBuffer, next_char_boundary, spawn_reader};
+use shutdown::{
+    maybe_force_kill, reap_exit_code, request_termination, signal_owned_group_members,
+    snapshot_descendants_before_termination, wait_for_session_exits_until,
+};
+
+pub use policy::{
+    OwnedProcess, OwnedProcessObserver, SessionOutputChunk, SessionOutputCompletion,
+    SessionOutputObserver, SessionRuntimePolicy,
+};
+pub use process::{
+    ProcessBirthIdentity, ProcessControl, ProcessIdentity, ProcessInspector, ProcessSignal,
+    SystemProcessInspector, identity_matches, signal_process_if_matching,
+};
+
 const POLL_INTERVAL_MS: u64 = 30;
 const TIMEOUT_NOTICE: &str = "\n[zodexd] process timed out and was terminated\n";
 const TERMINATE_GRACE_PERIOD_MS: u64 = 5_000;
-const EXIT_OUTPUT_DRAIN_RETRIES: usize = 4;
-const EXIT_OUTPUT_DRAIN_DELAY_MS: u64 = 10;
+const EXIT_OUTPUT_DRAIN_TIMEOUT_MS: u64 = 500;
 const SESSION_HANDLE_LEN: usize = 8;
 const HANDLE_LOG_PREFIX_LEN: usize = 4;
 const COMMAND_SUMMARY_MAX_CHARS: usize = 120;
+const RUNTIME_DESCENDANT_DISCOVERY_LIMIT: usize = 1024;
 const SESSION_HANDLE_ALPHABET: &[u8; 62] =
     b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
@@ -82,68 +98,6 @@ impl SessionTransport {
 }
 
 #[derive(Debug)]
-struct OutputState {
-    text: String,
-    dropped_bytes: usize,
-}
-
-#[derive(Debug)]
-struct OutputBuffer {
-    inner: Mutex<OutputState>,
-    max_chars: usize,
-}
-
-impl OutputBuffer {
-    fn new(max_chars: usize) -> Self {
-        Self {
-            inner: Mutex::new(OutputState {
-                text: String::new(),
-                dropped_bytes: 0,
-            }),
-            max_chars,
-        }
-    }
-
-    async fn append(&self, chunk: &str) {
-        let mut state = self.inner.lock().await;
-        state.text.push_str(chunk);
-
-        if state.text.len() <= self.max_chars {
-            return;
-        }
-
-        let overflow = state.text.len() - self.max_chars;
-        let cut = next_char_boundary(&state.text, overflow);
-        state.text.drain(..cut);
-        state.dropped_bytes += cut;
-    }
-
-    async fn snapshot(&self) -> String {
-        let state = self.inner.lock().await;
-        if state.dropped_bytes == 0 {
-            return state.text.clone();
-        }
-
-        format!(
-            "[... {} bytes truncated ...]\n{}",
-            state.dropped_bytes, state.text
-        )
-    }
-}
-
-fn next_char_boundary(s: &str, idx: usize) -> usize {
-    if idx >= s.len() {
-        return s.len();
-    }
-
-    let mut i = idx;
-    while i < s.len() && !s.is_char_boundary(i) {
-        i += 1;
-    }
-    i
-}
-
-#[derive(Debug)]
 struct SessionInner {
     pid: i32,
     last_known_cwd: String,
@@ -158,9 +112,10 @@ struct SessionInner {
     terminate_started_at: Option<Instant>,
     force_killed: bool,
     require_exit_before_return: bool,
+    leader_identity: Option<ProcessIdentity>,
+    owned_group_members: Vec<ProcessIdentity>,
 }
 
-#[derive(Debug)]
 struct SessionRuntime {
     internal_session_id: u64,
     session_handle: String,
@@ -172,6 +127,10 @@ struct SessionRuntime {
     output: Arc<OutputBuffer>,
     op_lock: Mutex<()>,
     inner: Mutex<SessionInner>,
+    process_inspector: Arc<dyn ProcessInspector>,
+    process_observer: Arc<dyn OwnedProcessObserver>,
+    owned_process: Option<OwnedProcess>,
+    ownership_released: AtomicBool,
 }
 
 impl SessionRuntime {
@@ -195,7 +154,25 @@ impl SessionRuntime {
 
     async fn is_exited(&self) -> Result<bool> {
         let mut inner = self.inner.lock().await;
-        Ok(reap_exit_code(&mut inner)?.is_some())
+        let leader_exited = reap_exit_code(&mut inner, self.process_inspector.as_ref())?.is_some();
+        Ok(leader_exited && inner.owned_group_members.is_empty())
+    }
+
+    fn release_process_ownership(&self) {
+        if self.ownership_released.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let Some(process) = self.owned_process.as_ref() else {
+            return;
+        };
+        if let Err(error) = self.process_observer.process_ended(process) {
+            warn!(
+                event = "session_process_observer_remove_failed",
+                internal_session_id = self.internal_session_id,
+                session_handle_prefix = self.handle_prefix(),
+                error = %error,
+            );
+        }
     }
 
     async fn continue_session(
@@ -231,8 +208,7 @@ impl SessionRuntime {
 
         if input.kill_process.unwrap_or(false) {
             self.output
-                .append("\n[zodexd] process terminated by kill_process\n")
-                .await;
+                .append("\n[zodexd] process terminated by kill_process\n");
             info!(
                 event = "session_killed",
                 internal_session_id = self.internal_session_id,
@@ -289,8 +265,7 @@ impl SessionRuntime {
                 let mut inner = self.inner.lock().await;
                 inner.last_used_at = SystemTime::now();
 
-                maybe_force_kill(&mut inner);
-                if let Some(live_cwd) = resolve_live_cwd(inner.pid) {
+                if let Some(live_cwd) = self.process_inspector.live_cwd(inner.pid) {
                     inner.last_known_cwd = live_cwd;
                 }
 
@@ -310,7 +285,13 @@ impl SessionRuntime {
                     );
                 }
 
-                match reap_exit_code(&mut inner)? {
+                let reaped_exit_code = reap_exit_code(&mut inner, self.process_inspector.as_ref())?;
+                maybe_force_kill(&mut inner, self.process_inspector.as_ref())?;
+
+                match reaped_exit_code {
+                    Some(_)
+                        if inner.require_exit_before_return
+                            && !inner.owned_group_members.is_empty() => {}
                     Some(code) => {
                         let termination_reason = if inner.timed_out {
                             TerminationReason::Timeout
@@ -329,7 +310,7 @@ impl SessionRuntime {
             }
 
             if timeout_notice {
-                self.output.append(TIMEOUT_NOTICE).await;
+                self.output.append(TIMEOUT_NOTICE);
             }
 
             if let Some((exit_code, cwd, termination_reason)) = finished {
@@ -354,7 +335,7 @@ impl SessionRuntime {
             }
 
             if let Some(cwd) = running_cwd {
-                let text = strip_ansi_codes(self.output.snapshot().await);
+                let text = strip_ansi_codes(self.output.snapshot());
                 let elapsed = self.started_at.elapsed();
                 return Ok(ToolOutput {
                     summary: command_result_summary(
@@ -379,25 +360,54 @@ impl SessionRuntime {
     }
 }
 
-#[derive(Debug)]
 pub struct SessionManager {
     sessions: RwLock<HashMap<String, Arc<SessionRuntime>>>,
     admission_lock: Mutex<()>,
+    admission_closed: AtomicBool,
     next_internal_session_id: AtomicU64,
     max_sessions: usize,
     max_output_chars: usize,
     poll_interval: Duration,
+    policy: SessionRuntimePolicy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionCounts {
+    pub retained: usize,
+    pub running: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RuntimeShutdownResult {
+    pub sessions_signaled: usize,
+    pub sessions_force_killed: usize,
+    pub descendants_signaled: usize,
+    pub descendants_force_killed: usize,
 }
 
 impl SessionManager {
     pub fn new(max_sessions: usize, max_output_chars: usize) -> Self {
+        Self::with_policy(
+            max_sessions,
+            max_output_chars,
+            SessionRuntimePolicy::sprite(),
+        )
+    }
+
+    pub fn with_policy(
+        max_sessions: usize,
+        max_output_chars: usize,
+        policy: SessionRuntimePolicy,
+    ) -> Self {
         Self {
             sessions: RwLock::new(HashMap::new()),
             admission_lock: Mutex::new(()),
+            admission_closed: AtomicBool::new(false),
             next_internal_session_id: AtomicU64::new(1),
             max_sessions,
             max_output_chars,
             poll_interval: Duration::from_millis(POLL_INTERVAL_MS),
+            policy,
         }
     }
 
@@ -407,8 +417,25 @@ impl SessionManager {
         cfg: &Config,
         origin: SessionOrigin,
     ) -> Result<ToolOutput> {
+        self.exec_command_with_context(input, cfg, origin, InvocationContext::default())
+            .await
+    }
+
+    pub async fn exec_command_with_context(
+        &self,
+        input: ExecCommandInput,
+        cfg: &Config,
+        origin: SessionOrigin,
+        invocation: InvocationContext,
+    ) -> Result<ToolOutput> {
         let command_cwd = validate_absolute_existing_workdir(&input.workdir)?;
+        if self.admission_closed.load(Ordering::Acquire) {
+            bail!("session runtime is stopping; new commands are not accepted");
+        }
         let _admission_guard = self.admission_lock.lock().await;
+        if self.admission_closed.load(Ordering::Acquire) {
+            bail!("session runtime is stopping; new commands are not accepted");
+        }
         self.evict_if_needed().await?;
 
         let timeout_ms = cfg.clamp_exec_timeout_ms(input.timeout_ms);
@@ -433,8 +460,7 @@ impl SessionManager {
             .try_clone()
             .context("failed to clone PTY slave for stdout")?;
 
-        let mut command = Command::new("/bin/bash");
-        command.arg("-lc").arg(&input.cmd);
+        let mut command = self.policy.command(&input.cmd, cfg);
 
         #[cfg(unix)]
         command
@@ -443,30 +469,16 @@ impl SessionManager {
             .stderr(Stdio::from(slave_file));
 
         #[cfg(unix)]
-        unsafe {
-            command.pre_exec(|| {
-                setpgid(Pid::from_raw(0), Pid::from_raw(0))
-                    .map_err(|e| std::io::Error::other(e.to_string()))?;
-                Ok(())
-            });
-        }
+        command.process_group(0);
 
         command.current_dir(&command_cwd);
-        if !cfg.agent_home.trim().is_empty() {
-            command.env("HOME", &cfg.agent_home);
-        }
-        command.env("USER", &cfg.agent_user);
-        command.env("LOGNAME", &cfg.agent_user);
-        command.env("PAGER", "cat");
-        command.env("GIT_PAGER", "cat");
-        command.env("LESS", "FRX");
-        command.env("MANPAGER", "cat");
-        command.env("SYSTEMD_PAGER", "cat");
 
-        let child = command
-            .spawn()
-            .with_context(|| format!("failed to spawn command: {}", input.cmd))?;
         let output = Arc::new(OutputBuffer::new(self.max_output_chars));
+        let internal_session_id = self
+            .next_internal_session_id
+            .fetch_add(1, Ordering::Relaxed);
+        let session_handle = generate_session_handle();
+        let session_handle_arc: Arc<str> = Arc::from(session_handle.as_str());
 
         #[cfg(unix)]
         let master_reader_std = master_file
@@ -475,19 +487,50 @@ impl SessionManager {
         #[cfg(unix)]
         let master_writer_std = master_file;
         #[cfg(unix)]
-        let master_reader = tokio::fs::File::from_std(master_reader_std);
-        #[cfg(unix)]
         let master_writer = tokio::fs::File::from_std(master_writer_std);
         #[cfg(unix)]
-        spawn_reader(master_reader, output.clone());
+        spawn_reader(
+            master_reader_std,
+            output.clone(),
+            self.policy.output_observer(),
+            internal_session_id,
+            session_handle_arc.clone(),
+            invocation.clone(),
+        )?;
 
-        let internal_session_id = self
-            .next_internal_session_id
-            .fetch_add(1, Ordering::Relaxed);
-        let session_handle = generate_session_handle();
+        let mut child = command
+            .spawn()
+            .with_context(|| format!("failed to spawn command: {}", input.cmd))?;
         let pid = child
             .id()
             .ok_or_else(|| anyhow!("failed to obtain child process id"))? as i32;
+        let identity = self.policy.process_inspector().identity(pid)?;
+        if identity.is_none()
+            && self.policy.require_process_identity()
+            && child.try_wait()?.is_none()
+        {
+            let _ = process::signal_process_group(pid, ProcessSignal::Kill);
+            let _ = child.wait().await;
+            bail!(
+                "Local runtime could not establish a stable process identity for PID {pid}; command was terminated before being admitted"
+            );
+        }
+        let owned_process = identity.clone().map(|identity| OwnedProcess {
+            internal_session_id,
+            session_handle: session_handle_arc,
+            identity,
+            created_by: invocation.clone(),
+        });
+        let process_observer = self.policy.process_observer();
+        if let Some(process) = owned_process.as_ref()
+            && let Err(error) = process_observer.process_started(process)
+        {
+            let _ = process::signal_process_group(pid, ProcessSignal::Kill);
+            let _ = child.wait().await;
+            return Err(error).context(
+                "failed to record command process ownership; command was terminated before admission",
+            );
+        }
 
         let runtime = Arc::new(SessionRuntime {
             internal_session_id,
@@ -513,7 +556,13 @@ impl SessionManager {
                 terminate_started_at: None,
                 force_killed: false,
                 require_exit_before_return: false,
+                leader_identity: identity,
+                owned_group_members: Vec::new(),
             }),
+            process_inspector: self.policy.process_inspector().clone(),
+            process_observer,
+            owned_process,
+            ownership_released: AtomicBool::new(false),
         });
 
         {
@@ -540,7 +589,7 @@ impl SessionManager {
             .await
             .map_err(|err| anyhow!("failed while waiting for new session output: {err}"))?;
 
-        if output.status == CommandStatus::Exited {
+        if output.status == CommandStatus::Exited && runtime.is_exited().await? {
             self.remove_session(&session_handle).await;
         }
 
@@ -548,6 +597,16 @@ impl SessionManager {
     }
 
     pub async fn write_stdin(&self, input: WriteStdinInput, cfg: &Config) -> Result<ToolOutput> {
+        self.write_stdin_with_context(input, cfg, InvocationContext::default())
+            .await
+    }
+
+    pub async fn write_stdin_with_context(
+        &self,
+        input: WriteStdinInput,
+        cfg: &Config,
+        _invocation: InvocationContext,
+    ) -> Result<ToolOutput> {
         let yield_time_ms = cfg.clamp_write_yield_ms(input.yield_time_ms);
         let session_handle = input.session_handle.clone();
         let runtime = {
@@ -562,11 +621,158 @@ impl SessionManager {
             .continue_session(input, yield_time_ms, self.poll_interval)
             .await?;
 
-        if output.status == CommandStatus::Exited {
+        if output.status == CommandStatus::Exited && runtime.is_exited().await? {
             self.remove_session(&session_handle).await;
         }
 
         Ok(output)
+    }
+
+    pub fn accepting_new_sessions(&self) -> bool {
+        !self.admission_closed.load(Ordering::Acquire)
+    }
+
+    pub async fn session_counts(&self) -> Result<SessionCounts> {
+        let runtimes = self
+            .sessions
+            .read()
+            .await
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        let retained = runtimes.len();
+        let mut running = 0;
+        for runtime in runtimes {
+            if !runtime.is_exited().await? {
+                running += 1;
+            }
+        }
+        Ok(SessionCounts { retained, running })
+    }
+
+    pub async fn shutdown_all(&self) -> Result<RuntimeShutdownResult> {
+        self.admission_closed.store(true, Ordering::Release);
+        // Establish a barrier with any command that passed the first admission
+        // check but has not yet completed spawning/registering its child.
+        let admission_guard = self.admission_lock.lock().await;
+        drop(admission_guard);
+
+        let runtimes = self
+            .sessions
+            .read()
+            .await
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+
+        // Snapshot ordinary descendants before TERM while each tracked group
+        // leader still provides stable ownership evidence. A shell wrapper can
+        // exit immediately on TERM while a child in the same process group
+        // survives and is reparented to PID 1; discovering only after TERM
+        // loses that child and can leave it running after a seemingly clean
+        // shutdown. Stable descendant identities make the later force pass
+        // safe without blindly trusting a numeric PID/PGID after leader exit.
+        let discovered_descendants =
+            snapshot_descendants_before_termination(&runtimes, RUNTIME_DESCENDANT_DISCOVERY_LIMIT)
+                .await;
+
+        let mut sessions_signaled = 0;
+        for runtime in &runtimes {
+            let mut inner = runtime.inner.lock().await;
+            if reap_exit_code(&mut inner, runtime.process_inspector.as_ref())?.is_none() {
+                inner.kill_requested = true;
+                inner.require_exit_before_return = true;
+                request_termination(&mut inner);
+                sessions_signaled += 1;
+            } else if !inner.owned_group_members.is_empty() {
+                inner.kill_requested = true;
+                inner.require_exit_before_return = true;
+                inner.terminate_started_at.get_or_insert_with(Instant::now);
+                signal_owned_group_members(
+                    &inner,
+                    runtime.process_inspector.as_ref(),
+                    ProcessSignal::Terminate,
+                )?;
+                sessions_signaled += 1;
+            } else {
+                runtime.release_process_ownership();
+            }
+        }
+
+        // Process groups remain the primary ownership boundary. Also signal
+        // the pre-TERM stable descendant snapshot so ordinary children that
+        // escape or outlive their group leader participate in the same global
+        // grace window.
+        let mut descendants_signaled = 0;
+        for (inspector, descendant) in &discovered_descendants {
+            match process::signal_process_if_matching(
+                inspector.as_ref(),
+                descendant,
+                ProcessSignal::Terminate,
+            ) {
+                Ok(true) => descendants_signaled += 1,
+                Ok(false) => {}
+                Err(error) => warn!(
+                    event = "session_descendant_terminate_failed",
+                    descendant_pid = descendant.pid,
+                    error = %error,
+                ),
+            }
+        }
+        let deadline = Instant::now() + self.policy.shutdown_grace();
+        wait_for_session_exits_until(&runtimes, self.poll_interval, deadline).await?;
+
+        let mut sessions_force_killed = 0;
+        for runtime in &runtimes {
+            let mut inner = runtime.inner.lock().await;
+            if reap_exit_code(&mut inner, runtime.process_inspector.as_ref())?.is_none() {
+                inner.force_killed = true;
+                process::signal_process_group(inner.pid, ProcessSignal::Kill)?;
+                sessions_force_killed += 1;
+            } else if !inner.owned_group_members.is_empty() {
+                inner.force_killed = true;
+                if signal_owned_group_members(
+                    &inner,
+                    runtime.process_inspector.as_ref(),
+                    ProcessSignal::Kill,
+                )? > 0
+                {
+                    sessions_force_killed += 1;
+                }
+            }
+        }
+
+        let mut descendants_force_killed = 0;
+        for (inspector, descendant) in &discovered_descendants {
+            match process::signal_process_if_matching(
+                inspector.as_ref(),
+                descendant,
+                ProcessSignal::Kill,
+            ) {
+                Ok(true) => descendants_force_killed += 1,
+                Ok(false) => {}
+                Err(error) => warn!(
+                    event = "session_descendant_force_kill_failed",
+                    descendant_pid = descendant.pid,
+                    error = %error,
+                ),
+            }
+        }
+
+        let force_deadline = Instant::now() + Duration::from_secs(1);
+        let survivors =
+            wait_for_session_exits_until(&runtimes, self.poll_interval, force_deadline).await?;
+        if survivors > 0 {
+            bail!("timed out waiting for {survivors} Local command process group(s) to exit");
+        }
+
+        self.sessions.write().await.clear();
+        Ok(RuntimeShutdownResult {
+            sessions_signaled,
+            sessions_force_killed,
+            descendants_signaled,
+            descendants_force_killed,
+        })
     }
 
     async fn remove_session(&self, session_handle: &str) {
@@ -576,6 +782,7 @@ impl SessionManager {
         };
 
         if let Some(runtime) = removed {
+            runtime.release_process_ownership();
             info!(
                 event = "session_removed",
                 internal_session_id = runtime.internal_session_id,
@@ -627,39 +834,28 @@ impl SessionManager {
     }
 }
 
-fn reap_exit_code(inner: &mut SessionInner) -> Result<Option<i32>> {
-    if let Some(exit_code) = inner.reaped_exit_code {
-        return Ok(Some(exit_code));
-    }
-
-    let Some(status) = inner.child.try_wait()? else {
-        return Ok(None);
-    };
-    let exit_code = status.code().unwrap_or(-1);
-    inner.reaped_exit_code = Some(exit_code);
-    Ok(Some(exit_code))
-}
-
 fn spawn_child_reaper(runtime: Arc<SessionRuntime>, poll_interval: Duration) {
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(poll_interval).await;
             let reaped = {
                 let mut inner = runtime.inner.lock().await;
-                reap_exit_code(&mut inner)
+                let result = reap_exit_code(&mut inner, runtime.process_inspector.as_ref());
+                result.map(|exit| (exit, inner.owned_group_members.is_empty()))
             };
 
             match reaped {
-                Ok(Some(exit_code)) => {
+                Ok((Some(exit_code), true)) => {
                     info!(
                         event = "session_child_reaped",
                         internal_session_id = runtime.internal_session_id,
                         session_handle_prefix = runtime.handle_prefix(),
                         exit_code,
                     );
+                    runtime.release_process_ownership();
                     break;
                 }
-                Ok(None) => {}
+                Ok((Some(_), false)) | Ok((None, _)) => {}
                 Err(err) => {
                     warn!(
                         event = "session_child_reap_failed",
@@ -728,161 +924,23 @@ fn system_time_epoch_ms(t: SystemTime) -> u128 {
         .as_millis()
 }
 
-fn request_termination(inner: &mut SessionInner) {
-    if inner.terminate_started_at.is_some() {
-        return;
-    }
-
-    inner.terminate_started_at = Some(Instant::now());
-    #[cfg(unix)]
-    {
-        let _ = signal_process_group(inner.pid, Signal::SIGTERM);
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = inner.child.start_kill();
-    }
-}
-
 async fn snapshot_output_after_exit(output: &Arc<OutputBuffer>) -> String {
-    let mut snapshot = output.snapshot().await;
-    for _ in 0..EXIT_OUTPUT_DRAIN_RETRIES {
-        tokio::time::sleep(Duration::from_millis(EXIT_OUTPUT_DRAIN_DELAY_MS)).await;
-        let refreshed = output.snapshot().await;
-        if refreshed == snapshot {
-            break;
-        }
-        snapshot = refreshed;
-    }
-    snapshot
-}
-
-fn maybe_force_kill(inner: &mut SessionInner) {
-    let Some(started) = inner.terminate_started_at else {
-        return;
-    };
-    if inner.force_killed {
-        return;
-    }
-    if started.elapsed() < Duration::from_millis(TERMINATE_GRACE_PERIOD_MS) {
-        return;
-    }
-
-    inner.force_killed = true;
-    #[cfg(unix)]
-    {
-        let _ = signal_process_group(inner.pid, Signal::SIGKILL);
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = inner.child.start_kill();
-    }
-}
-
-#[cfg(unix)]
-fn signal_process_group(pid: i32, signal: Signal) -> Result<()> {
-    match killpg(Pid::from_raw(pid), signal) {
-        Ok(_) => Ok(()),
-        Err(Errno::ESRCH) => Ok(()),
-        Err(e) => Err(anyhow!(
-            "failed to send {signal:?} to process group {pid}: {e}"
-        )),
-    }
-}
-
-fn spawn_reader<R>(mut reader: R, output: Arc<OutputBuffer>)
-where
-    R: AsyncRead + Unpin + Send + 'static,
-{
-    tokio::spawn(async move {
-        let mut buf = [0_u8; 8192];
-        loop {
-            let read = match reader.read(&mut buf).await {
-                Ok(0) => break,
-                Ok(n) => n,
-                Err(_) => break,
-            };
-
-            let chunk = String::from_utf8_lossy(&buf[..read]);
-            output.append(&chunk).await;
-        }
-    });
+    // Child exit can race the asynchronous PTY reader. Wait for the reader's
+    // terminal EOF/EIO signal before taking the final snapshot so trailing
+    // command output is not lost merely because one short sample was quiet.
+    // A bounded fallback preserves existing behavior for descendants that keep
+    // the PTY slave open after the shell leader exits.
+    output
+        .wait_for_reader_done(Duration::from_millis(EXIT_OUTPUT_DRAIN_TIMEOUT_MS))
+        .await;
+    output.snapshot()
 }
 
 fn unknown_session_handle(session_handle: &str) -> anyhow::Error {
     anyhow!("Unknown session handle: {session_handle}")
 }
 
-fn resolve_live_cwd(pid: i32) -> Option<String> {
-    #[cfg(target_os = "linux")]
-    {
-        let target_pgrp = read_proc_pgrp(pid)?;
-        let mut best: Option<(i32, String)> = None;
-
-        let proc_entries = std::fs::read_dir("/proc").ok()?;
-        for entry in proc_entries {
-            let Ok(entry) = entry else {
-                continue;
-            };
-            let name = entry.file_name();
-            let raw = name.to_string_lossy();
-            if !raw.chars().all(|ch| ch.is_ascii_digit()) {
-                continue;
-            }
-
-            let proc_pid = match raw.parse::<i32>() {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-
-            if read_proc_pgrp(proc_pid) != Some(target_pgrp) {
-                continue;
-            }
-
-            let Some(cwd) = read_proc_cwd(proc_pid) else {
-                continue;
-            };
-            if best
-                .as_ref()
-                .map(|(best_pid, _)| proc_pid > *best_pid)
-                .unwrap_or(true)
-            {
-                best = Some((proc_pid, cwd));
-            }
-        }
-
-        if let Some((_, cwd)) = best {
-            Some(cwd)
-        } else {
-            read_proc_cwd(pid)
-        }
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = pid;
-        None
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn read_proc_cwd(pid: i32) -> Option<String> {
-    let path = format!("/proc/{pid}/cwd");
-    let cwd = std::fs::read_link(path).ok()?;
-    Some(cwd.display().to_string())
-}
-
-#[cfg(target_os = "linux")]
-fn read_proc_pgrp(pid: i32) -> Option<i32> {
-    let stat_path = format!("/proc/{pid}/stat");
-    let raw = std::fs::read_to_string(stat_path).ok()?;
-    let (_, after_comm) = raw.rsplit_once(") ")?;
-    let mut fields = after_comm.split_whitespace();
-    let _state = fields.next()?;
-    let _ppid = fields.next()?;
-    let pgrp = fields.next()?.parse::<i32>().ok()?;
-    Some(pgrp)
-}
-
+#[cfg(test)]
+mod phase4_tests;
 #[cfg(test)]
 mod tests;

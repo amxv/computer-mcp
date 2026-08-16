@@ -1,13 +1,18 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Result, anyhow};
+use tokio::sync::Mutex;
 
 use crate::apply_patch;
 use crate::config::Config;
+use crate::invocation::InvocationContext;
 use crate::protocol::{
     ApplyPatchInput, ApplyPatchOutput, ExecCommandInput, ToolOutput, WriteStdinInput,
 };
-use crate::session::{SessionManager, SessionOrigin};
+use crate::session::{
+    RuntimeShutdownResult, SessionCounts, SessionManager, SessionOrigin, SessionRuntimePolicy,
+};
 
 #[derive(Debug, Clone)]
 pub enum ServiceRequest {
@@ -53,27 +58,87 @@ impl ServiceResponse {
 pub struct ZodexService {
     config: Arc<Config>,
     sessions: Arc<SessionManager>,
+    admission: Arc<ServiceAdmission>,
+}
+
+struct ServiceAdmission {
+    closed: AtomicBool,
+    barrier: Mutex<()>,
+}
+
+impl ServiceAdmission {
+    fn new() -> Self {
+        Self {
+            closed: AtomicBool::new(false),
+            barrier: Mutex::new(()),
+        }
+    }
+
+    async fn admit(&self) -> Result<()> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(anyhow!(
+                "service runtime is stopping; new tool calls are not accepted"
+            ));
+        }
+        let guard = self.barrier.lock().await;
+        if self.closed.load(Ordering::Acquire) {
+            return Err(anyhow!(
+                "service runtime is stopping; new tool calls are not accepted"
+            ));
+        }
+        drop(guard);
+        Ok(())
+    }
+
+    async fn close(&self) {
+        self.closed.store(true, Ordering::Release);
+        let guard = self.barrier.lock().await;
+        drop(guard);
+    }
+
+    fn accepting(&self) -> bool {
+        !self.closed.load(Ordering::Acquire)
+    }
 }
 
 impl ZodexService {
     pub fn new(config: Arc<Config>) -> Self {
-        let sessions = Arc::new(SessionManager::new(
+        Self::with_session_policy(config, SessionRuntimePolicy::sprite())
+    }
+
+    pub fn with_session_policy(config: Arc<Config>, policy: SessionRuntimePolicy) -> Self {
+        let sessions = Arc::new(SessionManager::with_policy(
             config.max_sessions,
             config.max_output_chars,
+            policy,
         ));
-        Self { config, sessions }
+        Self {
+            config,
+            sessions,
+            admission: Arc::new(ServiceAdmission::new()),
+        }
     }
 
     pub async fn execute(&self, request: ServiceRequest) -> Result<ServiceResponse> {
+        self.execute_with_context(request, InvocationContext::default())
+            .await
+    }
+
+    pub async fn execute_with_context(
+        &self,
+        request: ServiceRequest,
+        invocation: InvocationContext,
+    ) -> Result<ServiceResponse> {
+        self.admission.admit().await?;
         match request {
             ServiceRequest::ExecCommand { input, origin } => self
                 .sessions
-                .exec_command(input, &self.config, origin)
+                .exec_command_with_context(input, &self.config, origin, invocation)
                 .await
                 .map(ServiceResponse::ToolOutput),
             ServiceRequest::WriteStdin { input } => self
                 .sessions
-                .write_stdin(input, &self.config)
+                .write_stdin_with_context(input, &self.config, invocation)
                 .await
                 .map(ServiceResponse::ToolOutput),
             ServiceRequest::ApplyPatch { input } => self
@@ -105,6 +170,27 @@ impl ZodexService {
 
     pub fn apply_patch(&self, input: ApplyPatchInput) -> Result<String> {
         apply_patch::apply_patch(&input.patch, &input.workdir)
+    }
+
+    pub fn accepting_new_sessions(&self) -> bool {
+        self.admission.accepting() && self.sessions.accepting_new_sessions()
+    }
+
+    pub async fn session_counts(&self) -> Result<SessionCounts> {
+        self.sessions.session_counts().await
+    }
+
+    pub async fn session_creator_agent_id(&self, session_handle: &str) -> Option<Arc<str>> {
+        self.sessions.session_creator_agent_id(session_handle).await
+    }
+
+    pub async fn shutdown_sessions(&self) -> Result<RuntimeShutdownResult> {
+        self.close_admission().await;
+        self.sessions.shutdown_all().await
+    }
+
+    pub async fn close_admission(&self) {
+        self.admission.close().await;
     }
 }
 
@@ -248,6 +334,68 @@ mod tests {
             fs::read_to_string(dir.path().join("dispatched.txt"))
                 .expect("dispatched file should be readable"),
             "hello-dispatch\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn closing_service_admission_rejects_every_mutating_request_before_side_effects() {
+        let service = test_service();
+        let dir = tempdir().expect("tempdir");
+        service.close_admission().await;
+        assert!(!service.accepting_new_sessions());
+
+        let exec_error = service
+            .execute(ServiceRequest::ExecCommand {
+                input: ExecCommandInput {
+                    cmd: "touch should-not-exist".to_string(),
+                    yield_time_ms: Some(1_000),
+                    workdir: dir.path().to_string_lossy().to_string(),
+                    timeout_ms: None,
+                },
+                origin: crate::session::SessionOrigin::direct(),
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            exec_error
+                .to_string()
+                .contains("new tool calls are not accepted")
+        );
+        assert!(!dir.path().join("should-not-exist").exists());
+
+        let patch_error = service
+            .execute(ServiceRequest::ApplyPatch {
+                input: ApplyPatchInput {
+                    patch:
+                        "*** Begin Patch\n*** Add File: should-not-exist.txt\n+no\n*** End Patch\n"
+                            .to_string(),
+                    workdir: dir.path().to_string_lossy().to_string(),
+                },
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            patch_error
+                .to_string()
+                .contains("new tool calls are not accepted")
+        );
+        assert!(!dir.path().join("should-not-exist.txt").exists());
+
+        let write_error = service
+            .execute(ServiceRequest::WriteStdin {
+                input: WriteStdinInput {
+                    session_handle: "not-admitted".to_string(),
+                    chars: Some("echo no\n".to_string()),
+                    yield_time_ms: Some(100),
+                    kill_process: Some(false),
+                },
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            write_error
+                .to_string()
+                .contains("new tool calls are not accepted")
         );
     }
 }

@@ -1,0 +1,91 @@
+use std::sync::Arc;
+
+use anyhow::Result;
+use serde_json::Value;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InvocationContext {
+    pub invocation_id: Option<i64>,
+    pub correlation_id: Option<Arc<str>>,
+    pub provider: Option<ProviderCallMetadata>,
+    pub agent_id: Option<Arc<str>>,
+}
+
+impl InvocationContext {
+    pub fn with_invocation_id(mut self, value: i64) -> Self {
+        self.invocation_id = Some(value);
+        self
+    }
+
+    pub fn with_correlation_id(mut self, value: impl Into<Arc<str>>) -> Self {
+        self.correlation_id = Some(value.into());
+        self
+    }
+
+    pub fn with_provider(mut self, provider: ProviderCallMetadata) -> Self {
+        self.provider = Some(provider);
+        self
+    }
+
+    pub fn with_agent_id(mut self, value: impl Into<Arc<str>>) -> Self {
+        self.agent_id = Some(value.into());
+        self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderCallMetadata {
+    pub kind: Arc<str>,
+    pub session_key: Arc<str>,
+}
+
+impl ProviderCallMetadata {
+    pub fn new(kind: impl Into<Arc<str>>, session_key: impl Into<Arc<str>>) -> Self {
+        Self {
+            kind: kind.into(),
+            session_key: session_key.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct InvocationStart {
+    pub tool_name: Arc<str>,
+    pub arguments: Value,
+    pub target_created_by_agent_id: Option<Arc<str>>,
+}
+
+impl InvocationStart {
+    pub fn new(tool_name: impl Into<Arc<str>>, arguments: Value) -> Self {
+        Self {
+            tool_name: tool_name.into(),
+            arguments,
+            target_created_by_agent_id: None,
+        }
+    }
+
+    pub fn with_target_created_by_agent_id(mut self, value: Option<Arc<str>>) -> Self {
+        self.target_created_by_agent_id = value;
+        self
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum InvocationOutcome {
+    Success(Value),
+    Error(String),
+}
+
+pub trait InvocationEvidenceRecorder: Send + Sync {
+    /// Persist the mandatory invocation envelope before tool side effects and
+    /// return the enriched context that must flow through service/session work.
+    fn begin(
+        &self,
+        context: InvocationContext,
+        start: InvocationStart,
+    ) -> Result<InvocationContext>;
+
+    /// Persist the exact logical handler result/error after it has been
+    /// produced. Failure here must not rewrite the result returned to MCP.
+    fn complete(&self, context: &InvocationContext, outcome: InvocationOutcome) -> Result<()>;
+}

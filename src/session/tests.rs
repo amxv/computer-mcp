@@ -371,8 +371,12 @@ async fn concurrent_sessions_are_independent() {
         slow_mgr
             .exec_command(
                 ExecCommandInput {
-                    cmd: "sleep 1; echo slow".to_string(),
-                    yield_time_ms: Some(2_000),
+                    // Keep this invocation deliberately pending long enough
+                    // that the assertion below proves the unrelated fast
+                    // session can finish without relying on host wall-clock
+                    // scheduling staying below a sub-second threshold.
+                    cmd: "sleep 300; echo slow".to_string(),
+                    yield_time_ms: Some(60_000),
                     workdir: test_workdir(),
                     timeout_ms: None,
                 },
@@ -387,13 +391,12 @@ async fn concurrent_sessions_are_independent() {
 
     let fast_mgr = mgr.clone();
     let fast_cfg = cfg.clone();
-    let fast_started = Instant::now();
     let fast = tokio::spawn(async move {
         fast_mgr
             .exec_command(
                 ExecCommandInput {
                     cmd: "echo fast".to_string(),
-                    yield_time_ms: Some(2_000),
+                    yield_time_ms: Some(60_000),
                     workdir: test_workdir(),
                     timeout_ms: None,
                 },
@@ -405,14 +408,17 @@ async fn concurrent_sessions_are_independent() {
     });
 
     let fast_output = fast.await.expect("fast join");
-    let fast_elapsed = fast_started.elapsed();
-    let slow_output = slow.await.expect("slow join");
-
     assert!(fast_output.output.contains("fast"));
-    assert!(slow_output.output.contains("slow"));
     assert!(
-        fast_elapsed < Duration::from_millis(800),
-        "fast command was unexpectedly delayed: {fast_elapsed:?}"
+        !slow.is_finished(),
+        "unrelated slow command completed before the fast session; fixture no longer proves concurrency"
+    );
+
+    mgr.shutdown_all().await.expect("shutdown slow fixture");
+    let slow_output = slow.await.expect("slow join");
+    assert_eq!(
+        slow_output.termination_reason,
+        Some(TerminationReason::Killed)
     );
 }
 
@@ -764,7 +770,7 @@ async fn output_reports_command_cwd() {
         .exec_command(
             ExecCommandInput {
                 cmd: "pwd".to_string(),
-                yield_time_ms: Some(2_000),
+                yield_time_ms: Some(60_000),
                 workdir: workdir.clone(),
                 timeout_ms: None,
             },
@@ -775,12 +781,14 @@ async fn output_reports_command_cwd() {
         .expect("pwd should complete");
 
     assert_eq!(finished.status, CommandStatus::Exited);
-    assert_eq!(finished.cwd, workdir);
-    assert!(
-        finished
-            .output
-            .contains(dir.path().to_string_lossy().as_ref())
-    );
+    // `ToolOutput.cwd` is the effective process cwd, not the lexical spelling
+    // of the declared workdir. This matters on macOS where /var -> /private/var.
+    let effective_workdir = std::fs::canonicalize(dir.path())
+        .expect("canonical test workdir")
+        .display()
+        .to_string();
+    assert_eq!(finished.cwd, effective_workdir);
+    assert!(finished.output.contains(&effective_workdir));
 }
 
 #[tokio::test]
@@ -959,10 +967,20 @@ async fn concurrent_commands_keep_explicit_workdirs_independent() {
     let (out_a, out_b) = tokio::join!(run(a.clone(), "a"), run(b.clone(), "b"));
     assert_eq!(std::fs::read_to_string(a.join("rooted.txt")).unwrap(), "a");
     assert_eq!(std::fs::read_to_string(b.join("rooted.txt")).unwrap(), "b");
-    assert_eq!(out_a.cwd, a.display().to_string());
-    assert_eq!(out_b.cwd, b.display().to_string());
+    // Live cwd inspection reports the effective physical path. Preserve the
+    // exact declared workdir separately; compare cwd using canonical identity.
+    let effective_a = std::fs::canonicalize(&a)
+        .expect("canonical worktree a")
+        .display()
+        .to_string();
+    let effective_b = std::fs::canonicalize(&b)
+        .expect("canonical worktree b")
+        .display()
+        .to_string();
+    assert_eq!(out_a.cwd, effective_a);
+    assert_eq!(out_b.cwd, effective_b);
     assert!(out_a.output.contains("shared"));
     assert!(out_b.output.contains("shared"));
-    assert!(out_a.output.contains(a.to_string_lossy().as_ref()));
-    assert!(out_b.output.contains(b.to_string_lossy().as_ref()));
+    assert!(out_a.output.contains(&effective_a));
+    assert!(out_b.output.contains(&effective_b));
 }

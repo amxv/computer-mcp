@@ -6,6 +6,8 @@ category: Operations
 summary: How zodex serves `/mcp`, `/health`, and direct HTTP routes through the Sprite origin and Cloudflare Worker proxy.
 ---
 
+This page is **Sprite-specific**. Zodex Local does not require this Cloudflare/Sprite proxy and does not replace it for existing Sprite deployments. Local uses its managed OpenAI Secure MCP Tunnel to reach a separately authenticated loopback MCP listener on the trusted Mac.
+
 ## Public entry point
 
 zodex assumes a proxy-backed public MCP front door for Sprite deployments. The proxy is preferred when the raw Sprite URL is not reliable enough for MCP clients on its own.

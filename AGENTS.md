@@ -7,12 +7,22 @@ Treat the supported product story as:
 - product and operator CLI: `zodex`
 - daemon: `zodexd`
 - primary client focus: ChatGPT MCP sessions
-- primary deployment target: Sprites.dev
+- execution modes:
+  - Sprite: remote Sprite-backed Linux workspace
+  - Local: trusted direct execution on an Apple Silicon Mac
 - default public front door for Sprite deployments: the proxy-backed MCP URL
+- Local front door: the managed OpenAI Secure MCP Tunnel to the authenticated loopback Local MCP server
+- exact ChatGPT-facing tool surface in both modes: `exec_command`, `write_stdin`, `apply_patch`
+- `exec_command` and `apply_patch` always require an explicit absolute existing `workdir`; Local start-directory guidance is not a backend cwd fallback
+- Local has one Mac-wide runtime and one runtime-wide TTL shared by many provider-correlated Agents
+- Local Agent identity comes from provider request metadata and must never be inferred from workdir/timing heuristics
+- Local observability is a separate read-only loopback bearer API/TUI/history surface, not another execution authority
 - default access model: reader GitHub App for read, PR publishing without direct shell write tokens, and operator-chosen write modes for direct push
 - write modes: PR-only, agent-requested push, operator-granted push, timed YOLO, repo-scoped YOLO, and no-TTL YOLO for trusted sessions
 
-Keep the repo, docs, and operator guidance centered on the current `zodex` surface only. Position zodex as a ChatGPT-native remote coding workspace: the MCP tools intentionally resemble the command, stdin, and patch surfaces GPT models already know how to use well.
+Keep the repo, docs, and operator guidance centered on the current `zodex` surface only. Position zodex as ChatGPT-native coding on real machines: remote Sprite Linux or trusted direct Apple Silicon Mac. The MCP tools intentionally resemble the command, stdin, and patch surfaces GPT models already know how to use well.
+
+Do not inspect or use `zodex-mac-sandbox` as implementation guidance. Local's current branch/code/spec is authoritative.
 
 ## Validation Baseline
 
@@ -30,6 +40,21 @@ This runs:
 - `cargo test`
 
 Use `bash scripts/check.sh` as the default full validation command before pushing broad Rust, CLI, runtime, or cross-module changes. The source file size test enforces the 1000 LOC guard for repo-owned source files. Treat unexpected failures in this command as real regressions unless you can prove they come from an unrelated in-flight branch.
+
+For workflow changes also run:
+
+```bash
+actionlint .github/workflows/*.yml
+```
+
+For Local/RMCP contract changes, `bash scripts/check-local-contract.sh` is a useful focused preflight, but it does not replace the full repository gate.
+
+For docs changes run:
+
+```bash
+bun run check
+bun run build
+```
 
 ## Default Access Model
 
