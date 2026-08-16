@@ -9,7 +9,9 @@ use zodex::local::{
 #[cfg(target_os = "macos")]
 use zodex::local::{
     LocalSetupRequest, LocalSetupService, MacDittoArchiveExtractor, MacKeychainRuntimeKeyStore,
-    OfficialTunnelReleaseClient, ProcessTunnelMetadataValidator, TunnelArchitecture,
+    OfficialTunnelReleaseClient, ProcessTunnelMetadataValidator, RuntimeKeyStore,
+    SystemLaunchdController, TunnelArchitecture, paths_from_runtime_bootstrap, run_hidden_runtime,
+    start_via_launchd, stop_via_launchd,
 };
 
 #[derive(Debug, Subcommand)]
@@ -103,8 +105,20 @@ enum LocalCommand {
         #[command(subcommand)]
         command: LocalConfigCommand,
     },
+    /// Show bounded Local lifecycle/tunnel diagnostic logs.
+    #[command(after_help = "Examples:\n  zodex local logs\n  zodex local logs --lines 500")]
+    Logs {
+        /// Number of trailing log lines to print.
+        #[arg(long, default_value_t = 200)]
+        lines: usize,
+    },
     /// Stop Local and normally spawned processes across all Agents.
     Stop,
+    #[command(name = "__runtime", hide = true)]
+    Runtime {
+        #[arg(long, hide = true)]
+        bootstrap: PathBuf,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -128,6 +142,10 @@ enum LocalHistoryCommand {
 }
 
 async fn handle_local_command(command: LocalCommand) -> Result<()> {
+    if let LocalCommand::Runtime { bootstrap } = &command {
+        ensure_local_runtime_host()?;
+        return run_native_hidden_runtime(bootstrap.clone()).await;
+    }
     let paths = LocalPaths::discover()?;
     match command {
         LocalCommand::Setup {
@@ -155,15 +173,15 @@ async fn handle_local_command(command: LocalCommand) -> Result<()> {
         }
         LocalCommand::Start { path, ttl } => {
             let start_dir = resolve_local_start_directory(path.as_deref())?;
-            if let Some(ttl) = ttl.as_deref() {
-                parse_human_duration(ttl)
-                    .with_context(|| format!("invalid Local service TTL `{ttl}`"))?;
-            }
+            let ttl_seconds = ttl
+                .as_deref()
+                .map(|ttl| {
+                    parse_human_duration(ttl)
+                        .with_context(|| format!("invalid Local service TTL `{ttl}`"))
+                })
+                .transpose()?;
             ensure_local_runtime_host()?;
-            bail!(
-                "`zodex local start` lifecycle is not available yet (validated start directory: {})",
-                start_dir.display()
-            )
+            run_native_local_start(&paths, &start_dir, ttl_seconds).await
         }
         LocalCommand::Status { json } => print_local_status(&paths, json),
         LocalCommand::Watch { agent, all } => {
@@ -253,11 +271,105 @@ async fn handle_local_command(command: LocalCommand) -> Result<()> {
             Ok(())
         }
         LocalCommand::Config { command } => handle_local_config(&paths, command),
+        LocalCommand::Logs { lines } => print_local_logs(&paths, lines),
         LocalCommand::Stop => {
             ensure_local_runtime_host()?;
-            bail!("`zodex local stop` lifecycle is not available until the launchd lifecycle phase")
+            run_native_local_stop(&paths).await
         }
+        LocalCommand::Runtime { .. } => unreachable!("hidden runtime handled before path discovery"),
     }
+}
+
+#[cfg(target_os = "macos")]
+async fn run_native_local_start(
+    paths: &LocalPaths,
+    start_directory: &Path,
+    ttl_seconds: Option<u64>,
+) -> Result<()> {
+    let secrets = MacKeychainRuntimeKeyStore;
+    if secrets.get()?.is_none() {
+        bail!("OpenAI tunnel runtime key is missing from Keychain; run `zodex local setup` first");
+    }
+    let config = LocalConfig::load(&paths.config_file())?;
+    if !config.is_provider_configured() {
+        bail!("Zodex Local is not configured; run `zodex local setup` first");
+    }
+    let executable = env::current_exe()
+        .context("failed to resolve installed Zodex executable")?
+        .canonicalize()
+        .context("failed to canonicalize installed Zodex executable")?;
+    let environment = env::vars_os().collect::<Vec<_>>();
+    let launchd = SystemLaunchdController::for_current_user();
+    let outcome = start_via_launchd(
+        paths,
+        &executable,
+        start_directory,
+        ttl_seconds,
+        &environment,
+        &launchd,
+    )
+    .await?;
+    let discovery = &outcome.discovery;
+    println!(
+        "Zodex Local is {}.",
+        if outcome.already_running {
+            "already running"
+        } else {
+            "ready"
+        }
+    );
+    println!("Runtime: {}", discovery.runtime_id);
+    println!("PID: {}", discovery.pid);
+    println!("Start directory: {}", discovery.start_directory.display());
+    if let Some(expires_at) = discovery.expires_at.as_deref() {
+        println!("Expires: {expires_at}");
+    }
+    println!(
+        "Agents: {} ({} active process{})",
+        outcome.current_runtime_agent_count,
+        outcome.active_process_count,
+        if outcome.active_process_count == 1 { "" } else { "es" }
+    );
+    println!("Inspect: zodex local status | zodex local watch");
+    println!("Stop: zodex local stop");
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn run_native_local_start(
+    _paths: &LocalPaths,
+    _start_directory: &Path,
+    _ttl_seconds: Option<u64>,
+) -> Result<()> {
+    bail!("Zodex Local start is only available on macOS")
+}
+
+#[cfg(target_os = "macos")]
+async fn run_native_local_stop(paths: &LocalPaths) -> Result<()> {
+    let launchd = SystemLaunchdController::for_current_user();
+    let outcome = stop_via_launchd(paths, &launchd).await?;
+    println!("Zodex Local stopped ({outcome:?}).");
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn run_native_local_stop(_paths: &LocalPaths) -> Result<()> {
+    bail!("Zodex Local stop is only available on macOS")
+}
+
+#[cfg(target_os = "macos")]
+async fn run_native_hidden_runtime(bootstrap: PathBuf) -> Result<()> {
+    let paths = paths_from_runtime_bootstrap(&bootstrap)?;
+    let secrets = MacKeychainRuntimeKeyStore;
+    let runtime_key = secrets.get()?.context(
+        "OpenAI tunnel runtime key is missing from Keychain; run `zodex local setup` again",
+    )?;
+    run_hidden_runtime(paths, bootstrap, runtime_key).await
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn run_native_hidden_runtime(_bootstrap: PathBuf) -> Result<()> {
+    bail!("hidden Zodex Local runtime is only available on macOS")
 }
 
 fn resolve_local_setup_inputs(
@@ -480,7 +592,48 @@ fn print_local_status(paths: &LocalPaths, json: bool) -> Result<()> {
         println!("History retention error: {error}");
     }
     println!("Discovery: {}", status.discovery_path.display());
-    if status.discovery.is_none() {
+    if let Some(runtime) = status.runtime.as_ref() {
+        println!("Runtime ID: {}", runtime.runtime_id);
+        println!("Lifecycle: {:?}", runtime.lifecycle);
+        if let Some(process) = runtime.process.as_ref() {
+            println!("Runtime PID: {}", process.pid);
+        }
+        if let Some(start_directory) = runtime.start_directory.as_ref() {
+            println!("Start directory: {}", start_directory.display());
+        }
+        if let Some(started_at) = runtime.started_at.as_deref() {
+            println!("Started: {started_at}");
+        }
+        if let Some(expires_at) = runtime.expires_at.as_deref() {
+            println!("Expires: {expires_at}");
+        }
+        println!(
+            "MCP: {}",
+            if runtime.health.mcp_ready { "ready" } else { "not ready" }
+        );
+        println!(
+            "Tunnel: process={} control-plane={} ready={}",
+            runtime.health.tunnel_process_running,
+            runtime.health.tunnel_control_plane_ready,
+            runtime.health.tunnel_ready
+        );
+        println!(
+            "Observability: {}",
+            if runtime.health.observability_ready {
+                "ready"
+            } else {
+                "not ready"
+            }
+        );
+        if let Some(error) = runtime.health.last_error.as_deref() {
+            println!("Runtime health detail: {error}");
+        }
+    }
+    println!("Current-runtime Agents: {}", status.current_runtime_agent_count);
+    println!("Active processes: {}", status.active_process_count);
+    if let Some(discovery) = status.discovery.as_ref() {
+        println!("Observer: {}", discovery.observability.base_url);
+    } else {
         println!("Runtime discovery: inactive");
     }
     match status.state {
@@ -488,6 +641,36 @@ fn print_local_status(paths: &LocalPaths, json: bool) -> Result<()> {
         LocalStatusState::Stopped => println!("Next: zodex local start"),
         LocalStatusState::Running => println!("Next: zodex local watch"),
         LocalStatusState::Stale => println!("Next: zodex local stop"),
+    }
+    Ok(())
+}
+
+fn print_local_logs(paths: &LocalPaths, lines: usize) -> Result<()> {
+    if lines == 0 {
+        return Ok(());
+    }
+    let current = paths.diagnostic_log_file();
+    let rotated = current.with_extension("log.1");
+    let mut text = String::new();
+    for path in [&rotated, &current] {
+        if !path.exists() {
+            continue;
+        }
+        let bytes = fs::read(path)
+            .with_context(|| format!("failed to read Local diagnostic log {}", path.display()))?;
+        text.push_str(&String::from_utf8_lossy(&bytes));
+        if !text.ends_with('\n') {
+            text.push('\n');
+        }
+    }
+    if text.is_empty() {
+        println!("No Local lifecycle diagnostics have been recorded yet.");
+        return Ok(());
+    }
+    let all = text.lines().collect::<Vec<_>>();
+    let start = all.len().saturating_sub(lines);
+    for line in &all[start..] {
+        println!("{line}");
     }
     Ok(())
 }

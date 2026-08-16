@@ -40,6 +40,18 @@ impl LocalPaths {
         self.config_root.join("zodex/local.toml")
     }
 
+    pub(crate) fn config_root(&self) -> &Path {
+        &self.config_root
+    }
+
+    pub(crate) fn data_root(&self) -> &Path {
+        &self.data_root
+    }
+
+    pub(crate) fn state_root(&self) -> &Path {
+        &self.state_root
+    }
+
     pub fn managed_tunnel_client(&self) -> PathBuf {
         self.data_root.join("zodex/bin/tunnel-client")
     }
@@ -80,6 +92,10 @@ impl LocalPaths {
         self.local_state_root().join("runtime")
     }
 
+    pub fn lifecycle_lock_file(&self) -> PathBuf {
+        self.local_state_root().join("lifecycle.lock")
+    }
+
     pub fn runtime_state_file(&self) -> PathBuf {
         self.runtime_dir().join("state.json")
     }
@@ -90,6 +106,38 @@ impl LocalPaths {
 
     pub fn owned_process_registry_file(&self) -> PathBuf {
         self.runtime_dir().join("owned-processes.json")
+    }
+
+    pub fn environment_handoff_file(&self) -> PathBuf {
+        self.runtime_dir().join("environment.json")
+    }
+
+    pub fn runtime_bootstrap_file(&self) -> PathBuf {
+        self.runtime_dir().join("bootstrap.json")
+    }
+
+    pub fn launchd_plist_file(&self) -> PathBuf {
+        self.runtime_dir().join("local-launch-agent.plist")
+    }
+
+    pub fn mcp_token_file(&self) -> PathBuf {
+        self.runtime_dir().join("mcp-token")
+    }
+
+    pub fn tunnel_profile_file(&self) -> PathBuf {
+        self.runtime_dir().join("tunnel-profile.yaml")
+    }
+
+    pub fn tunnel_health_url_file(&self) -> PathBuf {
+        self.runtime_dir().join("tunnel-health-url")
+    }
+
+    pub fn tunnel_process_state_file(&self) -> PathBuf {
+        self.runtime_dir().join("tunnel-process.json")
+    }
+
+    pub fn diagnostic_log_file(&self) -> PathBuf {
+        self.logs_dir().join("local-runtime.log")
     }
 
     pub fn ensure_persistent_dirs(&self) -> Result<()> {

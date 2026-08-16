@@ -2,6 +2,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 
@@ -22,6 +23,7 @@ pub struct LocalHostRuntimeOptions {
     pub environment: Vec<(OsString, OsString)>,
     pub mcp_token: Arc<str>,
     pub shared_runtime_config: Arc<Config>,
+    pub runtime_id: Option<Arc<str>>,
 }
 
 pub struct LocalHostRuntime {
@@ -79,27 +81,63 @@ impl LocalHostRuntime {
         self.history.runtime_id()
     }
 
+    /// Close the side-effect admission boundary before external ingress is
+    /// removed. The lifecycle owner calls this before terminating the tunnel.
+    pub async fn close_admission(&self) {
+        self.service.close_admission().await;
+        self.mcp_server.request_shutdown();
+    }
+
     pub async fn shutdown(self) -> Result<()> {
+        self.close_admission().await;
         let Self {
             service,
             mcp_server,
             observability_server,
             history,
         } = self;
-        // Stop accepting new MCP traffic before closing session admission, but
-        // do not await graceful HTTP drain first: an in-flight long-yield tool
-        // call must be preempted by whole-runtime session shutdown rather than
-        // delaying it.
-        mcp_server.request_shutdown();
-        let session_shutdown = service.shutdown_sessions().await;
-        let mcp_shutdown = mcp_server.shutdown().await;
-        session_shutdown?;
-        mcp_shutdown?;
-        tokio::task::spawn_blocking(move || history.shutdown_blocking())
-            .await
-            .map_err(|error| anyhow::anyhow!("Local history shutdown task failed: {error}"))??;
-        observability_server.shutdown().await?;
-        Ok(())
+        let mut first_error = None;
+        if let Err(error) = service.shutdown_sessions().await {
+            first_error = Some(error.context("failed to stop Local command sessions"));
+        }
+        if let Err(error) = mcp_server.shutdown().await
+            && first_error.is_none()
+        {
+            first_error = Some(error.context("failed to stop Local MCP listener"));
+        }
+        if let Err(error) = shutdown_history_bounded(history).await
+            && first_error.is_none()
+        {
+            first_error = Some(error.context("failed to finalize Local history"));
+        }
+        if let Err(error) = observability_server.shutdown().await
+            && first_error.is_none()
+        {
+            first_error = Some(error.context("failed to stop Local observability listener"));
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+}
+
+const HISTORY_SHUTDOWN_OUTER_TIMEOUT: Duration = Duration::from_secs(15);
+
+async fn shutdown_history_bounded(history: Arc<LocalHistoryRuntime>) -> Result<()> {
+    let (completed, result) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name("zodex-local-history-shutdown".to_string())
+        .spawn(move || {
+            let _ = completed.send(history.shutdown_blocking());
+        })
+        .context("failed to start bounded Local history shutdown")?;
+    match tokio::time::timeout(HISTORY_SHUTDOWN_OUTER_TIMEOUT, result).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(_)) => Err(anyhow::anyhow!(
+            "Local history shutdown worker ended without reporting a result"
+        )),
+        Err(_) => Err(anyhow::anyhow!(
+            "Local history shutdown exceeded the bounded {}s deadline; runtime shutdown will continue",
+            HISTORY_SHUTDOWN_OUTER_TIMEOUT.as_secs()
+        )),
     }
 }
 
@@ -112,9 +150,12 @@ pub async fn start_local_host_runtime(
         options.paths.owned_process_registry_file(),
     )?);
     let local_config = LocalConfig::load(&options.paths.config_file())?;
+    let runtime_id = options
+        .runtime_id
+        .unwrap_or_else(|| Arc::<str>::from(format!("{:032x}", rand::random::<u128>())));
     let history = LocalHistoryRuntime::open(LocalHistoryRuntimeConfig::new(
         options.paths.history_database(),
-        format!("{:032x}", rand::random::<u128>()),
+        runtime_id,
         local_config.history.max_age.seconds(),
         local_config.history.max_size.bytes(),
     ))?;
@@ -207,6 +248,7 @@ mod tests {
             ],
             mcp_token: "mcp-only-token".into(),
             shared_runtime_config: Config::default().into(),
+            runtime_id: Some("runtime-fixture".into()),
         })
         .await
         .unwrap();

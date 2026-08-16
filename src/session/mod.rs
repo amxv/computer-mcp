@@ -34,7 +34,7 @@ pub use policy::{
 };
 pub use process::{
     ProcessBirthIdentity, ProcessControl, ProcessIdentity, ProcessInspector, ProcessSignal,
-    SystemProcessInspector, identity_matches,
+    SystemProcessInspector, identity_matches, signal_process_if_matching,
 };
 
 const POLL_INTERVAL_MS: u64 = 30;

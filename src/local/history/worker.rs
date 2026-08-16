@@ -28,6 +28,8 @@ use super::store::{
     normalize_declared_workdir, now_ms,
 };
 
+mod output_queue;
+
 const DEFAULT_OUTPUT_QUEUE_CAPACITY: usize = 4096;
 const OUTPUT_BATCH_LIMIT: usize = 128;
 const OUTPUT_BATCH_WAIT: Duration = Duration::from_millis(25);
@@ -207,6 +209,7 @@ pub struct LocalHistoryRuntime {
     runtime_id: Arc<str>,
     events: Arc<HistoryEventHub>,
     sender: SyncSender<WorkerMessage>,
+    output_overflow: Mutex<output_queue::OutputOverflow>,
     worker: Mutex<Option<JoinHandle<()>>>,
     health: Arc<HistoryHealth>,
     file_evidence: Mutex<HashMap<i64, Vec<PendingFileEvidence>>>,
@@ -264,6 +267,7 @@ impl LocalHistoryRuntime {
             runtime_id,
             events,
             sender,
+            output_overflow: Mutex::new(output_queue::OutputOverflow::default()),
             worker: Mutex::new(Some(worker)),
             health,
             file_evidence: Mutex::new(HashMap::new()),
@@ -429,38 +433,6 @@ impl LocalHistoryRuntime {
             Ok(())
         }
     }
-
-    fn try_enqueue(
-        &self,
-        message: WorkerMessage,
-        invocation_id: i64,
-        evidence_kind: &str,
-        loses_output: bool,
-    ) -> Result<()> {
-        match self.sender.try_send(message) {
-            Ok(()) => Ok(()),
-            Err(TrySendError::Full(_)) => {
-                let reason = format!("Local history {evidence_kind} queue is full");
-                if loses_output {
-                    self.health.note_capture_incomplete(invocation_id);
-                } else {
-                    self.health.note_evidence_incomplete(invocation_id);
-                }
-                self.health.degrade_nonblocking(&reason);
-                bail!(reason)
-            }
-            Err(TrySendError::Disconnected(_)) => {
-                let reason = format!("Local history {evidence_kind} writer is unavailable");
-                if loses_output {
-                    self.health.note_capture_incomplete(invocation_id);
-                } else {
-                    self.health.note_evidence_incomplete(invocation_id);
-                }
-                self.health.degrade_nonblocking(&reason);
-                bail!(reason)
-            }
-        }
-    }
 }
 
 impl InvocationEvidenceRecorder for LocalHistoryRuntime {
@@ -610,17 +582,15 @@ impl SessionOutputObserver for LocalHistoryRuntime {
                 return;
             }
         };
-        let _ = self.try_enqueue(
-            WorkerMessage::Output(OutputEvent::Chunk {
+        self.try_enqueue_output_chunk(
+            OutputEvent::Chunk {
                 invocation_id,
                 agent_id: chunk.invocation.agent_id.as_deref().map(str::to_owned),
                 sequence: chunk.sequence,
                 observed_at_ms,
                 text: chunk.text,
-            }),
+            },
             invocation_id,
-            "output",
-            true,
         );
     }
 
@@ -628,14 +598,12 @@ impl SessionOutputObserver for LocalHistoryRuntime {
         let Some(invocation_id) = completion.invocation.invocation_id else {
             return;
         };
-        let _ = self.try_enqueue(
+        self.enqueue_output_completion(
             WorkerMessage::Output(OutputEvent::Complete {
                 invocation_id,
                 agent_id: completion.invocation.agent_id.as_deref().map(str::to_owned),
             }),
             invocation_id,
-            "output",
-            true,
         );
     }
 }

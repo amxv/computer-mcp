@@ -77,7 +77,7 @@ pub fn identity_matches(
     Ok(inspector.identity(expected.pid)?.as_ref() == Some(expected))
 }
 
-pub(crate) fn signal_process_if_matching(
+pub fn signal_process_if_matching(
     inspector: &dyn ProcessInspector,
     expected: &ProcessIdentity,
     signal: ProcessSignal,

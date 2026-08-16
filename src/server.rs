@@ -39,7 +39,9 @@ const DEFAULT_MCP_INSTRUCTIONS: &str = "zodex remote execution tools";
 
 mod local;
 
-pub use local::{LocalMcpServer, LocalMcpServerConfig, start_local_mcp_server};
+pub use local::{
+    LOCAL_MCP_TOKEN_HEADER, LocalMcpServer, LocalMcpServerConfig, start_local_mcp_server,
+};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct ProviderMetadata {

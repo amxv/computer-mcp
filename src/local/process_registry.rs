@@ -137,6 +137,13 @@ pub fn signal_matching_stale_processes(
     Ok(report)
 }
 
+pub fn active_process_record_count(registry_path: &Path) -> Result<usize> {
+    if !registry_path.exists() {
+        return Ok(0);
+    }
+    Ok(load_document(registry_path)?.processes.len())
+}
+
 fn load_document(path: &Path) -> Result<LocalProcessRegistryDocument> {
     let raw = fs::read(path)
         .with_context(|| format!("failed to read Local process registry {}", path.display()))?;

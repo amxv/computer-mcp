@@ -186,7 +186,7 @@ pub struct HistoryStoreStatus {
 pub struct LocalHistoryReader;
 
 impl LocalHistoryReader {
-    pub(crate) fn agent_count(path: &Path, runtime_id: Option<&str>) -> Result<usize> {
+    pub fn agent_count(path: &Path, runtime_id: Option<&str>) -> Result<usize> {
         if !path.exists() {
             return Ok(0);
         }

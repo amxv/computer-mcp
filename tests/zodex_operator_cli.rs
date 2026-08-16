@@ -162,7 +162,7 @@ fn zodex_local_first_run_status_json_is_versioned_and_unconfigured() {
     assert!(output.status.success());
     let value: Value = serde_json::from_slice(&output.stdout).unwrap();
 
-    assert_eq!(value["schema_version"], 2);
+    assert_eq!(value["schema_version"], 3);
     assert_eq!(value["configured"], false);
     assert_eq!(value["state"], "unconfigured");
     assert_eq!(value["history"]["max_age"], "60d");

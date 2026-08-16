@@ -10,6 +10,8 @@ mod maintenance_tests;
 #[cfg(test)]
 mod migration_tests;
 #[cfg(test)]
+mod output_completion_tests;
+#[cfg(test)]
 mod recovery_tests;
 #[cfg(test)]
 mod shutdown_tests;

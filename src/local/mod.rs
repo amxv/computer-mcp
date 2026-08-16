@@ -1,6 +1,14 @@
 mod config;
+mod environment_handoff;
 mod file_evidence;
 mod history;
+mod launchd;
+mod lifecycle;
+mod lifecycle_artifacts;
+mod lifecycle_context;
+mod lifecycle_lock;
+#[cfg(test)]
+mod lifecycle_tests;
 mod observability;
 mod parse;
 mod paths;
@@ -10,6 +18,7 @@ mod runtime;
 mod secret;
 mod setup;
 mod status;
+mod tunnel;
 mod tunnel_provider;
 mod tunnel_release;
 mod watch;
@@ -18,10 +27,23 @@ mod watch;
 mod setup_tests;
 
 pub use config::{LocalConfig, LocalHistoryConfig, LocalTunnelConfig, ManagedTunnelClientRelease};
+pub use environment_handoff::{consume_environment_handoff, write_environment_handoff};
 pub use history::{
     HISTORY_SCHEMA_VERSION, HistoryAgentSummary, HistoryAgentWorkdir, HistoryFileEvidence,
     HistoryFormat, HistoryInvocation, HistoryQuery, HistoryStoreStatus, LocalHistoryReader,
     LocalHistoryRuntime, LocalHistoryRuntimeConfig, clear_local_history,
+};
+pub use launchd::{
+    LOCAL_LAUNCHD_LABEL, LaunchdController, LocalLaunchdJob, SystemLaunchdController,
+};
+pub use lifecycle::{
+    LOCAL_RUNTIME_BOOTSTRAP_SCHEMA_VERSION, LocalRuntimeBootstrap, LocalStartOutcome,
+    LocalStopOutcome, PreparedLocalLaunch, cleanup_stale_runtime, load_runtime_bootstrap,
+    prepare_local_launch, probe_local_mcp, run_hidden_runtime, start_via_launchd, stop_via_launchd,
+    wait_for_runtime_ready,
+};
+pub use lifecycle_context::{
+    paths_from_runtime_bootstrap, resolve_developer_shell, validate_runtime_start_directory,
 };
 pub use observability::{
     LOCAL_OBSERVABILITY_API_VERSION, LocalObservabilityServer, start_local_observability_server,
@@ -36,7 +58,8 @@ pub use presentation::{
 };
 pub use process_registry::{
     LOCAL_PROCESS_REGISTRY_SCHEMA_VERSION, LocalOwnedProcessRecord, LocalOwnedProcessRegistry,
-    LocalProcessRegistryDocument, StaleProcessCleanupReport, signal_matching_stale_processes,
+    LocalProcessRegistryDocument, StaleProcessCleanupReport, active_process_record_count,
+    signal_matching_stale_processes,
 };
 pub use runtime::{LocalHostRuntime, LocalHostRuntimeOptions, start_local_host_runtime};
 #[cfg(target_os = "macos")]
@@ -48,8 +71,15 @@ pub use setup::{
 pub use status::{
     LOCAL_DISCOVERY_SCHEMA_VERSION, LOCAL_RUNTIME_STATE_SCHEMA_VERSION,
     LOCAL_STATUS_SCHEMA_VERSION, LocalObservabilityDiscovery, LocalRuntimeDiscovery,
-    LocalRuntimeLifecycle, LocalRuntimeState, LocalStatusDocument, LocalStatusState,
-    ensure_offline_mutation, load_runtime_discovery,
+    LocalRuntimeHealth, LocalRuntimeLifecycle, LocalRuntimeState, LocalStatusDocument,
+    LocalStatusState, ensure_offline_mutation, load_runtime_discovery, load_runtime_state,
+    write_runtime_discovery, write_runtime_state,
+};
+pub use tunnel::{
+    LOCAL_TUNNEL_PROCESS_STATE_SCHEMA_VERSION, LOCAL_TUNNEL_PROFILE_MAX_CONCURRENT_REQUESTS,
+    LocalTunnelProfile, ManagedTunnelChild, StaleTunnelCleanup, TunnelHealthEvidence,
+    TunnelProcessState, cleanup_stale_tunnel_child, load_tunnel_process_state, probe_tunnel_health,
+    spawn_tunnel_client, write_mcp_token, write_tunnel_process_state, write_tunnel_profile,
 };
 #[cfg(target_os = "macos")]
 pub use tunnel_provider::MacDittoArchiveExtractor;

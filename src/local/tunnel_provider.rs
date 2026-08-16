@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use super::RuntimeKey;
 
-const PROVIDER_ENV_ALLOWLIST: &[&str] = &[
+pub(crate) const PROVIDER_ENV_ALLOWLIST: &[&str] = &[
     "HTTP_PROXY",
     "HTTPS_PROXY",
     "NO_PROXY",
@@ -108,17 +108,32 @@ fn apply_provider_environment(
     inherited: &[(OsString, OsString)],
     runtime_key: &RuntimeKey,
 ) {
+    for (key, value) in provider_environment(inherited, runtime_key) {
+        command.env(key, value);
+    }
+}
+
+pub(crate) fn provider_environment(
+    inherited: &[(OsString, OsString)],
+    runtime_key: &RuntimeKey,
+) -> Vec<(OsString, OsString)> {
+    let mut environment = Vec::new();
     for (key, value) in inherited {
         if PROVIDER_ENV_ALLOWLIST
             .iter()
             .any(|allowed| key.as_os_str() == OsStr::new(allowed))
         {
-            command.env(key, value);
+            environment.push((key.clone(), value.clone()));
         }
     }
-    // Set exactly the runtime credential the operator supplied. env_clear above
-    // deliberately excludes OPENAI_ADMIN_KEY and the OPENAI_API_KEY fallback.
-    command.env("CONTROL_PLANE_API_KEY", runtime_key.expose());
+    // Set exactly the runtime credential the operator supplied. The spawning
+    // command uses env_clear, so ambient admin/fallback OpenAI credentials are
+    // deliberately absent.
+    environment.push((
+        OsString::from("CONTROL_PLANE_API_KEY"),
+        OsString::from(runtime_key.expose()),
+    ));
+    environment
 }
 
 #[cfg(target_os = "macos")]

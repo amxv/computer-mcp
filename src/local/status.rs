@@ -1,23 +1,41 @@
-use std::fs;
-use std::path::PathBuf;
+use std::fs::{self, OpenOptions};
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
+use crate::session::{ProcessIdentity, ProcessInspector, SystemProcessInspector, identity_matches};
+
 use super::{
     LOCAL_OBSERVABILITY_API_VERSION, LocalConfig, LocalHistoryReader, LocalPaths,
-    PRESENTATION_SCHEMA_VERSION,
+    PRESENTATION_SCHEMA_VERSION, active_process_record_count,
 };
 
-pub const LOCAL_STATUS_SCHEMA_VERSION: u32 = 2;
+pub const LOCAL_STATUS_SCHEMA_VERSION: u32 = 3;
 pub const LOCAL_DISCOVERY_SCHEMA_VERSION: u32 = 1;
-pub const LOCAL_RUNTIME_STATE_SCHEMA_VERSION: u32 = 1;
+pub const LOCAL_RUNTIME_STATE_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LocalRuntimeState {
     pub schema_version: u32,
     pub runtime_id: String,
     pub lifecycle: LocalRuntimeLifecycle,
+    pub process: Option<ProcessIdentity>,
+    pub start_directory: Option<PathBuf>,
+    pub started_at: Option<String>,
+    pub expires_at: Option<String>,
+    pub health: LocalRuntimeHealth,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct LocalRuntimeHealth {
+    pub mcp_ready: bool,
+    pub observability_ready: bool,
+    pub tunnel_process_running: bool,
+    pub tunnel_control_plane_ready: bool,
+    pub tunnel_ready: bool,
+    pub last_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -70,7 +88,10 @@ pub struct LocalStatusDocument {
     pub config_path: PathBuf,
     pub runtime_state_path: PathBuf,
     pub discovery_path: PathBuf,
+    pub runtime: Option<LocalRuntimeState>,
     pub discovery: Option<LocalRuntimeDiscovery>,
+    pub current_runtime_agent_count: usize,
+    pub active_process_count: usize,
     pub history: LocalHistoryStatus,
 }
 
@@ -100,24 +121,54 @@ pub struct LocalHistoryStatus {
 
 impl LocalStatusDocument {
     pub fn inspect(paths: &LocalPaths) -> Result<Self> {
+        Self::inspect_with_process_inspector(paths, &SystemProcessInspector)
+    }
+
+    pub fn inspect_with_process_inspector(
+        paths: &LocalPaths,
+        inspector: &dyn ProcessInspector,
+    ) -> Result<Self> {
         let config_path = paths.config_file();
         let config_exists = config_path.exists();
         let config = LocalConfig::load(&config_path)?;
         let runtime_state_path = paths.runtime_state_file();
         let discovery_path = paths.discovery_file();
-        let runtime_state_present = runtime_state_path.exists();
+        let runtime = load_runtime_state(paths)?;
         let discovery = load_runtime_discovery(paths)?;
         let history_store = LocalHistoryReader::status(&paths.history_database())?;
 
-        let state = if runtime_state_present || discovery.is_some() {
-            // Phase 2 deliberately does not claim a process is live merely because an
-            // ephemeral marker survived. Native identity verification lands with lifecycle.
+        let runtime_live = match runtime.as_ref().and_then(|state| state.process.as_ref()) {
+            Some(expected) => identity_matches(inspector, expected)?,
+            None => false,
+        };
+        let discovery_consistent = match (&runtime, &discovery) {
+            (Some(runtime), Some(discovery)) => runtime.runtime_id == discovery.runtime_id,
+            _ => true,
+        };
+        let markers_present = runtime.is_some() || discovery.is_some();
+        let state = if runtime_live && discovery_consistent {
+            LocalStatusState::Running
+        } else if markers_present {
             LocalStatusState::Stale
         } else if !config_exists || !config.is_provider_configured() {
             LocalStatusState::Unconfigured
         } else {
             LocalStatusState::Stopped
         };
+
+        let (current_runtime_agent_count, active_process_count) =
+            if state == LocalStatusState::Running {
+                let runtime_id = runtime
+                    .as_ref()
+                    .map(|runtime| runtime.runtime_id.as_str())
+                    .context("running Local status is missing runtime identity")?;
+                (
+                    LocalHistoryReader::agent_count(&paths.history_database(), Some(runtime_id))?,
+                    active_process_record_count(&paths.owned_process_registry_file())?,
+                )
+            } else {
+                (0, 0)
+            };
 
         Ok(Self {
             schema_version: LOCAL_STATUS_SCHEMA_VERSION,
@@ -126,7 +177,10 @@ impl LocalStatusDocument {
             config_path,
             runtime_state_path,
             discovery_path,
+            runtime,
             discovery,
+            current_runtime_agent_count,
+            active_process_count,
             history: LocalHistoryStatus {
                 database_path: paths.history_database(),
                 database_exists: history_store.database_exists,
@@ -145,6 +199,40 @@ impl LocalStatusDocument {
     }
 }
 
+pub fn load_runtime_state(paths: &LocalPaths) -> Result<Option<LocalRuntimeState>> {
+    load_versioned_json(
+        &paths.runtime_state_file(),
+        LOCAL_RUNTIME_STATE_SCHEMA_VERSION,
+        "runtime state",
+        |state: &LocalRuntimeState| state.schema_version,
+    )
+}
+
+pub fn write_runtime_state(paths: &LocalPaths, state: &LocalRuntimeState) -> Result<()> {
+    if state.schema_version != LOCAL_RUNTIME_STATE_SCHEMA_VERSION {
+        bail!(
+            "refusing to write Local runtime state schema version {}; expected {}",
+            state.schema_version,
+            LOCAL_RUNTIME_STATE_SCHEMA_VERSION
+        );
+    }
+    write_user_only_json_atomic(&paths.runtime_state_file(), state)
+}
+
+pub fn write_runtime_discovery(
+    paths: &LocalPaths,
+    discovery: &LocalRuntimeDiscovery,
+) -> Result<()> {
+    if discovery.schema_version != LOCAL_DISCOVERY_SCHEMA_VERSION {
+        bail!(
+            "refusing to write Local discovery schema version {}; expected {}",
+            discovery.schema_version,
+            LOCAL_DISCOVERY_SCHEMA_VERSION
+        );
+    }
+    write_user_only_json_atomic(&paths.discovery_file(), discovery)
+}
+
 pub fn ensure_offline_mutation(paths: &LocalPaths, operation: &str) -> Result<()> {
     for marker in [paths.runtime_state_file(), paths.discovery_file()] {
         if marker.exists() {
@@ -158,23 +246,95 @@ pub fn ensure_offline_mutation(paths: &LocalPaths, operation: &str) -> Result<()
 }
 
 pub fn load_runtime_discovery(paths: &LocalPaths) -> Result<Option<LocalRuntimeDiscovery>> {
-    let path = paths.discovery_file();
+    load_versioned_json(
+        &paths.discovery_file(),
+        LOCAL_DISCOVERY_SCHEMA_VERSION,
+        "discovery",
+        |discovery: &LocalRuntimeDiscovery| discovery.schema_version,
+    )
+}
+
+fn load_versioned_json<T>(
+    path: &Path,
+    expected_schema: u32,
+    label: &str,
+    schema: impl FnOnce(&T) -> u32,
+) -> Result<Option<T>>
+where
+    T: for<'de> Deserialize<'de>,
+{
     if !path.exists() {
         return Ok(None);
     }
-    let raw = fs::read_to_string(&path)
-        .with_context(|| format!("failed to read Local discovery at {}", path.display()))?;
-    let discovery: LocalRuntimeDiscovery = serde_json::from_str(&raw)
-        .with_context(|| format!("failed to parse Local discovery at {}", path.display()))?;
-    if discovery.schema_version != LOCAL_DISCOVERY_SCHEMA_VERSION {
+    let raw = fs::read(path)
+        .with_context(|| format!("failed to read Local {label} at {}", path.display()))?;
+    let value: T = serde_json::from_slice(&raw)
+        .with_context(|| format!("failed to parse Local {label} at {}", path.display()))?;
+    let actual = schema(&value);
+    if actual != expected_schema {
         bail!(
-            "unsupported Local discovery schema version {} at {}; expected {}",
-            discovery.schema_version,
-            path.display(),
-            LOCAL_DISCOVERY_SCHEMA_VERSION
+            "unsupported Local {label} schema version {actual} at {}; expected {expected_schema}",
+            path.display()
         );
     }
-    Ok(Some(discovery))
+    Ok(Some(value))
+}
+
+fn write_user_only_json_atomic(path: &Path, value: &impl Serialize) -> Result<()> {
+    let parent = path
+        .parent()
+        .context("Local runtime JSON path has no parent")?;
+    fs::create_dir_all(parent).with_context(|| {
+        format!(
+            "failed to create Local runtime directory {}",
+            parent.display()
+        )
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(parent, fs::Permissions::from_mode(0o700))
+            .with_context(|| format!("failed to set 0700 permissions on {}", parent.display()))?;
+    }
+    let encoded =
+        serde_json::to_vec_pretty(value).context("failed to encode Local runtime JSON")?;
+    let temp = parent.join(format!(
+        ".{}.{}.{:016x}.tmp",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("state"),
+        std::process::id(),
+        rand::random::<u64>()
+    ));
+    let result = (|| -> Result<()> {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temp).with_context(|| {
+            format!("failed to create temporary Local state {}", temp.display())
+        })?;
+        file.write_all(&encoded)
+            .with_context(|| format!("failed to write temporary Local state {}", temp.display()))?;
+        file.sync_all()
+            .with_context(|| format!("failed to sync temporary Local state {}", temp.display()))?;
+        fs::rename(&temp, path)
+            .with_context(|| format!("failed to publish Local state {}", path.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+                .with_context(|| format!("failed to set 0600 permissions on {}", path.display()))?;
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    result
 }
 
 #[cfg(test)]
@@ -187,6 +347,7 @@ mod tests {
         LocalRuntimeState, LocalStatusDocument, LocalStatusState, ensure_offline_mutation,
     };
     use crate::local::{LocalConfig, LocalPaths, ManagedTunnelClientRelease};
+    use crate::session::{ProcessInspector, SystemProcessInspector};
 
     fn test_paths() -> (tempfile::TempDir, LocalPaths) {
         let dir = tempdir().unwrap();
@@ -203,7 +364,7 @@ mod tests {
     fn first_run_status_is_versioned_and_unconfigured() {
         let (_dir, paths) = test_paths();
         let status = LocalStatusDocument::inspect(&paths).unwrap();
-        assert_eq!(status.schema_version, 2);
+        assert_eq!(status.schema_version, 3);
         assert!(!status.configured);
         assert_eq!(status.state, LocalStatusState::Unconfigured);
         assert_eq!(status.history.max_age_seconds, 60 * 24 * 60 * 60);
@@ -220,6 +381,11 @@ mod tests {
             schema_version: LOCAL_RUNTIME_STATE_SCHEMA_VERSION,
             runtime_id: "runtime-test".to_string(),
             lifecycle: LocalRuntimeLifecycle::Ready,
+            process: None,
+            start_directory: None,
+            started_at: None,
+            expires_at: None,
+            health: Default::default(),
         };
         std::fs::write(
             paths.runtime_state_file(),
@@ -286,5 +452,69 @@ mod tests {
         let status = LocalStatusDocument::inspect(&paths).unwrap();
         assert!(status.configured);
         assert_eq!(status.state, LocalStatusState::Stopped);
+    }
+
+    #[test]
+    fn running_status_counts_persisted_active_process_records_without_trusting_discovery_alone() {
+        let (_dir, paths) = test_paths();
+        let inspector = SystemProcessInspector;
+        let process = inspector
+            .identity(std::process::id() as i32)
+            .unwrap()
+            .unwrap();
+        let state = LocalRuntimeState {
+            schema_version: LOCAL_RUNTIME_STATE_SCHEMA_VERSION,
+            runtime_id: "runtime-counts".to_string(),
+            lifecycle: LocalRuntimeLifecycle::Ready,
+            process: Some(process.clone()),
+            start_directory: Some("/tmp".into()),
+            started_at: Some("2026-08-16T00:00:00Z".to_string()),
+            expires_at: None,
+            health: super::LocalRuntimeHealth {
+                mcp_ready: true,
+                observability_ready: true,
+                tunnel_process_running: true,
+                tunnel_control_plane_ready: true,
+                tunnel_ready: true,
+                last_error: None,
+            },
+        };
+        super::write_runtime_state(&paths, &state).unwrap();
+        super::write_runtime_discovery(
+            &paths,
+            &LocalRuntimeDiscovery {
+                schema_version: LOCAL_DISCOVERY_SCHEMA_VERSION,
+                runtime_id: state.runtime_id.clone(),
+                pid: std::process::id(),
+                start_directory: "/tmp".into(),
+                started_at: state.started_at.clone().unwrap(),
+                expires_at: None,
+                observability: LocalObservabilityDiscovery::active(
+                    "http://127.0.0.1:41000",
+                    paths.observability_bearer_file(),
+                ),
+            },
+        )
+        .unwrap();
+        std::fs::write(
+            paths.owned_process_registry_file(),
+            serde_json::to_vec(&crate::local::LocalProcessRegistryDocument {
+                schema_version: crate::local::LOCAL_PROCESS_REGISTRY_SCHEMA_VERSION,
+                processes: vec![crate::local::LocalOwnedProcessRecord {
+                    internal_session_id: 1,
+                    session_handle: "fixture".to_string(),
+                    identity: process,
+                    created_by_agent_id: None,
+                    invocation_correlation_id: None,
+                }],
+            })
+            .unwrap(),
+        )
+        .unwrap();
+
+        let status = LocalStatusDocument::inspect(&paths).unwrap();
+        assert_eq!(status.state, LocalStatusState::Running);
+        assert_eq!(status.current_runtime_agent_count, 0);
+        assert_eq!(status.active_process_count, 1);
     }
 }
