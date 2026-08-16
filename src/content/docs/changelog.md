@@ -8,6 +8,14 @@ summary: Version-by-version changes for the zodex CLI, agent runtime, proxy, pub
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.3.0 — 2026-08-17
+
+- Added Zodex Local for trusted direct ChatGPT coding on Apple Silicon Macs through a managed OpenAI Secure MCP Tunnel, Keychain-backed credentials, and explicit launchd lifecycle.
+- Added one Mac-wide, multi-Agent Local runtime with provider-correlated Agent identities, explicit absolute workdirs, runtime-wide TTL enforcement, and comprehensive child-process cleanup.
+- Added durable Local invocation history, normalized file and command evidence, a read-only loopback observability API with SSE, and the `zodex local watch` TUI.
+- Hardened command session reaping, output finalization, Local shutdown, tunnel readiness, and stalled launchd startup recovery.
+- Added native Apple Silicon Local CI coverage, release-package safety checks, and faster Sprite agent source builds through persistent Cargo caches.
+
 ## 0.2.27 — 2026-08-16
 
 - Allowed authenticated public Sprite MCP requests to pass RMCP 3's loopback-oriented host validation, restoring direct and proxy-backed connector access while retaining strict host validation for Local loopback servers.
