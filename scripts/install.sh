@@ -59,7 +59,7 @@ die() {
 
 cleanup() {
   if [[ -n "${TMP_DIR}" && -d "${TMP_DIR}" ]]; then
-    rm -rf "${TMP_DIR}"
+    /bin/rm -rf "${TMP_DIR}"
   fi
 }
 
@@ -256,11 +256,11 @@ install_operator_binary_atomically() {
   temporary="$(mktemp "${destination_dir}/.zodex-install.XXXXXX")"
 
   if ! install -m 0755 "${source}" "${temporary}"; then
-    rm -f "${temporary}"
+    /bin/rm -f "${temporary}"
     return 1
   fi
   if ! mv -f "${temporary}" "${destination}"; then
-    rm -f "${temporary}"
+    /bin/rm -f "${temporary}"
     return 1
   fi
 }
@@ -484,7 +484,7 @@ install_binaries_from_dir() {
   if [[ "${ZODEX_INSTALL_OPERATOR_CLI}" == "1" ]]; then
     install -m 0755 "${cli_src}" "${ZODEX_INSTALL_DIR}/zodex"
   else
-    rm -f "${ZODEX_INSTALL_DIR}/zodex"
+    /bin/rm -f "${ZODEX_INSTALL_DIR}/zodex"
   fi
   install -m 0755 "${src_dir}/zodex-agent" "${ZODEX_INSTALL_DIR}/zodex-agent"
   install -m 0755 "${src_dir}/git-remote-zodex" "${ZODEX_INSTALL_DIR}/git-remote-zodex"

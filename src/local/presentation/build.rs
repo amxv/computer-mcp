@@ -413,7 +413,7 @@ fn is_poll(record: &HistoryInvocation) -> bool {
             .arguments
             .get("chars")
             .and_then(serde_json::Value::as_str)
-            .is_none()
+            .is_none_or(|chars| chars.is_empty())
         && !record
             .arguments
             .get("kill_process")

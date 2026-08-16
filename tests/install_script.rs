@@ -26,6 +26,7 @@ fn install_script_has_expected_structure() {
         "operator_local_runtime_dir()",
         "ensure_local_stopped_before_operator_replace()",
         "install_operator_binary_atomically()",
+        "/bin/rm -rf \"${TMP_DIR}\"",
         "zodex operator CLI installed.",
         "ZODEX_ASSET_URL",
         "ZODEX_BINARY_SOURCE_DIR",
@@ -104,6 +105,12 @@ fn install_script_has_expected_structure() {
             "install script missing snippet: {snippet}"
         );
     }
+    assert!(
+        script
+            .lines()
+            .all(|line| !line.trim_start().starts_with("rm -")),
+        "installer cleanup must bypass user PATH wrappers with /bin/rm"
+    );
 }
 
 #[test]

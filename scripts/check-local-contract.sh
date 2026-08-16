@@ -4,7 +4,7 @@ set -euo pipefail
 plan="gg/zodex-local/zodex-local-implementation-plan-2026-08-15.md"
 acceptance="gg/zodex-local/zodex-local-acceptance.md"
 tmpdir="$(mktemp -d)"
-trap 'rm -rf "$tmpdir"' EXIT
+trap '/bin/rm -rf "$tmpdir"' EXIT
 
 # The acceptance closure deliberately derives the criterion set from the
 # current plan instead of baking in the planning-time count. Any later

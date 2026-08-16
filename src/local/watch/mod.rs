@@ -198,11 +198,10 @@ async fn apply_live_update(
         }
     } else if let Some(invocation_id) = invocation_id {
         if !known {
-            match client.invocation(invocation_id).await {
-                Ok(detail) => app.merge_detail(detail),
-                Err(error) => app.set_degraded(format!(
+            if let Err(error) = merge_live_detail(client, app, invocation_id).await {
+                app.set_degraded(format!(
                     "live invocation {invocation_id} could not be loaded: {error:#}"
-                )),
+                ));
             }
         } else if live.event_type == "output" {
             if let Some(text) = live.payload.get("text").and_then(serde_json::Value::as_str) {
@@ -211,16 +210,40 @@ async fn apply_live_update(
         } else if matches!(
             live.event_type.as_str(),
             "presentation_updated" | "invocation_completed"
-        ) {
-            match client.invocation(invocation_id).await {
-                Ok(detail) => app.merge_detail(detail),
-                Err(error) => app.set_degraded(format!(
-                    "live invocation {invocation_id} could not be refreshed: {error:#}"
-                )),
-            }
+        ) && let Err(error) = merge_live_detail(client, app, invocation_id).await
+        {
+            app.set_degraded(format!(
+                "live invocation {invocation_id} could not be refreshed: {error:#}"
+            ));
         }
     }
     effects
+}
+
+async fn merge_live_detail(
+    client: &ObserverClient,
+    app: &mut WatchApp,
+    invocation_id: i64,
+) -> Result<(), String> {
+    let detail = client
+        .invocation(invocation_id)
+        .await
+        .map_err(|error| format!("{error:#}"))?;
+    let is_poll = detail.presentation.records.iter().any(|record| {
+        matches!(
+            record.kind,
+            crate::local::PresentationKind::PollAggregate { .. }
+        )
+    });
+    app.merge_detail(detail);
+    if is_poll {
+        let canonical = client
+            .recovery_invocations(app.stream_filter().as_deref(), app.recovery_since_ms())
+            .await
+            .map_err(|error| format!("failed to reconcile poll presentation: {error:#}"))?;
+        app.merge_presentation(canonical.presentation);
+    }
+    Ok(())
 }
 
 async fn apply_effects(

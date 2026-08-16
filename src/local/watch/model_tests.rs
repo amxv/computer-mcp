@@ -1,8 +1,10 @@
 use serde_json::json;
 use std::time::{Duration, Instant};
 
-use super::super::PresentationKind;
 use super::super::history::HistoryLiveEvent;
+use super::super::{
+    PRESENTATION_SCHEMA_VERSION, PresentationDocument, PresentationKind, PresentationPollSummary,
+};
 use super::input::WatchInput;
 use super::model::{ConnectionState, WatchApp, WatchEffect, WatchOptions, WatchScope};
 use super::test_support::{RUNTIME_ID, agent, bootstrap, command_detail, poll_detail};
@@ -204,6 +206,55 @@ fn poll_only_calls_merge_into_one_compact_aggregate() {
         50,
         "re-fetching durable poll details during recovery must be idempotent"
     );
+}
+
+#[test]
+fn canonical_poll_presentation_replaces_live_delta_and_orphan_poll_card() {
+    let mut app = WatchApp::new(
+        &bootstrap(vec![agent("k7m2", &["/workspace"])]),
+        automatic(),
+    );
+    app.merge_detail(command_detail(
+        1,
+        Some("k7m2"),
+        "long-task",
+        "running",
+        Some("start\n"),
+    ));
+    app.append_live_output(1, "end\n");
+    app.merge_detail(poll_detail(2, "k7m2", "proc-1"));
+    assert_eq!(app.visible_cards().len(), 2);
+
+    let mut canonical =
+        command_detail(1, Some("k7m2"), "long-task", "exited", Some("start\nend\n")).presentation;
+    canonical.schema_version = PRESENTATION_SCHEMA_VERSION;
+    canonical.records[0].raw_invocation_ids = vec![1, 2];
+    if let PresentationKind::Command { polls, .. } = &mut canonical.records[0].kind {
+        *polls = Some(PresentationPollSummary {
+            count: 1,
+            final_status: Some("exited".to_owned()),
+            caller_agent_ids: vec!["k7m2".to_owned()],
+            cross_agent: false,
+        });
+    }
+    app.merge_presentation(PresentationDocument { ..canonical });
+
+    let cards = app.visible_cards();
+    assert_eq!(cards.len(), 1);
+    assert!(app.live_output_for(cards[0]).is_none());
+    match &cards[0].record.kind {
+        PresentationKind::Command {
+            status,
+            output,
+            polls,
+            ..
+        } => {
+            assert_eq!(status, "exited");
+            assert_eq!(output.as_deref(), Some("start\nend\n"));
+            assert_eq!(polls.as_ref().map(|polls| polls.count), Some(1));
+        }
+        other => panic!("expected canonical command, got {other:?}"),
+    }
 }
 
 #[test]

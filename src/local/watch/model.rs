@@ -8,7 +8,7 @@ use time::format_description::well_known::Rfc3339;
 use super::super::history::HistoryLiveEvent;
 use super::super::observability::{ApiAgent, ApiInvocationDetail};
 use super::super::presentation::sanitize_display_text;
-use super::super::{PresentationKind, PresentationRecord};
+use super::super::{PresentationDocument, PresentationKind, PresentationRecord};
 use super::client::WatchBootstrap;
 use super::input::WatchInput;
 
@@ -283,6 +283,17 @@ impl WatchApp {
         self.clamp_selection();
     }
 
+    pub(super) fn merge_presentation(&mut self, presentation: PresentationDocument) {
+        for mut record in presentation.records {
+            sanitize_record_for_terminal(&mut record);
+            if let Some(invocation_id) = record.raw_invocation_ids.first() {
+                self.live_output.remove(invocation_id);
+            }
+            self.merge_record(record);
+        }
+        self.clamp_selection();
+    }
+
     pub(super) fn append_live_output(&mut self, invocation_id: i64, text: &str) {
         let output = self.live_output.entry(invocation_id).or_default();
         output.text.push_str(&sanitize_display_text(text));
@@ -509,6 +520,14 @@ impl WatchApp {
 
     fn merge_record(&mut self, record: PresentationRecord) {
         let key = card_key(&record);
+        self.cards.retain(|card| {
+            card.key == key
+                || card
+                    .record
+                    .raw_invocation_ids
+                    .iter()
+                    .all(|id| !record.raw_invocation_ids.contains(id))
+        });
         if matches!(key, CardKey::Poll { .. })
             && let Some(index) = self.cards.iter().position(|card| card.key == key)
         {

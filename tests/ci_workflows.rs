@@ -54,6 +54,7 @@ fn portable_contract_script_pins_modern_legacy_workdir_and_local_operator_proofs
         "plan-file-cksum",
         "cksum",
         "Phase-13-native",
+        "/bin/rm -rf \"$tmpdir\"",
         "-- --exact",
     ] {
         assert!(

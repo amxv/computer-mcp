@@ -48,7 +48,7 @@ enum LocalCommand {
         rotate_observability_bearer: bool,
     },
     /// Start the one Mac-wide Local runtime from a repository or workspace.
-    #[command(after_help = "Examples:\n  cd ~/code/amxv/zodex && zodex local start\n  zodex local start ~/code/amxv/zodex --ttl 4h\n\nPATH is startup guidance only. Every exec_command/apply_patch still supplies an explicit absolute workdir.")]
+    #[command(after_help = "Examples:\n  cd ~/code/amxv/zodex && zodex local start\n  zodex local start ~/code/amxv/zodex --ttl 4h\n\nPATH is startup guidance only. Every exec_command/apply_patch still supplies an explicit absolute workdir. ChatGPT caches MCP server instructions, so refresh the Zodex Local app in ChatGPT app settings after changing PATH.")]
     Start {
         /// Start directory published to ChatGPT as the suggested initial explicit workdir.
         path: Option<PathBuf>,
@@ -329,6 +329,9 @@ async fn run_native_local_start(
         outcome.current_runtime_agent_count,
         outcome.active_process_count,
         if outcome.active_process_count == 1 { "" } else { "es" }
+    );
+    println!(
+        "ChatGPT: refresh the Zodex Local app in app settings to load this start directory."
     );
     println!("Inspect: zodex local status | zodex local watch");
     println!("Stop: zodex local stop");

@@ -42,6 +42,8 @@ fn local_guide_documents_current_trust_lifecycle_and_agent_contract() {
         "One runtime-wide TTL",
         "There is exactly **one** TTL for the whole Local runtime",
         "suggested initial explicit workdir",
+        "choose **Refresh**",
+        "ChatGPT caches MCP server instructions",
         "_meta[\"openai/session\"]",
         "four-character",
         "zodex local watch --agent k7m2",

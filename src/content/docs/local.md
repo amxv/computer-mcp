@@ -95,6 +95,8 @@ zodex local start ~/code/owner/repo
 
 The start directory is published in the runtime's MCP instructions as the **suggested initial explicit workdir**. It is not silently substituted by the backend. Every `exec_command` and `apply_patch` request still contains an absolute existing `workdir` field.
 
+ChatGPT caches MCP tool descriptions and server instructions in the app definition. After starting Local from a different directory, open the Zodex Local app details in ChatGPT app settings and choose **Refresh** before opening a fresh conversation. This pulls the current runtime instructions and selected start directory. Restarting Local alone cannot invalidate ChatGPT's app cache.
+
 That distinction matters for observability: the declared workdir tells you where the model intentionally routed a call. A command can still access or `cd` to other places after it starts.
 
 ### One runtime-wide TTL
@@ -305,7 +307,7 @@ Check the active runtime's start directory:
 zodex local status --json
 ```
 
-Then stop and restart from the intended workspace. The runtime publishes that directory as guidance, but the actual tool call must still contain it explicitly as `workdir`.
+Then stop and restart from the intended workspace. In ChatGPT app settings, open the Zodex Local app details and choose **Refresh** before opening a fresh conversation. ChatGPT caches MCP server instructions until this explicit refresh. The runtime publishes the selected directory as guidance, but the actual tool call must still contain it explicitly as `workdir`.
 
 ### Multiple conversations are hard to distinguish
 

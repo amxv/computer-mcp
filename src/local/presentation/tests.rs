@@ -451,7 +451,7 @@ fn shell_write_requires_completed_actual_evidence_and_preserves_append_vs_overwr
 }
 
 #[test]
-fn fifty_cumulative_polls_collapse_into_one_parent_command() {
+fn fifty_cumulative_null_and_empty_string_polls_collapse_into_one_parent_command() {
     let handle = "poll-session-handle";
     let mut parent = invocation(
         30,
@@ -469,7 +469,11 @@ fn fifty_cumulative_polls_collapse_into_one_parent_command() {
         let mut poll = invocation(
             30 + index,
             "write_stdin",
-            json!({"session_handle":handle,"chars":null,"kill_process":false}),
+            json!({
+                "session_handle": handle,
+                "chars": if index % 2 == 0 { json!("") } else { serde_json::Value::Null },
+                "kill_process": false
+            }),
         );
         poll.target_session_handle = Some(handle.to_string());
         poll.result_status = Some(if index == 50 { "exited" } else { "running" }.to_string());
