@@ -1,8 +1,8 @@
 ---
-title: "Sprite operator write controls"
+title: "Operator controls"
 description: "Open, inspect, and revoke Sprite direct-push access from the operator machine, including repo grants and scoped YOLO."
-order: 8
-category: GitHub Access
+order: 7
+category: Sprite
 summary: "Sprite operator controls for grant-push, revoke-push, mode yolo, mode status, and mode default."
 ---
 

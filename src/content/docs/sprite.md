@@ -1,8 +1,8 @@
 ---
-title: "Quick Start: Zodex (Sprite)"
+title: "Quick Start"
 description: "Set up a remote Sprite-backed Linux workspace for ChatGPT with isolated GitHub read access and operator-controlled write modes."
 order: 1
-category: Start
+category: Sprite
 summary: "Install Zodex, create a Sprite, configure GitHub Apps, connect ChatGPT to MCP, and choose how much GitHub write autonomy the Agent gets."
 ---
 
@@ -95,7 +95,7 @@ writer client ID
 writer private-key PEM
 ```
 
-See [Sprite GitHub Apps](/docs/github-apps) for the complete creation checklist.
+See [Sprite GitHub Apps](/docs/sprite/github-apps) for the complete creation checklist.
 
 ### 4. Provision the Sprite
 
@@ -140,7 +140,7 @@ zodex proxy inspect --sprite zodex-dev
 zodex proxy verify-origin --sprite zodex-dev
 ```
 
-See [Sprite: connect ChatGPT](/docs/proxy-mcp).
+See [Sprite: connect ChatGPT](/docs/sprite/connect).
 
 ### 6. Add the Sprite MCP server to ChatGPT
 
@@ -166,7 +166,7 @@ write_stdin
 apply_patch
 ```
 
-See [MCP tools](/docs/tools) for how Agents use them.
+See [MCP tools](/docs/reference/tools) for how Agents use them.
 
 ### 7. Clone the repository from ChatGPT
 
@@ -223,7 +223,7 @@ zodex github mode status --sprite zodex-dev
 zodex github mode default --sprite zodex-dev
 ```
 
-Use [Sprite write modes](/docs/write-modes) to choose the right level.
+Use [Sprite write modes](/docs/sprite/write-modes) to choose the right level.
 
 ## Day-to-day Sprite commands
 
@@ -235,23 +235,23 @@ zodex sprite sync --sprite zodex-dev
 zodex sprite upgrade --sprite zodex-dev
 ```
 
-See [Sprite operations](/docs/sprite-operations) for recovery and upgrades.
+See [Sprite operations](/docs/sprite/operations) for recovery and upgrades.
 
 ## The Sprite permissions model in one sentence
 
 **Read access is persistent and narrow; local workspace changes are unrestricted inside the Sprite; GitHub writes happen only through the PR/grant/YOLO policy you choose.**
 
-Read [Sprite permissions and autonomy](/docs/access-model) before giving a new Agent broader direct-push access.
+Read [Sprite permissions and autonomy](/docs/sprite/permissions) before giving a new Agent broader direct-push access.
 
 ## Sprite guides
 
-- [Sprite GitHub Apps](/docs/github-apps) — create the reader and writer apps.
-- [Sprite permissions and autonomy](/docs/access-model) — understand the security boundary.
-- [Sprite write modes](/docs/write-modes) — choose PR-only, temporary push, or YOLO.
-- [Sprite PRs and push grants](/docs/push-grants) — agent-side write workflows.
-- [Sprite operator write controls](/docs/operator-grants) — approve/revoke from your machine.
-- [Sprite: connect ChatGPT](/docs/proxy-mcp) — MCP URL and optional proxy.
-- [Sprite configuration](/docs/configuration) — server/runtime config.
-- [Sprite operations](/docs/sprite-operations) — health, logs, sync, and upgrades.
-- [Sprite command reference](/docs/sprite-command-reference) — operator and guest commands.
-- [Sprite troubleshooting](/docs/sprite-troubleshooting) — symptom-first recovery.
+- [Sprite GitHub Apps](/docs/sprite/github-apps) — create the reader and writer apps.
+- [Sprite permissions and autonomy](/docs/sprite/permissions) — understand the security boundary.
+- [Sprite write modes](/docs/sprite/write-modes) — choose PR-only, temporary push, or YOLO.
+- [Sprite PRs and push grants](/docs/sprite/push-grants) — agent-side write workflows.
+- [Sprite operator write controls](/docs/sprite/operator-controls) — approve/revoke from your machine.
+- [Sprite: connect ChatGPT](/docs/sprite/connect) — MCP URL and optional proxy.
+- [Sprite configuration](/docs/sprite/configuration) — server/runtime config.
+- [Sprite operations](/docs/sprite/operations) — health, logs, sync, and upgrades.
+- [Sprite command reference](/docs/sprite/command-reference) — operator and guest commands.
+- [Sprite troubleshooting](/docs/sprite/troubleshooting) — symptom-first recovery.

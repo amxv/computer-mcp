@@ -1,8 +1,8 @@
 ---
-title: "Quick Start: Local"
+title: "Quick Start"
 description: "Run ChatGPT directly on your trusted Apple Silicon Mac with your normal shell, files, and developer tools."
-order: 2
-category: Start
+order: 1
+category: Local
 summary: "Install Zodex, provision an OpenAI Secure MCP Tunnel, connect ChatGPT, start Local from a repo, and inspect what each ChatGPT Agent does."
 ---
 
@@ -10,7 +10,7 @@ Zodex Local lets ChatGPT work directly on a **trusted Apple Silicon Mac**. It us
 
 Local is intentionally **not a sandbox**. There is **no Zodex confinement boundary** around the repository you start from. If your user account can read, write, execute, or authenticate to something, a Local tool call can generally do the same, subject to normal macOS privacy controls.
 
-If you want an isolated remote Linux workspace with scoped GitHub write permissions instead, use [Quick Start: Zodex (Sprite)](/docs/quickstart).
+If you want an isolated remote Linux workspace with scoped GitHub write permissions instead, use [Quick Start: Zodex (Sprite)](/docs/sprite).
 
 ## Local quick start
 
@@ -80,7 +80,7 @@ zodex local setup \
   --runtime-key-env OPENAI_TUNNEL_RUNTIME_KEY
 ```
 
-See [Local setup and ChatGPT connection](/docs/local-setup) for the full setup flow and every setup flag.
+See [Local setup and ChatGPT connection](/docs/local/setup) for the full setup flow and every setup flag.
 
 ### 5. Start Local from the repo you want ChatGPT to use
 
@@ -122,7 +122,7 @@ In ChatGPT on the web:
 
 Most paid ChatGPT plans let users enable developer mode and add custom MCP servers. Availability can still depend on workspace settings or administrator policy.
 
-For workspace-specific steps and tunnel visibility troubleshooting, see [Local setup and ChatGPT connection](/docs/local-setup).
+For workspace-specific steps and tunnel visibility troubleshooting, see [Local setup and ChatGPT connection](/docs/local/setup).
 
 ## What Local gives ChatGPT
 
@@ -132,7 +132,7 @@ The model sees exactly three Zodex tools:
 - `write_stdin` — continue, poll, type into, or kill a long-running process;
 - `apply_patch` — apply a patch in an explicit absolute workdir.
 
-See [MCP tools](/docs/tools) for the shared tool contract.
+See [MCP tools](/docs/reference/tools) for the shared tool contract.
 
 ## The Local trust model
 
@@ -144,7 +144,7 @@ This also means the start directory is **not** a permission boundary. A command 
 
 macOS remains in charge of its own privacy permissions. Protected locations such as Desktop, Documents, Downloads, iCloud Drive, or app data may require a normal Files & Folders or Full Disk Access grant. Zodex **does not edit TCC databases** or bypass macOS privacy controls.
 
-If you want remote isolation and a GitHub-specific autonomy boundary, use [Sprite permissions and autonomy](/docs/access-model) instead.
+If you want remote isolation and a GitHub-specific autonomy boundary, use [Sprite permissions and autonomy](/docs/sprite/permissions) instead.
 
 ## One runtime, many ChatGPT Agents
 
@@ -196,7 +196,7 @@ zodex local watch --all
 
 `watch` is only a viewer. Opening or closing it does not start, stop, or extend Local.
 
-See [Local watch TUI](/docs/local-watch) for the full first-party interface, or [Local observability API](/docs/local-watch-client) to build your own client.
+See [Local watch TUI](/docs/local/watch) for the full first-party interface, or [Local observability API](/docs/local/observability-api) to build your own client.
 
 ## Inspect durable history
 
@@ -212,7 +212,7 @@ zodex local history --format json
 
 The default history is compact and readable. `--raw` is for exact logical tool input/result evidence when you need to audit a specific invocation.
 
-By default Local keeps history for 60 days or 500 MB, whichever requires cleanup first. See [Local configuration](/docs/local-configuration).
+By default Local keeps history for 60 days or 500 MB, whichever requires cleanup first. See [Local configuration](/docs/local/configuration).
 
 ## Stop access
 
@@ -244,10 +244,10 @@ You only need `zodex local setup` again when you want to replace tunnel credenti
 
 ## Local guides
 
-- [Setup and connect ChatGPT](/docs/local-setup) — Platform tunnel, runtime key, setup flags, and ChatGPT app creation.
-- [Daily use](/docs/local-operations) — start, status, watch, history, logs, stop, multiple Agents, and TTLs.
-- [Configuration](/docs/local-configuration) — retention and non-secret Local settings.
-- [Local command reference](/docs/local-command-reference) — every `zodex local` command and flag.
-- [Local troubleshooting](/docs/local-troubleshooting) — tunnel, startup, Keychain, privacy, Agent, and history problems.
-- [Local watch TUI](/docs/local-watch) — the first-party real-time observability client.
-- [Local observability API](/docs/local-watch-client) — build your own web dashboard, Swift/menu-bar client, terminal UI, editor integration, or other read-only observer.
+- [Setup and connect ChatGPT](/docs/local/setup) — Platform tunnel, runtime key, setup flags, and ChatGPT app creation.
+- [Daily use](/docs/local/daily-use) — start, status, watch, history, logs, stop, multiple Agents, and TTLs.
+- [Configuration](/docs/local/configuration) — retention and non-secret Local settings.
+- [Local command reference](/docs/local/command-reference) — every `zodex local` command and flag.
+- [Local troubleshooting](/docs/local/troubleshooting) — tunnel, startup, Keychain, privacy, Agent, and history problems.
+- [Local watch TUI](/docs/local/watch) — the first-party real-time observability client.
+- [Local observability API](/docs/local/observability-api) — build your own web dashboard, Swift/menu-bar client, terminal UI, editor integration, or other read-only observer.

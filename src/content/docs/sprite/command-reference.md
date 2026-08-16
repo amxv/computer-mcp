@@ -1,12 +1,12 @@
 ---
-title: "Sprite command reference"
+title: "Command reference"
 description: "A compact reference for Sprite setup, status, health, logs, sync, upgrade, proxy, GitHub grant, and guest-agent commands."
-order: 4
-category: Reference
+order: 11
+category: Sprite
 summary: "The operator and guest commands used to provision, maintain, connect, and control GitHub write access for Sprite deployments."
 ---
 
-This page is the compact command map for Sprite mode. For a guided setup, start with [Sprite](/docs/quickstart).
+This page is the compact command map for Sprite mode. For a guided setup, start with [Sprite](/docs/sprite).
 
 ## Provision a Sprite
 
@@ -125,7 +125,7 @@ zodex proxy deploy --sprite dev
 
 All three accept `--origin`; `deploy` also accepts `--skip-verify-origin`.
 
-See [Sprite: connect ChatGPT](/docs/proxy-mcp).
+See [Sprite: connect ChatGPT](/docs/sprite/connect).
 
 ## Publish a PR from inside the Sprite
 
@@ -180,4 +180,4 @@ zodex github mode default --sprite dev
 
 ## Shared MCP tools
 
-ChatGPT itself sees only `exec_command`, `write_stdin`, and `apply_patch`. See [MCP tools](/docs/tools).
+ChatGPT itself sees only `exec_command`, `write_stdin`, and `apply_patch`. See [MCP tools](/docs/reference/tools).

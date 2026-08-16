@@ -1,8 +1,8 @@
 ---
-title: "Sprite GitHub Apps"
+title: "GitHub Apps"
 description: "Create the narrow reader and writer GitHub Apps used by Sprite mode for clone/fetch, PR publishing, push grants, and YOLO."
-order: 6
-category: GitHub Access
+order: 5
+category: Sprite
 summary: "The one-time Sprite checklist for reader/writer app permissions, device flow, private keys, IDs, and repository installation scope."
 ---
 

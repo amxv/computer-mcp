@@ -1,7 +1,7 @@
 ---
-title: "Maintainer: development and release checks"
+title: "Development"
 description: "Maintainer reference for building, testing, and releasing Zodex itself; not required to operate Sprite or Local."
-order: 15
+order: 3
 category: Reference
 summary: "Repository-maintainer checks for runtime, CLI, scripts, releases, and docs."
 ---
@@ -57,8 +57,8 @@ Keep docs tied to actual zodex behavior:
 - explain when a command needs an active grant
 - document both MCP and direct HTTP routes when changing server behavior
 - update command examples when Clap arguments change
-- when Local observability routes, response fields, filters, SSE event types, discovery fields, API/presentation versions, or recovery semantics change, update [Local observability API](/docs/local-watch-client) in the same change
-- when the first-party watch picker, filters, keyboard controls, presentation behavior, or recovery UX changes, update [Local watch TUI](/docs/local-watch) in the same change
+- when Local observability routes, response fields, filters, SSE event types, discovery fields, API/presentation versions, or recovery semantics change, update [Local observability API](/docs/local/observability-api) in the same change
+- when the first-party watch picker, filters, keyboard controls, presentation behavior, or recovery UX changes, update [Local watch TUI](/docs/local/watch) in the same change
 
 ## Repository scripts
 

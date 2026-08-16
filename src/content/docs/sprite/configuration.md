@@ -1,12 +1,12 @@
 ---
-title: "Sprite configuration"
+title: "Configuration"
 description: "Configure the remote Sprite server, TLS, session limits, GitHub Apps, workspace defaults, and publisher behavior in /etc/zodex/config.toml."
-order: 4
-category: Architecture
+order: 8
+category: Sprite
 summary: "The server-side configuration used by zodexd, zodex-prd, the Sprite guest runtime, and GitHub read/write policy."
 ---
 
-This page is for **Sprite mode**. Zodex Local has a separate user-scoped configuration; see [Local configuration](/docs/local-configuration).
+This page is for **Sprite mode**. Zodex Local has a separate user-scoped configuration; see [Local configuration](/docs/local/configuration).
 
 A normal Sprite deployment is configured by `zodex sprite setup`. You usually edit `/etc/zodex/config.toml` only when changing an existing deployment or inspecting a problem.
 
@@ -37,7 +37,7 @@ zodex sprite sync --sprite dev --force-recreate
 zodex sprite health --sprite dev
 ```
 
-For public MCP routing, use [Sprite: connect ChatGPT](/docs/proxy-mcp).
+For public MCP routing, use [Sprite: connect ChatGPT](/docs/sprite/connect).
 
 ## `default_workdir`
 
@@ -55,7 +55,7 @@ The server config includes the limits that govern command sessions, output buffe
 
 The safe operating rule is simple: tune these when you have a concrete workload reason, not merely to hide a slow command. Long-running work should normally yield a `session_handle` and continue through `write_stdin`.
 
-See [MCP tools](/docs/tools) for the model-facing behavior.
+See [MCP tools](/docs/reference/tools) for the model-facing behavior.
 
 ## Reader GitHub App
 
@@ -75,7 +75,7 @@ If clone/fetch breaks, diagnose the reader path before changing any push policy:
 git ls-remote https://github.com/owner/repo.git HEAD
 ```
 
-See [Sprite GitHub Apps](/docs/github-apps).
+See [Sprite GitHub Apps](/docs/sprite/github-apps).
 
 ## Publisher / writer GitHub App
 
@@ -139,7 +139,7 @@ zodex sprite health --sprite dev
 
 ## Related guides
 
-- [Sprite](/docs/quickstart)
-- [Sprite GitHub Apps](/docs/github-apps)
-- [Sprite permissions and autonomy](/docs/access-model)
-- [Sprite operations](/docs/sprite-operations)
+- [Sprite](/docs/sprite)
+- [Sprite GitHub Apps](/docs/sprite/github-apps)
+- [Sprite permissions and autonomy](/docs/sprite/permissions)
+- [Sprite operations](/docs/sprite/operations)

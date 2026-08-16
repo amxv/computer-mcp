@@ -1,7 +1,7 @@
 ---
-title: "Maintainer: docs site"
+title: "Docs site"
 description: "Maintainer reference for running, validating, and deploying the Zodex documentation site."
-order: 16
+order: 4
 category: Reference
 summary: "Repository-maintainer notes for the embedded Astro documentation app."
 ---
@@ -32,7 +32,7 @@ src/pages/docs/index.astro      grouped docs index
 src/pages/docs/[...slug].astro  article route
 src/pages/docs.md.ts            raw markdown docs index
 src/pages/docs/[...slug].md.ts  raw markdown page route
-src/content/docs/*.md           documentation pages
+src/content/docs/**/*.md        documentation pages
 src/styles/global.css           visual system
 ```
 

@@ -1,7 +1,7 @@
 ---
 title: "Changelog"
 description: "Release notes for zodex."
-order: 99
+order: 5
 category: Reference
 summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workflows, and Local mode."
 ---

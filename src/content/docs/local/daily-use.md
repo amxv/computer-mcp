@@ -1,12 +1,12 @@
 ---
-title: "Local daily use"
+title: "Daily use"
 description: "Start, inspect, observe, and stop Zodex Local while one or more ChatGPT conversations work on your Mac."
-order: 1
-category: Operations
+order: 3
+category: Local
 summary: "The practical Local workflow for runtime TTLs, status, Agents, watch, durable history, logs, and clean shutdown."
 ---
 
-Once [Local setup](/docs/local-setup) is complete, most days use only `start`, `status`, `watch`, `history`, and `stop`.
+Once [Local setup](/docs/local/setup) is complete, most days use only `start`, `status`, `watch`, `history`, and `stop`.
 
 ## Start from the project you want ChatGPT to begin with
 
@@ -70,7 +70,7 @@ zodex local stop
 zodex local start
 ```
 
-and use [Local troubleshooting](/docs/local-troubleshooting) if it cannot recover.
+and use [Local troubleshooting](/docs/local/troubleshooting) if it cannot recover.
 
 ## Work with several ChatGPT conversations
 
@@ -121,7 +121,7 @@ Useful keys include:
 
 Closing `watch` never stops the runtime.
 
-For the complete TUI behavior and keyboard map, see [Local watch TUI](/docs/local-watch). To build another interface on the same API, see [Local observability API](/docs/local-watch-client).
+For the complete TUI behavior and keyboard map, see [Local watch TUI](/docs/local/watch). To build another interface on the same API, see [Local observability API](/docs/local/observability-api).
 
 ## Inspect history
 
@@ -220,8 +220,8 @@ That is intentional: access is something you turn on, optionally give a TTL, and
 
 ## Next
 
-- [Local watch TUI](/docs/local-watch)
-- [Local observability API](/docs/local-watch-client)
-- [Local command reference](/docs/local-command-reference)
-- [Local configuration](/docs/local-configuration)
-- [Local troubleshooting](/docs/local-troubleshooting)
+- [Local watch TUI](/docs/local/watch)
+- [Local observability API](/docs/local/observability-api)
+- [Local command reference](/docs/local/command-reference)
+- [Local configuration](/docs/local/configuration)
+- [Local troubleshooting](/docs/local/troubleshooting)

@@ -1,8 +1,8 @@
 ---
-title: "Sprite HTTP API and client (advanced)"
+title: "HTTP API"
 description: "Use zodex-client or direct HTTP calls against the traditional zodexd command API for Sprite/direct-service automation."
 order: 10
-category: Operations
+category: Sprite
 summary: "The advanced /v1 command API behind zodex-client, including Bearer authentication and command/stdin/patch request shapes."
 ---
 
@@ -82,4 +82,4 @@ The workdir is required and explicit.
 
 Use the MCP endpoint when the caller is ChatGPT or another MCP-capable agent. It exposes only the three purpose-built tools and avoids writing a custom client around HTTP request/response details.
 
-See [MCP tools](/docs/tools).
+See [MCP tools](/docs/reference/tools).

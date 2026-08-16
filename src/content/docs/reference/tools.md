@@ -1,7 +1,7 @@
 ---
-title: "MCP tools"
+title: "Tools"
 description: "Learn the three tools ChatGPT gets from Zodex and the command, process-session, workdir, and patch patterns that work in both Sprite and Local modes."
-order: 1
+order: 2
 category: Reference
 summary: "The shared ChatGPT-facing surface: exec_command, write_stdin, and apply_patch."
 ---
@@ -124,7 +124,7 @@ Those are operator/CLI concerns. ChatGPT gets the coding surface, not the deploy
 
 ### Sprite
 
-Commands run inside the remote Sprite. GitHub clone/fetch and direct push availability are determined by the Sprite's GitHub Apps and active [write mode](/docs/write-modes).
+Commands run inside the remote Sprite. GitHub clone/fetch and direct push availability are determined by the Sprite's GitHub Apps and active [write mode](/docs/sprite/write-modes).
 
 ### Local
 

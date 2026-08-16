@@ -1,8 +1,8 @@
 ---
-title: "Sprite write modes"
+title: "Write modes"
 description: "Choose PR-only publishing, a temporary repo push grant, operator-granted push, or scoped YOLO for a Sprite coding session."
-order: 3
-category: GitHub Access
+order: 4
+category: Sprite
 summary: "A practical decision guide for how much GitHub write autonomy to give a Sprite Agent."
 ---
 
@@ -159,6 +159,6 @@ The MCP connection does not change as you move between these modes.
 
 ## Related guides
 
-- [Sprite permissions and autonomy](/docs/access-model)
-- [Sprite PRs and push grants](/docs/push-grants)
-- [Sprite operator write controls](/docs/operator-grants)
+- [Sprite permissions and autonomy](/docs/sprite/permissions)
+- [Sprite PRs and push grants](/docs/sprite/push-grants)
+- [Sprite operator write controls](/docs/sprite/operator-controls)

@@ -1,8 +1,8 @@
 ---
-title: "Sprite operations"
+title: "Operations"
 description: "Check runtime health, inspect logs, resync Sprite Services, upgrade binaries, verify the proxy origin, and diagnose older installs."
-order: 10
-category: Operations
+order: 9
+category: Sprite
 summary: "Day-to-day commands for keeping a zodex Sprite deployment healthy."
 ---
 

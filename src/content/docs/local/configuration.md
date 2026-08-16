@@ -1,8 +1,8 @@
 ---
-title: "Local configuration"
+title: "Configuration"
 description: "Read and change Zodex Local's non-secret tunnel and history settings without mixing them with Sprite server configuration."
-order: 3
-category: Architecture
+order: 6
+category: Local
 summary: "Configure Local retention and tunnel metadata, understand which settings require Local to be stopped, and know which secrets Zodex manages for you."
 ---
 
@@ -110,6 +110,6 @@ Aliases and shell functions are not part of the compatibility promise; PATH-visi
 
 ## Related guides
 
-- [Local setup and ChatGPT connection](/docs/local-setup)
-- [Local daily use](/docs/local-operations)
-- [Local troubleshooting](/docs/local-troubleshooting)
+- [Local setup and ChatGPT connection](/docs/local/setup)
+- [Local daily use](/docs/local/daily-use)
+- [Local troubleshooting](/docs/local/troubleshooting)

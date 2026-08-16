@@ -119,7 +119,7 @@ See [Zodex Local](https://zodex.ashray.xyz/docs/local) for the trusted-host mode
 
 ### Sprite mode
 
-See the [Sprite quickstart](https://zodex.ashray.xyz/docs/quickstart) for the no-clone remote-Linux path. The setup flow is:
+See the [Sprite quickstart](https://zodex.ashray.xyz/docs/sprite) for the no-clone remote-Linux path. The setup flow is:
 
 1. install the local `zodex` operator CLI
 2. install and authenticate the Sprite CLI

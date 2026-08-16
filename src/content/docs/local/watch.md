@@ -1,14 +1,14 @@
 ---
-title: "Local watch TUI"
+title: "Watch"
 description: "Use Zodex's first-party terminal observability client to watch ChatGPT Agents, commands, patches, stdin, process state, workdirs, and live output in real time."
-order: 2
-category: Local Clients
+order: 4
+category: Local
 summary: "The first-party client of the Local observability API: Agent picker, filtered live SSE, compact tool timelines, raw drill-down, search, copy, and durable gap recovery."
 ---
 
 `zodex local watch` is the first-party real-time observability client for Zodex Local. It shows what ChatGPT is asking the Zodex MCP server to do without giving the viewer any execution authority.
 
-The TUI is built entirely on the public [Local observability API](/docs/local-watch-client). It discovers the localhost API, reads the managed observer bearer, loads Agent state, subscribes to live SSE, and recovers missed activity from the same HTTP endpoints available to your own clients.
+The TUI is built entirely on the public [Local observability API](/docs/local/observability-api). It discovers the localhost API, reads the managed observer bearer, loads Agent state, subscribes to live SSE, and recovers missed activity from the same HTTP endpoints available to your own clients.
 
 Opening or closing `watch` never starts Local, stops Local, changes the runtime TTL, or changes what ChatGPT can execute.
 
@@ -131,4 +131,4 @@ The TUI is only one possible presentation of Local activity. You can build anoth
 - a desktop status app;
 - an automation or monitoring process.
 
-You do not need to reuse the TUI code. Start with [Local observability API](/docs/local-watch-client), which documents discovery, authentication, routes, filters, output pagination, SSE events, and recovery.
+You do not need to reuse the TUI code. Start with [Local observability API](/docs/local/observability-api), which documents discovery, authentication, routes, filters, output pagination, SSE events, and recovery.

@@ -1,8 +1,8 @@
 ---
-title: "Sprite permissions and autonomy"
+title: "Permissions and autonomy"
 description: "Understand the Sprite-only boundary between remote workspace access, GitHub reads, PR publishing, temporary push grants, and YOLO mode."
-order: 4
-category: GitHub Access
+order: 3
+category: Sprite
 summary: "The security model behind the reader app, publisher app, PR path, push grants, TTLs, repository scopes, and revocation."
 ---
 
@@ -131,4 +131,4 @@ Use:
 - **repo-scoped YOLO** for trusted iterative work where repeated approvals are just friction;
 - **broad/no-TTL YOLO** only in environments where that level of autonomy is a deliberate choice.
 
-See [Sprite write modes](/docs/write-modes) for examples and [Sprite GitHub Apps](/docs/github-apps) for the one-time permissions setup.
+See [Sprite write modes](/docs/sprite/write-modes) for examples and [Sprite GitHub Apps](/docs/sprite/github-apps) for the one-time permissions setup.

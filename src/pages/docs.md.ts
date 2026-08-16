@@ -7,7 +7,7 @@ export async function GET() {
   const lines = [
     `# ${siteConfig.name} Docs`,
     "",
-    "Raw markdown index for zodex Sprite setup, runtime architecture, GitHub access, push grants, proxy operations, service health, and command reference.",
+    "Raw markdown index for Zodex Local, Sprite, and shared Reference documentation.",
     ""
   ];
 

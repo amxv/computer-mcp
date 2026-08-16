@@ -1,8 +1,8 @@
 ---
-title: "How Zodex works"
+title: "Architecture"
 description: "Understand the two first-class Zodex deployment paths and the small tool contract they share without diving into repository internals."
 order: 1
-category: Architecture
+category: Reference
 summary: "Sprite is a remote Linux workspace with scoped GitHub autonomy; Local is trusted direct Mac execution. Both expose the same three MCP tools."
 ---
 
@@ -38,7 +38,7 @@ That is enough to:
 - poll or send input to those processes;
 - use normal Git commands appropriate to the deployment's permissions.
 
-See [MCP tools](/docs/tools).
+See [MCP tools](/docs/reference/tools).
 
 Every command and patch has an explicit absolute workdir. This keeps routing clear when one server is used by more than one conversation/workspace.
 
@@ -58,9 +58,9 @@ The Sprite itself is the remote working environment. ChatGPT can change files an
 
 Use:
 
-- [Sprite](/docs/quickstart) to set it up;
-- [Sprite permissions and autonomy](/docs/access-model) to understand the boundary;
-- [Sprite write modes](/docs/write-modes) to choose PR/grant/YOLO behavior.
+- [Sprite](/docs/sprite) to set it up;
+- [Sprite permissions and autonomy](/docs/sprite/permissions) to understand the boundary;
+- [Sprite write modes](/docs/sprite/write-modes) to choose PR/grant/YOLO behavior.
 
 ## Local at a glance
 
@@ -79,8 +79,8 @@ Local is intentionally a trusted-host path. It is not a per-repo sandbox. One ru
 Use:
 
 - [Local](/docs/local) to set it up;
-- [Local daily use](/docs/local-operations) for the normal workflow;
-- [Local troubleshooting](/docs/local-troubleshooting) for Mac/tunnel problems.
+- [Local daily use](/docs/local/daily-use) for the normal workflow;
+- [Local troubleshooting](/docs/local/troubleshooting) for Mac/tunnel problems.
 
 ## Local start directory versus command workdir
 
@@ -107,7 +107,7 @@ Local exposes a separate read-only localhost HTTP API for runtime state, Agents,
 
 The built-in `zodex local watch` TUI is the first client of that API, not a privileged special case. You can build another client in any language against the same contract: a web dashboard, Swift/menu-bar app, terminal UI, editor integration, desktop app, or automation surface.
 
-See [Local watch TUI](/docs/local-watch) and [Local observability API](/docs/local-watch-client).
+See [Local watch TUI](/docs/local/watch) and [Local observability API](/docs/local/observability-api).
 
 ## Advanced protocol notes
 

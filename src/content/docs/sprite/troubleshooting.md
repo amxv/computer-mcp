@@ -1,8 +1,8 @@
 ---
-title: "Sprite troubleshooting"
+title: "Troubleshooting"
 description: "Diagnose Sprite runtime, MCP URL, service, TLS, proxy, GitHub reader, publisher, push-grant, and YOLO problems."
-order: 7
-category: Reference
+order: 12
+category: Sprite
 summary: "A symptom-first recovery guide for remote Sprite deployments."
 ---
 
@@ -31,7 +31,7 @@ zodex sprite health --sprite dev
 zodex proxy verify-origin --sprite dev
 ```
 
-If the raw Sprite origin is healthy but the ChatGPT URL is not, inspect the optional proxy separately. See [Sprite: connect ChatGPT](/docs/proxy-mcp).
+If the raw Sprite origin is healthy but the ChatGPT URL is not, inspect the optional proxy separately. See [Sprite: connect ChatGPT](/docs/sprite/connect).
 
 ## `/mcp` rejects ChatGPT
 
@@ -114,7 +114,7 @@ Then retry:
 zodex-agent github request-push --repo owner/repo
 ```
 
-See [Sprite PRs and push grants](/docs/push-grants).
+See [Sprite PRs and push grants](/docs/sprite/push-grants).
 
 ## `git push` is still denied after approval
 

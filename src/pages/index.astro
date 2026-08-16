@@ -56,7 +56,7 @@ const executionModes = [
   },
   {
     index: "B",
-    href: "/docs/quickstart",
+    href: "/docs/sprite",
     title: "Sprite / remote Linux",
     body: "Run the three tools on a remote Sprite-backed Linux workspace with the existing reader/publisher GitHub boundary, PR workflow, push grants, and scoped YOLO modes."
   }
@@ -142,25 +142,25 @@ const guideLinks = [
   },
   {
     index: "02",
-    href: "/docs/quickstart",
+    href: "/docs/sprite",
     title: "Sprite quickstart",
     body: "Create the remote Linux workspace, configure GitHub Apps, and connect ChatGPT."
   },
   {
     index: "03",
-    href: "/docs/write-modes",
+    href: "/docs/sprite/write-modes",
     title: "Write modes",
     body: "Choose the right point on the ladder from review-first PRs to scoped YOLO."
   },
   {
     index: "04",
-    href: "/docs/architecture",
+    href: "/docs/reference/architecture",
     title: "Architecture",
     body: "See how ChatGPT, the proxy, the Sprite services, and the two GitHub Apps fit together."
   },
   {
     index: "05",
-    href: "/docs/tools",
+    href: "/docs/reference/tools",
     title: "The three tools",
     body: "Read the exact inputs, outputs, session contract, and annotations exposed over MCP."
   }
@@ -198,7 +198,7 @@ const guideLinks = [
             <a class="z-button z-button--signal" href="/docs/local">
               Set up Local <span aria-hidden="true">↗</span>
             </a>
-            <a class="z-button z-button--quiet" href="/docs/quickstart">
+            <a class="z-button z-button--quiet" href="/docs/sprite">
               Set up a Sprite <span aria-hidden="true">→</span>
             </a>
           </div>
@@ -287,7 +287,7 @@ const guideLinks = [
             GitHub access boundary. They share the tool/service core without pretending the trust
             or lifecycle model is the same.
           </p>
-          <a class="text-link" href="/docs/architecture">Compare the architecture <span aria-hidden="true">→</span></a>
+          <a class="text-link" href="/docs/reference/architecture">Compare the architecture <span aria-hidden="true">→</span></a>
         </div>
       </header>
       <div class="guide-list">
@@ -314,7 +314,7 @@ const guideLinks = [
             every required permission, verification commands, and troubleshooting. For direct Mac
             execution, use Zodex Local above instead.
           </p>
-          <a class="text-link" href="/docs/quickstart">Open the Sprite setup guide <span aria-hidden="true">↗</span></a>
+          <a class="text-link" href="/docs/sprite">Open the Sprite setup guide <span aria-hidden="true">↗</span></a>
         </div>
       </header>
 
@@ -346,7 +346,7 @@ const guideLinks = [
         <span class="setup-note__mark" aria-hidden="true">!</span>
         <p>
           GitHub Apps are the one deliberate non-command step: a read-only app for clone/fetch and a writer app
-          whose credentials stay behind the publisher boundary. The <a href="/docs/quickstart#3-create-the-required-github-apps">Quickstart lists the exact settings</a>.
+          whose credentials stay behind the publisher boundary. The <a href="/docs/sprite#3-create-the-required-github-apps">Quickstart lists the exact settings</a>.
         </p>
       </div>
     </section>
@@ -397,7 +397,7 @@ const guideLinks = [
             ChatGPT can clone, edit, test, and commit before any GitHub write window exists.
             When the work is ready, choose exactly how it leaves the machine.
           </p>
-          <a class="text-link" href="/docs/write-modes">Compare every write mode <span aria-hidden="true">→</span></a>
+          <a class="text-link" href="/docs/sprite/write-modes">Compare every write mode <span aria-hidden="true">→</span></a>
         </div>
       </header>
 
@@ -426,7 +426,7 @@ const guideLinks = [
           Different binaries, different command surfaces, different credentials. Local intentionally uses a
           different trusted-host boundary: ChatGPT commands run as your logged-in Mac user.
         </p>
-        <a class="z-button z-button--quiet" href="/docs/access-model">
+        <a class="z-button z-button--quiet" href="/docs/sprite/permissions">
           Read the Sprite access model <span aria-hidden="true">→</span>
         </a>
       </div>
@@ -527,7 +527,7 @@ const guideLinks = [
       </p>
       <div class="z-final__actions">
         <a class="z-button z-button--signal" href="/docs/local">Start with Local <span aria-hidden="true">↗</span></a>
-        <a class="z-button z-button--inverse" href="/docs/quickstart">Start with Sprite <span aria-hidden="true">↗</span></a>
+        <a class="z-button z-button--inverse" href="/docs/sprite">Start with Sprite <span aria-hidden="true">↗</span></a>
         <a class="z-button z-button--inverse" href="https://github.com/amxv/zodex" target="_blank" rel="noreferrer">View source <span aria-hidden="true">↗</span></a>
       </div>
     </section>

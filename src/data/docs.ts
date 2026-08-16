@@ -27,11 +27,8 @@ export const siteConfig = {
 } as const;
 
 export const docCategories = [
-  "Start",
-  "Architecture",
-  "GitHub Access",
-  "Operations",
-  "Local Clients",
+  "Local",
+  "Sprite",
   "Reference"
 ] as const;
 

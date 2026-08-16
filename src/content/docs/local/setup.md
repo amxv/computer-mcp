@@ -1,8 +1,8 @@
 ---
-title: "Local setup and ChatGPT connection"
+title: "Setup"
 description: "Provision the OpenAI Secure MCP Tunnel, create a least-privilege runtime key, run zodex local setup, and add the tunnel to ChatGPT."
 order: 2
-category: Architecture
+category: Local
 summary: "The complete one-time setup path for Zodex Local, from OpenAI Platform tunnel settings through a developer-mode ChatGPT app."
 ---
 
@@ -242,6 +242,6 @@ If a command receives a macOS permission error, use normal **System Settings →
 
 ## Next
 
-- [Local daily use](/docs/local-operations)
-- [Local configuration](/docs/local-configuration)
-- [Local troubleshooting](/docs/local-troubleshooting)
+- [Local daily use](/docs/local/daily-use)
+- [Local configuration](/docs/local/configuration)
+- [Local troubleshooting](/docs/local/troubleshooting)

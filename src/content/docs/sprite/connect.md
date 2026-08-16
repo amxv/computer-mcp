@@ -1,14 +1,14 @@
 ---
-title: "Sprite: connect ChatGPT"
+title: "Connect ChatGPT"
 description: "Connect ChatGPT to a Sprite-hosted Zodex MCP server, verify the public origin, and use the optional Cloudflare front door when needed."
-order: 8
-category: Operations
+order: 2
+category: Sprite
 summary: "The Sprite MCP URL, API key, origin checks, ChatGPT app setup, and optional proxy deployment."
 ---
 
 This page is **Sprite-specific**.
 
-Zodex Local does not require this Cloudflare/Sprite proxy. Use [Local setup and ChatGPT connection](/docs/local-setup) for the Mac path.
+Zodex Local does not require this Cloudflare/Sprite proxy. Use [Local setup and ChatGPT connection](/docs/local/setup) for the Mac path.
 
 ## The URL ChatGPT needs
 
@@ -95,4 +95,4 @@ Test the proxy's health endpoint and MCP connection separately from the raw Spri
 
 If the proxy fails but the Sprite origin works, debug the Worker/configuration—not the Zodex guest runtime.
 
-If both fail, start with [Sprite troubleshooting](/docs/sprite-troubleshooting).
+If both fail, start with [Sprite troubleshooting](/docs/sprite/troubleshooting).

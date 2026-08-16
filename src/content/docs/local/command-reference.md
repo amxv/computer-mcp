@@ -1,8 +1,8 @@
 ---
-title: "Local command reference"
+title: "Command reference"
 description: "A compact reference for every public zodex local command, argument, option, and common example."
-order: 5
-category: Reference
+order: 7
+category: Local
 summary: "The public Local CLI: setup, start, status, watch, history, config, logs, and stop."
 ---
 
@@ -102,7 +102,7 @@ zodex local watch --agent k7m2
 zodex local watch --all
 ```
 
-`watch` is the first-party client of Local's public read-only observability API. See [Local watch TUI](/docs/local-watch) for the interface and [Local observability API](/docs/local-watch-client) to build another client.
+`watch` is the first-party client of Local's public read-only observability API. See [Local watch TUI](/docs/local/watch) for the interface and [Local observability API](/docs/local/observability-api) to build another client.
 
 ## `zodex local history`
 
@@ -200,4 +200,4 @@ It is idempotent; running it when Local is already stopped is safe.
 
 ## Shared MCP tools
 
-The CLI above manages/observes Local. ChatGPT itself receives only the shared [three MCP tools](/docs/tools).
+The CLI above manages/observes Local. ChatGPT itself receives only the shared [three MCP tools](/docs/reference/tools).

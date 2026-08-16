@@ -1,8 +1,8 @@
 ---
-title: "Local observability API"
+title: "Observability API"
 description: "Build first-class read-only Local observability clients with the supported localhost HTTP API, Agent/workdir filters, invocation history, output pagination, and live SSE."
-order: 1
-category: Local Clients
+order: 5
+category: Local
 summary: "The public versioned localhost HTTP/SSE contract behind `zodex local watch` and custom web, Swift, terminal, editor, and automation clients."
 ---
 
@@ -10,7 +10,7 @@ Zodex Local includes a **first-class observability API** for watching and inspec
 
 Use it to build whatever observability surface fits your workflow: a web dashboard, native Swift or menu-bar app, another terminal UI, an editor panel, a desktop app, or an automation/monitoring client in any language with HTTP + SSE support.
 
-The first client of this API is the built-in [Local watch TUI](/docs/local-watch). `zodex local watch` uses the same discovery, Bearer auth, Agent resources, invocation endpoints, presentation model, filtered SSE stream, and gap-recovery path documented here. It does not use a privileged private backchannel.
+The first client of this API is the built-in [Local watch TUI](/docs/local/watch). `zodex local watch` uses the same discovery, Bearer auth, Agent resources, invocation endpoints, presentation model, filtered SSE stream, and gap-recovery path documented here. It does not use a privileged private backchannel.
 
 Zodex Local intentionally separates **control** from **observation**. ChatGPT uses the authenticated Local MCP listener to run the three tools. Observability clients use a different, read-only, bearer-authenticated loopback HTTP server.
 

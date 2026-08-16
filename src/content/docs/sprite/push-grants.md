@@ -1,8 +1,8 @@
 ---
-title: "Sprite PRs and push grants"
+title: "PRs and push grants"
 description: "Publish PRs from a Sprite, request temporary direct-push access, use normal Git after approval, and revoke the grant when finished."
-order: 7
-category: GitHub Access
+order: 6
+category: Sprite
 summary: "The Agent-side Sprite write workflow: publish-pr, request-push, list-grants, normal Git push, and revocation."
 ---
 
@@ -130,4 +130,4 @@ Return to the default policy when finished:
 zodex github mode default --sprite dev-sprite
 ```
 
-For the full decision guide, see [Write modes](/docs/write-modes).
+For the full decision guide, see [Write modes](/docs/sprite/write-modes).

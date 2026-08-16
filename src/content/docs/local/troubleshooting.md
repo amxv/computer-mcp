@@ -1,8 +1,8 @@
 ---
-title: "Local troubleshooting"
+title: "Troubleshooting"
 description: "Diagnose Zodex Local setup, tunnel, ChatGPT app, Keychain, startup, macOS privacy, Agent, history, and shutdown problems."
-order: 6
-category: Reference
+order: 8
+category: Local
 summary: "A symptom-first checklist for getting the Mac runtime and Secure MCP Tunnel healthy again."
 ---
 
@@ -47,7 +47,7 @@ Verify:
 
 For a personal account, use the personal Platform organization tied to that account. If you are using a separate ChatGPT workspace, make sure the tunnel is associated with the workspace you actually selected in ChatGPT.
 
-See [Local setup and ChatGPT connection](/docs/local-setup).
+See [Local setup and ChatGPT connection](/docs/local/setup).
 
 ## ChatGPT scans zero or unexpected tools
 
@@ -227,6 +227,6 @@ Stop that process using the mechanism that owns it.
 
 ## Building/debugging a custom Local observability client
 
-The built-in TUI uses the same public API as custom clients. If `zodex local watch` works but your client does not, compare your discovery/version/auth flow with [Local observability API](/docs/local-watch-client). For TUI-specific behavior, see [Local watch TUI](/docs/local-watch).
+The built-in TUI uses the same public API as custom clients. If `zodex local watch` works but your client does not, compare your discovery/version/auth flow with [Local observability API](/docs/local/observability-api). For TUI-specific behavior, see [Local watch TUI](/docs/local/watch).
 
 The API guide covers Bearer authentication, runtime discovery, Agent/workdir filters, bounded invocation/output queries, live SSE, explicit `gap` events, durable recovery, browser CORS constraints, and version handling.
