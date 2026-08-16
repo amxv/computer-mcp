@@ -208,6 +208,7 @@ async fn agent_detail(
 struct InvocationListQuery {
     last: Option<usize>,
     since_ms: Option<i64>,
+    recovery_since_ms: Option<i64>,
     agent_id: Option<String>,
     workdir: Option<String>,
 }
@@ -240,6 +241,7 @@ async fn invocations(
     let history_query = HistoryQuery {
         last,
         since_ms: query.since_ms,
+        active_or_changed_since_ms: query.recovery_since_ms,
         agent_id: query.agent_id,
         normalized_workdir,
         invocation_id: None,

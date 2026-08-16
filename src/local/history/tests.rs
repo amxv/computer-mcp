@@ -761,7 +761,12 @@ fn retention_removes_whole_old_units_recomputes_summaries_and_keeps_newest_over_
         .unwrap();
     drop(connection);
     let before = store.physical_size().unwrap();
-    store.run_retention(1, u64::MAX).unwrap();
+    // The fixture makes the old record epoch-old explicitly, so use a wide
+    // age window that still expires it while keeping the freshly-created
+    // record independent of host scheduling delays. A one-second wall-clock
+    // window made this retention correctness test fail when the parallel test
+    // runner was descheduled for more than a second.
+    store.run_retention(365 * 24 * 60 * 60, u64::MAX).unwrap();
     let after_age = store.physical_size().unwrap();
     assert!(
         LocalHistoryReader::query(

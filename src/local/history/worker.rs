@@ -92,7 +92,7 @@ impl HistoryHealth {
             reason: Mutex::new(None),
             incomplete_evidence_invocations: Mutex::new(HashSet::new()),
             incomplete_capture_invocations: Mutex::new(HashSet::new()),
-            maintenance_requested: AtomicBool::new(true),
+            maintenance_requested: AtomicBool::new(false),
         }
     }
 
@@ -197,6 +197,8 @@ enum WorkerMessage {
         outcome: InvocationOutcome,
         file_evidence: Vec<CompletedFileEvidence>,
     },
+    #[cfg(test)]
+    Barrier(std::sync::mpsc::Sender<()>),
     Shutdown,
 }
 
@@ -230,13 +232,20 @@ impl LocalHistoryRuntime {
                 runtime_id.clone(),
             )?),
         };
+        let max_age_seconds = config.max_age_seconds;
+        let max_size_bytes = config.max_size_bytes;
+        // Enforce retention before the runtime is returned and can admit its
+        // first invocation. Keeping this startup pass out of the writer loop
+        // prevents maintenance from cutting in front of the first queued
+        // completion while preserving immediate startup cleanup.
+        if let Err(error) = store.run_retention(max_age_seconds, max_size_bytes) {
+            mark_retention_error_best_effort(&store, &error.to_string());
+        }
         let (sender, receiver) = std::sync::mpsc::sync_channel(config.output_queue_capacity.max(1));
         let health = Arc::new(HistoryHealth::new());
         let worker_store = store.clone();
         let worker_health = health.clone();
         let worker_events = events.clone();
-        let max_age_seconds = config.max_age_seconds;
-        let max_size_bytes = config.max_size_bytes;
         let worker = std::thread::Builder::new()
             .name("zodex-local-history".to_string())
             .spawn(move || {
@@ -313,6 +322,19 @@ impl LocalHistoryRuntime {
 
     pub fn run_retention_now(&self, max_age_seconds: u64, max_size_bytes: u64) -> Result<()> {
         self.store.run_retention(max_age_seconds, max_size_bytes)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn flush_for_test(&self) -> Result<()> {
+        let (acknowledge, acknowledged) = std::sync::mpsc::channel();
+        self.sender
+            .send(WorkerMessage::Barrier(acknowledge))
+            .map_err(|_| {
+                anyhow::anyhow!("Local history writer is unavailable during test flush")
+            })?;
+        acknowledged.recv().map_err(|_| {
+            anyhow::anyhow!("Local history writer stopped before test flush completed")
+        })
     }
 
     pub fn shutdown_blocking(&self) -> Result<()> {
@@ -689,13 +711,18 @@ fn run_worker(
     max_size_bytes: u64,
 ) {
     let mut shutdown = false;
-    let mut last_maintenance = None::<Instant>;
+    // `open_with_store` completed the startup retention pass before spawning
+    // this worker, so future maintenance can honor the normal coalescing
+    // interval instead of racing the first evidence messages.
+    let mut last_maintenance = Some(Instant::now());
     while !shutdown {
         let mut messages = Vec::with_capacity(OUTPUT_BATCH_LIMIT);
         match receiver.recv_timeout(OUTPUT_BATCH_WAIT) {
             Ok(message @ (WorkerMessage::Output(_) | WorkerMessage::Complete { .. })) => {
                 messages.push(message)
             }
+            #[cfg(test)]
+            Ok(message @ WorkerMessage::Barrier(_)) => messages.push(message),
             Ok(WorkerMessage::Shutdown) => shutdown = true,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
@@ -705,6 +732,8 @@ fn run_worker(
                 Ok(message @ (WorkerMessage::Output(_) | WorkerMessage::Complete { .. })) => {
                     messages.push(message)
                 }
+                #[cfg(test)]
+                Ok(message @ WorkerMessage::Barrier(_)) => messages.push(message),
                 Ok(WorkerMessage::Shutdown) => {
                     shutdown = true;
                     break;
@@ -770,6 +799,11 @@ fn process_messages(
                     emit_completion_events(events, &context, &outcome);
                     health.maintenance_requested.store(true, Ordering::Release);
                 }
+            }
+            #[cfg(test)]
+            WorkerMessage::Barrier(acknowledge) => {
+                flush_output_events(&mut output_events, store, health, events);
+                let _ = acknowledge.send(());
             }
             WorkerMessage::Shutdown => {
                 unreachable!("shutdown messages are consumed by the worker loop")

@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::local::history::{HistoryAgentRecord, HistoryOutputChunk, HistoryOutputMetadata};
@@ -7,8 +7,8 @@ use crate::local::{HistoryAgentWorkdir, HistoryInvocation, HistoryStoreStatus};
 
 pub const LOCAL_OBSERVABILITY_API_VERSION: u32 = 1;
 
-#[derive(Debug, Serialize)]
-pub(super) struct ApiStatusDocument {
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct ApiStatusDocument {
     pub schema_version: u32,
     pub api_version: u32,
     pub presentation_version: u32,
@@ -18,22 +18,22 @@ pub(super) struct ApiStatusDocument {
     pub active_process_count: u64,
 }
 
-#[derive(Debug, Serialize)]
-pub(super) struct ApiAgentList {
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct ApiAgentList {
     pub schema_version: u32,
     pub runtime_id: String,
     pub agents: Vec<ApiAgent>,
 }
 
-#[derive(Debug, Serialize)]
-pub(super) struct ApiAgentDetail {
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct ApiAgentDetail {
     pub schema_version: u32,
     pub runtime_id: String,
     pub agent: ApiAgent,
 }
 
-#[derive(Debug, Serialize)]
-pub(super) struct ApiAgent {
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct ApiAgent {
     pub id: String,
     pub first_seen_at_ms: i64,
     pub last_seen_at_ms: i64,
@@ -59,8 +59,8 @@ impl ApiAgent {
     }
 }
 
-#[derive(Debug, Serialize)]
-pub(super) struct ApiInvocationList {
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub(crate) struct ApiInvocationList {
     pub schema_version: u32,
     pub presentation_version: u32,
     pub runtime_id: String,
@@ -68,8 +68,8 @@ pub(super) struct ApiInvocationList {
     pub presentation: PresentationDocument,
 }
 
-#[derive(Debug, Serialize)]
-pub(super) struct ApiInvocationDetail {
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub(crate) struct ApiInvocationDetail {
     pub schema_version: u32,
     pub presentation_version: u32,
     pub runtime_id: String,
@@ -78,8 +78,8 @@ pub(super) struct ApiInvocationDetail {
     pub output: HistoryOutputMetadata,
 }
 
-#[derive(Debug, Serialize)]
-pub(super) struct ApiLogicalInvocation {
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub(crate) struct ApiLogicalInvocation {
     pub id: i64,
     pub correlation_id: String,
     pub agent_id: Option<String>,
@@ -133,8 +133,8 @@ impl From<HistoryInvocation> for ApiLogicalInvocation {
     }
 }
 
-#[derive(Debug, Serialize)]
-pub(super) struct ApiOutputPage {
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct ApiOutputPage {
     pub schema_version: u32,
     pub runtime_id: String,
     pub invocation_id: i64,
@@ -142,8 +142,8 @@ pub(super) struct ApiOutputPage {
     pub next_cursor: Option<u64>,
 }
 
-#[derive(Debug, Serialize)]
-pub(super) struct ApiError {
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct ApiError {
     pub schema_version: u32,
     pub error: String,
 }

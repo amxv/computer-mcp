@@ -3,7 +3,7 @@ use std::io::IsTerminal as _;
 use zodex::local::{
     HistoryFormat, HistoryQuery, LocalConfig, LocalHistoryReader, LocalPaths, LocalStatusDocument,
     LocalStatusState, RuntimeKey, build_presentation, clear_local_history, ensure_offline_mutation,
-    parse_human_duration, render_presentation, validate_tunnel_id,
+    parse_human_duration, render_presentation, run_local_watch, validate_tunnel_id, WatchOptions,
 };
 
 #[cfg(target_os = "macos")]
@@ -170,9 +170,8 @@ async fn handle_local_command(command: LocalCommand) -> Result<()> {
             if let Some(agent) = agent.as_deref() {
                 validate_agent_id(agent)?;
             }
-            let _ = all;
             ensure_local_runtime_host()?;
-            bail!("`zodex local watch` is not available until the observability/TUI phases")
+            run_local_watch(&paths, WatchOptions { agent, all }).await
         }
         LocalCommand::History {
             last,
@@ -232,6 +231,7 @@ async fn handle_local_command(command: LocalCommand) -> Result<()> {
             let mut query = HistoryQuery {
                 last: last.unwrap_or(if invocation_id.is_some() { 1 } else { 20 }),
                 since_ms,
+                active_or_changed_since_ms: None,
                 agent_id: agent,
                 normalized_workdir: None,
                 invocation_id,

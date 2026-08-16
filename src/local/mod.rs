@@ -12,6 +12,7 @@ mod setup;
 mod status;
 mod tunnel_provider;
 mod tunnel_release;
+mod watch;
 
 #[cfg(test)]
 mod setup_tests;
@@ -48,7 +49,7 @@ pub use status::{
     LOCAL_DISCOVERY_SCHEMA_VERSION, LOCAL_RUNTIME_STATE_SCHEMA_VERSION,
     LOCAL_STATUS_SCHEMA_VERSION, LocalObservabilityDiscovery, LocalRuntimeDiscovery,
     LocalRuntimeLifecycle, LocalRuntimeState, LocalStatusDocument, LocalStatusState,
-    ensure_offline_mutation,
+    ensure_offline_mutation, load_runtime_discovery,
 };
 #[cfg(target_os = "macos")]
 pub use tunnel_provider::MacDittoArchiveExtractor;
@@ -59,3 +60,4 @@ pub use tunnel_release::{
     OfficialTunnelReleaseClient, ResolvedTunnelRelease, TunnelArchitecture, sha256_hex,
     validate_tunnel_id,
 };
+pub use watch::{WatchOptions, run_local_watch};

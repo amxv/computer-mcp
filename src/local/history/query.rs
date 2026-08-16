@@ -35,6 +35,11 @@ impl HistoryFormat {
 pub struct HistoryQuery {
     pub last: usize,
     pub since_ms: Option<i64>,
+    /// Recovery-only window: include invocations that started or completed in
+    /// the window, plus any invocation that is still running. This lets a
+    /// from-now live observer recover a pre-existing command after an SSE gap
+    /// without preloading unrelated completed history.
+    pub active_or_changed_since_ms: Option<i64>,
     pub agent_id: Option<String>,
     pub normalized_workdir: Option<String>,
     pub invocation_id: Option<i64>,
@@ -144,20 +149,20 @@ pub(crate) struct HistoryAgentRecord {
     pub last_seen_runtime_id: String,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct HistoryOutputChunk {
     pub sequence: u64,
     pub observed_at_ms: i64,
     pub text: String,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct HistoryOutputPage {
     pub chunks: Vec<HistoryOutputChunk>,
     pub next_cursor: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct HistoryOutputMetadata {
     pub available: bool,
     pub chunk_count: u64,
@@ -167,7 +172,7 @@ pub(crate) struct HistoryOutputMetadata {
     pub first_cursor: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HistoryStoreStatus {
     pub database_exists: bool,
     pub physical_size_bytes: u64,
@@ -224,6 +229,13 @@ impl LocalHistoryReader {
         }
         if let Some(since_ms) = query.since_ms {
             sql.push_str(" AND started_at_ms >= ?");
+            parameters.push(SqlValue::Integer(since_ms));
+        }
+        if let Some(since_ms) = query.active_or_changed_since_ms {
+            sql.push_str(
+                " AND (started_at_ms >= ? OR completed_at_ms >= ? OR completed_at_ms IS NULL)",
+            );
+            parameters.push(SqlValue::Integer(since_ms));
             parameters.push(SqlValue::Integer(since_ms));
         }
         if let Some(agent_id) = &query.agent_id {

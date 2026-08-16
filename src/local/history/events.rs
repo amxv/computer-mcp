@@ -2,14 +2,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::broadcast;
 
 pub(crate) const HISTORY_LIVE_EVENT_SCHEMA_VERSION: u32 = 1;
 const DEFAULT_EVENT_CAPACITY: usize = 256;
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) struct HistoryLiveEvent {
     pub schema_version: u32,
     pub runtime_id: String,

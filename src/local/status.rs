@@ -106,7 +106,7 @@ impl LocalStatusDocument {
         let runtime_state_path = paths.runtime_state_file();
         let discovery_path = paths.discovery_file();
         let runtime_state_present = runtime_state_path.exists();
-        let discovery = load_discovery_if_present(paths)?;
+        let discovery = load_runtime_discovery(paths)?;
         let history_store = LocalHistoryReader::status(&paths.history_database())?;
 
         let state = if runtime_state_present || discovery.is_some() {
@@ -157,7 +157,7 @@ pub fn ensure_offline_mutation(paths: &LocalPaths, operation: &str) -> Result<()
     Ok(())
 }
 
-fn load_discovery_if_present(paths: &LocalPaths) -> Result<Option<LocalRuntimeDiscovery>> {
+pub fn load_runtime_discovery(paths: &LocalPaths) -> Result<Option<LocalRuntimeDiscovery>> {
     let path = paths.discovery_file();
     if !path.exists() {
         return Ok(None);

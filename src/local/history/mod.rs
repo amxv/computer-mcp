@@ -6,7 +6,11 @@ mod store;
 mod worker;
 
 #[cfg(test)]
+mod maintenance_tests;
+#[cfg(test)]
 mod migration_tests;
+#[cfg(test)]
+mod recovery_tests;
 #[cfg(test)]
 mod shutdown_tests;
 #[cfg(test)]

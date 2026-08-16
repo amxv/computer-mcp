@@ -107,26 +107,23 @@ async fn next_sse_frame_containing(stream: &mut BodyDataStream, needle: &str) ->
     panic!("SSE stream did not produce frame containing `{needle}`");
 }
 
-async fn wait_for_invocation(history: &LocalHistoryRuntime, invocation_id: i64) {
-    for _ in 0..100 {
-        let records = LocalHistoryReader::query(
-            history.database_path(),
-            &HistoryQuery {
-                last: 1,
-                invocation_id: Some(invocation_id),
-                ..HistoryQuery::default()
-            },
-        )
-        .unwrap();
-        if records
+fn wait_for_invocation(history: &LocalHistoryRuntime, invocation_id: i64) {
+    history.flush_for_test().unwrap();
+    let records = LocalHistoryReader::query(
+        history.database_path(),
+        &HistoryQuery {
+            last: 1,
+            invocation_id: Some(invocation_id),
+            ..HistoryQuery::default()
+        },
+    )
+    .unwrap();
+    assert!(
+        records
             .first()
-            .is_some_and(|record| record.completed_at_ms.is_some())
-        {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    panic!("invocation {invocation_id} did not complete durably");
+            .is_some_and(|record| record.completed_at_ms.is_some()),
+        "invocation {invocation_id} did not complete durably before the history queue barrier"
+    );
 }
 
 #[tokio::test]
@@ -148,7 +145,7 @@ async fn api_is_loopback_bearer_read_only_agent_aware_and_secret_free() {
         Some(&old_workdir),
     );
     complete(&old, &old_context);
-    wait_for_invocation(&old, old_context.invocation_id.unwrap()).await;
+    wait_for_invocation(&old, old_context.invocation_id.unwrap());
     old.shutdown_blocking().unwrap();
 
     let history = open_history(&database, "runtime-current");
@@ -173,7 +170,7 @@ async fn api_is_loopback_bearer_read_only_agent_aware_and_secret_free() {
         Some(&first_workdir),
     );
     complete(&history, &unattributed);
-    wait_for_invocation(&history, second.invocation_id.unwrap()).await;
+    wait_for_invocation(&history, second.invocation_id.unwrap());
 
     let process = OwnedProcess {
         internal_session_id: 42,
@@ -457,7 +454,7 @@ async fn output_is_cursor_paginated_exact_and_detail_stays_bounded() {
             })),
         )
         .unwrap();
-    wait_for_invocation(&history, invocation_id).await;
+    wait_for_invocation(&history, invocation_id);
     for _ in 0..100 {
         if LocalHistoryReader::output_metadata(history.database_path(), invocation_id)
             .unwrap()
@@ -611,7 +608,7 @@ async fn sse_starts_now_filters_live_events_and_surfaces_recoverable_lag() {
     }
     drop(lifecycle_stream);
     complete(&history, &lifecycle);
-    wait_for_invocation(&history, lifecycle.invocation_id.unwrap()).await;
+    wait_for_invocation(&history, lifecycle.invocation_id.unwrap());
 
     let other = begin(
         &history,
@@ -662,7 +659,7 @@ async fn sse_starts_now_filters_live_events_and_surfaces_recoverable_lag() {
     );
     let presentation = next_sse_frame_containing(&mut stream, "event: presentation_updated").await;
     assert!(presentation.contains("\"presentation_revision\":1"));
-    wait_for_invocation(&history, invocation_id).await;
+    wait_for_invocation(&history, invocation_id);
 
     let detail = request(
         &app,
@@ -711,7 +708,7 @@ async fn sse_starts_now_filters_live_events_and_surfaces_recoverable_lag() {
         stdin_updated.contains(&format!("\"invocation_id\":{stdin_id}")),
         "{stdin_updated}"
     );
-    wait_for_invocation(&history, stdin_id).await;
+    wait_for_invocation(&history, stdin_id);
 
     let patch_path = workdir.join("patch-target.txt");
     std::fs::write(&patch_path, "before\n").unwrap();
@@ -746,7 +743,7 @@ async fn sse_starts_now_filters_live_events_and_surfaces_recoverable_lag() {
         patch_updated.contains(&format!("\"invocation_id\":{patch_id}")),
         "{patch_updated}"
     );
-    wait_for_invocation(&history, patch_id).await;
+    wait_for_invocation(&history, patch_id);
     let patch_detail = body_json(
         request(
             &app,
@@ -786,7 +783,7 @@ async fn sse_starts_now_filters_live_events_and_surfaces_recoverable_lag() {
         None,
     );
     complete(&history, &prompt);
-    wait_for_invocation(&history, prompt.invocation_id.unwrap()).await;
+    wait_for_invocation(&history, prompt.invocation_id.unwrap());
     assert!(
         prompt_started.elapsed() < Duration::from_secs(1),
         "a stalled SSE subscriber must not add one second of execution/history latency"
@@ -840,7 +837,7 @@ async fn two_agent_sse_filters_are_independent_and_global_stream_keeps_unattribu
     );
     complete(&history, &seed_a);
     complete(&history, &seed_b);
-    wait_for_invocation(&history, seed_b.invocation_id.unwrap()).await;
+    wait_for_invocation(&history, seed_b.invocation_id.unwrap());
     let agent_a = seed_a.agent_id.as_deref().unwrap().to_string();
     let agent_b = seed_b.agent_id.as_deref().unwrap().to_string();
     assert_ne!(agent_a, agent_b);
@@ -908,7 +905,7 @@ async fn two_agent_sse_filters_are_independent_and_global_stream_keeps_unattribu
     complete(&history, &a);
     complete(&history, &b);
     complete(&history, &unattributed);
-    wait_for_invocation(&history, unattributed.invocation_id.unwrap()).await;
+    wait_for_invocation(&history, unattributed.invocation_id.unwrap());
     drop(stream_a);
     drop(stream_b);
     drop(global);
@@ -931,7 +928,7 @@ async fn retained_agent_emits_first_seen_on_first_call_in_new_runtime() {
         Some(&workdir),
     );
     complete(&old, &old_context);
-    wait_for_invocation(&old, old_context.invocation_id.unwrap()).await;
+    wait_for_invocation(&old, old_context.invocation_id.unwrap());
     let retained_agent_id = old_context.agent_id.clone().unwrap();
     old.shutdown_blocking().unwrap();
 
@@ -955,6 +952,6 @@ async fn retained_agent_emits_first_seen_on_first_call_in_new_runtime() {
     assert_eq!(first.agent_id.as_deref(), Some(retained_agent_id.as_ref()));
     assert_eq!(first.invocation_id, current.invocation_id);
     complete(&history, &current);
-    wait_for_invocation(&history, current.invocation_id.unwrap()).await;
+    wait_for_invocation(&history, current.invocation_id.unwrap());
     history.shutdown_blocking().unwrap();
 }
