@@ -500,6 +500,7 @@ mod tests {
             paths.owned_process_registry_file(),
             serde_json::to_vec(&crate::local::LocalProcessRegistryDocument {
                 schema_version: crate::local::LOCAL_PROCESS_REGISTRY_SCHEMA_VERSION,
+                runtime_id: state.runtime_id.clone(),
                 processes: vec![crate::local::LocalOwnedProcessRecord {
                     internal_session_id: 1,
                     session_handle: "fixture".to_string(),

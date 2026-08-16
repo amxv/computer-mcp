@@ -146,13 +146,14 @@ async fn shutdown_history_bounded(history: Arc<LocalHistoryRuntime>) -> Result<(
 pub async fn start_local_host_runtime(
     options: LocalHostRuntimeOptions,
 ) -> Result<LocalHostRuntime> {
-    let registry = Arc::new(LocalOwnedProcessRegistry::fresh(
-        options.paths.owned_process_registry_file(),
-    )?);
-    let local_config = LocalConfig::load(&options.paths.config_file())?;
     let runtime_id = options
         .runtime_id
         .unwrap_or_else(|| Arc::<str>::from(format!("{:032x}", rand::random::<u128>())));
+    let registry = Arc::new(LocalOwnedProcessRegistry::fresh(
+        options.paths.owned_process_registry_file(),
+        runtime_id.clone(),
+    )?);
+    let local_config = LocalConfig::load(&options.paths.config_file())?;
     let history = LocalHistoryRuntime::open(LocalHistoryRuntimeConfig::new(
         options.paths.history_database(),
         runtime_id,

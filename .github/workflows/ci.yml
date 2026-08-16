@@ -10,6 +10,8 @@ on:
       - .github/workflows/release.yml
       - Cargo.toml
       - Cargo.lock
+      - gg/zodex-local/zodex-local-implementation-plan-2026-08-15.md
+      - gg/zodex-local/zodex-local-acceptance.md
       - scripts/check.sh
       - scripts/check-local-contract.sh
       - scripts/install.sh
@@ -23,6 +25,8 @@ on:
       - .github/workflows/release.yml
       - Cargo.toml
       - Cargo.lock
+      - gg/zodex-local/zodex-local-implementation-plan-2026-08-15.md
+      - gg/zodex-local/zodex-local-acceptance.md
       - scripts/check.sh
       - scripts/check-local-contract.sh
       - scripts/install.sh

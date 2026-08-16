@@ -21,6 +21,8 @@ fn normal_ci_covers_linux_and_native_apple_silicon_without_secrets() {
         "runs-on: macos-15",
         "CARGO_BUILD_TARGET: aarch64-apple-darwin",
         "targets: aarch64-apple-darwin",
+        "gg/zodex-local/zodex-local-implementation-plan-2026-08-15.md",
+        "gg/zodex-local/zodex-local-acceptance.md",
         "bash scripts/check-local-contract.sh",
         "bash scripts/check.sh",
     ] {
@@ -45,6 +47,13 @@ fn portable_contract_script_pins_modern_legacy_workdir_and_local_operator_proofs
         "workdir_is_required_in_model_visible_exec_and_patch_schemas",
         "local_discovery_and_tools_list_are_stateless_and_runtime_specific",
         "zodex_local_help_exposes_complete_public_family_and_inspection_examples",
+        "zodex-local-implementation-plan-2026-08-15.md",
+        "zodex-local-acceptance.md",
+        "acceptance-map:start",
+        "plan-acceptance-cksum",
+        "plan-file-cksum",
+        "cksum",
+        "Phase-13-native",
         "-- --exact",
     ] {
         assert!(
@@ -52,6 +61,10 @@ fn portable_contract_script_pins_modern_legacy_workdir_and_local_operator_proofs
             "portable contract check missing `{required}`"
         );
     }
+    assert!(
+        !script.contains("144"),
+        "acceptance validation must derive the current criterion set rather than hard-code the planning-time count"
+    );
 }
 
 #[test]

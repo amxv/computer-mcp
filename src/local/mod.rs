@@ -59,7 +59,7 @@ pub use presentation::{
 pub use process_registry::{
     LOCAL_PROCESS_REGISTRY_SCHEMA_VERSION, LocalOwnedProcessRecord, LocalOwnedProcessRegistry,
     LocalProcessRegistryDocument, StaleProcessCleanupReport, active_process_record_count,
-    signal_matching_stale_processes,
+    terminate_matching_stale_processes,
 };
 pub use runtime::{LocalHostRuntime, LocalHostRuntimeOptions, start_local_host_runtime};
 #[cfg(target_os = "macos")]

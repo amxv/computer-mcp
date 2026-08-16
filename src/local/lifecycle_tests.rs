@@ -517,6 +517,7 @@ async fn hidden_runtime_child_reaches_one_runtime_multi_agent_readiness_and_ttl_
     );
     let process_document: LocalProcessRegistryDocument =
         serde_json::from_slice(&fs::read(paths.owned_process_registry_file()).unwrap()).unwrap();
+    assert_eq!(process_document.runtime_id, prepared.runtime_id);
 
     let agent_deadline = tokio::time::Instant::now() + Duration::from_secs(2);
     loop {

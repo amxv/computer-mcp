@@ -34,7 +34,7 @@ use super::{
     LocalRuntimeLifecycle, LocalRuntimeState, LocalStatusDocument, LocalTunnelProfile,
     ManagedTunnelChild, RuntimeKey, StaleTunnelCleanup, cleanup_stale_tunnel_child,
     consume_environment_handoff, load_runtime_discovery, load_runtime_state, probe_tunnel_health,
-    signal_matching_stale_processes, spawn_tunnel_client, start_local_host_runtime,
+    spawn_tunnel_client, start_local_host_runtime, terminate_matching_stale_processes,
     write_environment_handoff, write_mcp_token, write_runtime_discovery, write_runtime_state,
     write_tunnel_profile,
 };
@@ -283,18 +283,27 @@ pub async fn stop_via_launchd(
         StaleTunnelCleanup::NoRecordedChild => {}
     }
     if paths.owned_process_registry_file().exists() {
-        let report = signal_matching_stale_processes(
+        let report = terminate_matching_stale_processes(
             &paths.owned_process_registry_file(),
+            state.as_ref().map(|state| state.runtime_id.as_str()),
             &inspector,
-            ProcessSignal::Terminate,
         )?;
-        if report.identity_mismatch > 0 {
+        if report.identity_mismatch > 0
+            || report.unresolved_leaderless_groups > 0
+            || report.survivors > 0
+        {
             bail!(
-                "stale Local command-process identities no longer match; refusing destructive runtime cleanup"
+                "stale Local command-process cleanup is unresolved (identity mismatches: {}, leaderless groups: {}, survivors: {}); refusing destructive runtime cleanup",
+                report.identity_mismatch,
+                report.unresolved_leaderless_groups,
+                report.survivors,
             );
         }
         if outcome == LocalStopOutcome::AlreadyStopped
-            && (report.signaled > 0 || report.already_gone > 0)
+            && (report.signaled > 0
+                || report.force_killed > 0
+                || report.descendants_signaled > 0
+                || report.already_gone > 0)
         {
             outcome = LocalStopOutcome::StaleCleaned;
         }
@@ -306,7 +315,8 @@ pub async fn stop_via_launchd(
 
 pub fn cleanup_stale_runtime(paths: &LocalPaths, launchd: &dyn LaunchdController) -> Result<()> {
     let inspector = SystemProcessInspector;
-    if let Some(state) = load_runtime_state(paths)?
+    let state = load_runtime_state(paths)?;
+    if let Some(state) = state.as_ref()
         && let Some(process) = state.process.as_ref()
         && identity_matches(&inspector, process)?
     {
@@ -325,13 +335,21 @@ pub fn cleanup_stale_runtime(paths: &LocalPaths, launchd: &dyn LaunchdController
         | StaleTunnelCleanup::AlreadyExited(_) => {}
     }
     if paths.owned_process_registry_file().exists() {
-        let report = signal_matching_stale_processes(
+        let report = terminate_matching_stale_processes(
             &paths.owned_process_registry_file(),
+            state.as_ref().map(|state| state.runtime_id.as_str()),
             &inspector,
-            ProcessSignal::Terminate,
         )?;
-        if report.identity_mismatch > 0 {
-            bail!("stale Local process registry contains reused/mismatched PIDs; refusing cleanup");
+        if report.identity_mismatch > 0
+            || report.unresolved_leaderless_groups > 0
+            || report.survivors > 0
+        {
+            bail!(
+                "stale Local process registry cleanup is unresolved (identity mismatches: {}, leaderless groups: {}, survivors: {}); refusing cleanup",
+                report.identity_mismatch,
+                report.unresolved_leaderless_groups,
+                report.survivors,
+            );
         }
     }
     launchd.bootout()?;
@@ -368,11 +386,15 @@ pub async fn run_hidden_runtime(
         let _ = fs::remove_file(paths.discovery_file());
         let inspector = SystemProcessInspector;
         let _ = cleanup_stale_tunnel_child(&paths, &inspector);
+        let stale_runtime_id = load_runtime_state(&paths)
+            .ok()
+            .flatten()
+            .map(|state| state.runtime_id);
         if paths.owned_process_registry_file().exists() {
-            let _ = signal_matching_stale_processes(
+            let _ = terminate_matching_stale_processes(
                 &paths.owned_process_registry_file(),
+                stale_runtime_id.as_deref(),
                 &inspector,
-                ProcessSignal::Terminate,
             );
         }
         if let Ok(bootstrap) = load_runtime_bootstrap(&bootstrap_path) {
@@ -873,7 +895,8 @@ fn healthy_existing_discovery(paths: &LocalPaths) -> Result<Option<LocalRuntimeD
 
 fn cleanup_partial_start(paths: &LocalPaths, launchd: &dyn LaunchdController) -> Result<()> {
     let inspector = SystemProcessInspector;
-    if let Some(state) = load_runtime_state(paths)?
+    let state = load_runtime_state(paths)?;
+    if let Some(state) = state.as_ref()
         && let Some(process) = state.process.as_ref()
         && !signal_process_if_matching(&inspector, process, ProcessSignal::Terminate)?
         && inspector.identity(process.pid)?.is_some()
@@ -893,15 +916,20 @@ fn cleanup_partial_start(paths: &LocalPaths, launchd: &dyn LaunchdController) ->
         | StaleTunnelCleanup::AlreadyExited(_) => {}
     }
     if paths.owned_process_registry_file().exists() {
-        let report = signal_matching_stale_processes(
+        let report = terminate_matching_stale_processes(
             &paths.owned_process_registry_file(),
+            state.as_ref().map(|state| state.runtime_id.as_str()),
             &inspector,
-            ProcessSignal::Terminate,
         )?;
-        if report.identity_mismatch > 0 {
+        if report.identity_mismatch > 0
+            || report.unresolved_leaderless_groups > 0
+            || report.survivors > 0
+        {
             bail!(
-                "partial-start cleanup found {} reused Local command-process PID(s); ownership state was preserved",
-                report.identity_mismatch
+                "partial-start cleanup is unresolved (identity mismatches: {}, leaderless groups: {}, survivors: {}); ownership state was preserved",
+                report.identity_mismatch,
+                report.unresolved_leaderless_groups,
+                report.survivors,
             );
         }
     }
