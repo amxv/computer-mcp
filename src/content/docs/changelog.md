@@ -8,6 +8,12 @@ summary: Version-by-version changes for the zodex CLI, agent runtime, proxy, pub
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.2.26 — 2026-08-16
+
+- Upgraded the shared MCP server from RMCP 1.2 to RMCP 3.1.2, adding modern stateless MCP `2026-07-28` support while retaining legacy Sprite client compatibility.
+- Required absolute existing workdirs for command and patch calls, preventing implicit or relative execution routing.
+- Added automatic access to ChatGPT's opaque `openai/session` request metadata without adding bookkeeping fields to model-visible tool arguments.
+
 ## 0.2.25 — 2026-08-15
 
 - Reaped yielded command sessions even when clients never poll again, preventing zombie child processes while preserving final session output and status.

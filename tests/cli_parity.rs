@@ -26,6 +26,13 @@ fn test_config(api_key: &str) -> Arc<Config> {
     })
 }
 
+fn test_workdir() -> String {
+    std::env::current_dir()
+        .expect("test current directory")
+        .to_string_lossy()
+        .to_string()
+}
+
 fn assert_running_session_shape(output: &ToolOutput) {
     assert_eq!(output.status, CommandStatus::Running);
     assert!(output.session_id.is_some());
@@ -163,6 +170,8 @@ async fn exec_command_cli_handles_self_signed_https_daemon() {
         "printf 'https-cli\\n'".to_string(),
         "--yield-time-ms".to_string(),
         "2000".to_string(),
+        "--workdir".to_string(),
+        test_workdir(),
     ])
     .await;
 
@@ -186,7 +195,7 @@ async fn exec_command_parity_service_http_and_cli() {
         .exec_command(ExecCommandInput {
             cmd: cmd.to_string(),
             yield_time_ms: Some(2_000),
-            workdir: None,
+            workdir: test_workdir(),
             timeout_ms: None,
         })
         .await
@@ -197,7 +206,8 @@ async fn exec_command_parity_service_http_and_cli() {
         "/v1/exec-command",
         json!({
             "cmd": cmd,
-            "yield_time_ms": 2_000
+            "yield_time_ms": 2_000,
+            "workdir": test_workdir()
         }),
     )
     .await;
@@ -210,6 +220,8 @@ async fn exec_command_parity_service_http_and_cli() {
         cmd.to_string(),
         "--yield-time-ms".to_string(),
         "2000".to_string(),
+        "--workdir".to_string(),
+        test_workdir(),
     ])
     .await;
 
@@ -239,7 +251,7 @@ async fn write_stdin_parity_service_http_and_cli() {
         .exec_command(ExecCommandInput {
             cmd: start_shell.to_string(),
             yield_time_ms: Some(50),
-            workdir: None,
+            workdir: test_workdir(),
             timeout_ms: Some(60_000),
         })
         .await
@@ -274,6 +286,7 @@ async fn write_stdin_parity_service_http_and_cli() {
         json!({
             "cmd": start_shell,
             "yield_time_ms": 50,
+            "workdir": test_workdir(),
             "timeout_ms": 60_000
         }),
     )
@@ -314,6 +327,8 @@ async fn write_stdin_parity_service_http_and_cli() {
         start_shell.to_string(),
         "--yield-time-ms".to_string(),
         "50".to_string(),
+        "--workdir".to_string(),
+        test_workdir(),
         "--timeout-ms".to_string(),
         "60000".to_string(),
     ])
@@ -380,7 +395,7 @@ async fn kill_process_parity_service_http_and_cli() {
         .exec_command(ExecCommandInput {
             cmd: start_cmd.to_string(),
             yield_time_ms: Some(50),
-            workdir: None,
+            workdir: test_workdir(),
             timeout_ms: Some(60_000),
         })
         .await
@@ -397,6 +412,7 @@ async fn kill_process_parity_service_http_and_cli() {
         json!({
             "cmd": start_cmd,
             "yield_time_ms": 50,
+            "workdir": test_workdir(),
             "timeout_ms": 60_000
         }),
     )
@@ -413,6 +429,8 @@ async fn kill_process_parity_service_http_and_cli() {
         start_cmd.to_string(),
         "--yield-time-ms".to_string(),
         "50".to_string(),
+        "--workdir".to_string(),
+        test_workdir(),
         "--timeout-ms".to_string(),
         "60000".to_string(),
     ])
@@ -488,7 +506,7 @@ async fn timeout_parity_service_http_and_cli() {
         .exec_command(ExecCommandInput {
             cmd: "sleep 30".to_string(),
             yield_time_ms: Some(2_500),
-            workdir: None,
+            workdir: test_workdir(),
             timeout_ms: Some(1_000),
         })
         .await
@@ -500,6 +518,7 @@ async fn timeout_parity_service_http_and_cli() {
         json!({
             "cmd": "sleep 30",
             "yield_time_ms": 2_500,
+            "workdir": test_workdir(),
             "timeout_ms": 1_000
         }),
     )
@@ -513,6 +532,8 @@ async fn timeout_parity_service_http_and_cli() {
         "sleep 30".to_string(),
         "--yield-time-ms".to_string(),
         "2500".to_string(),
+        "--workdir".to_string(),
+        test_workdir(),
         "--timeout-ms".to_string(),
         "1000".to_string(),
     ])
@@ -551,7 +572,7 @@ async fn cwd_and_truncation_parity_service_http_and_cli() {
         .exec_command(ExecCommandInput {
             cmd: "pwd".to_string(),
             yield_time_ms: Some(2_000),
-            workdir: Some(workdir_str.clone()),
+            workdir: workdir_str.clone(),
             timeout_ms: None,
         })
         .await
@@ -597,7 +618,7 @@ async fn cwd_and_truncation_parity_service_http_and_cli() {
         .exec_command(ExecCommandInput {
             cmd: truncation_cmd.clone(),
             yield_time_ms: Some(5_000),
-            workdir: None,
+            workdir: test_workdir(),
             timeout_ms: None,
         })
         .await
@@ -608,7 +629,8 @@ async fn cwd_and_truncation_parity_service_http_and_cli() {
         "/v1/exec-command",
         json!({
             "cmd": truncation_cmd,
-            "yield_time_ms": 5_000
+            "yield_time_ms": 5_000,
+            "workdir": test_workdir()
         }),
     )
     .await;
@@ -621,6 +643,8 @@ async fn cwd_and_truncation_parity_service_http_and_cli() {
         truncation_cmd,
         "--yield-time-ms".to_string(),
         "5000".to_string(),
+        "--workdir".to_string(),
+        test_workdir(),
     ])
     .await;
 

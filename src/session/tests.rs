@@ -9,13 +9,20 @@ use crate::protocol::{CommandStatus, ExecCommandInput, TerminationReason, WriteS
 
 use super::{SESSION_HANDLE_LEN, SessionManager, SessionOrigin, strip_ansi_codes};
 
+fn test_workdir() -> String {
+    std::env::current_dir()
+        .expect("test current directory")
+        .to_string_lossy()
+        .to_string()
+}
+
 async fn start_stateful_shell(mgr: &SessionManager, cfg: &Config) -> String {
     let response = mgr
         .exec_command(
             ExecCommandInput {
                 cmd: "bash --noprofile --norc".to_string(),
                 yield_time_ms: Some(50),
-                workdir: None,
+                workdir: test_workdir(),
                 timeout_ms: Some(60_000),
             },
             cfg,
@@ -64,7 +71,7 @@ async fn running_vs_finished_response_shape() {
             ExecCommandInput {
                 cmd: "echo hi".to_string(),
                 yield_time_ms: Some(2_000),
-                workdir: None,
+                workdir: test_workdir(),
                 timeout_ms: None,
             },
             &cfg,
@@ -93,7 +100,7 @@ async fn running_vs_finished_response_shape() {
             ExecCommandInput {
                 cmd: "sleep 5".to_string(),
                 yield_time_ms: Some(50),
-                workdir: None,
+                workdir: test_workdir(),
                 timeout_ms: None,
             },
             &cfg,
@@ -152,7 +159,7 @@ async fn ansi_codes_are_stripped_from_tool_output() {
             ExecCommandInput {
                 cmd: "printf '\\033[31mred\\033[0m plain\\n'".to_string(),
                 yield_time_ms: Some(2_000),
-                workdir: None,
+                workdir: test_workdir(),
                 timeout_ms: None,
             },
             &cfg,
@@ -179,7 +186,7 @@ async fn failed_command_summary_reports_exit_code() {
             ExecCommandInput {
                 cmd: "exit 1".to_string(),
                 yield_time_ms: Some(2_000),
-                workdir: None,
+                workdir: test_workdir(),
                 timeout_ms: None,
             },
             &cfg,
@@ -271,7 +278,7 @@ async fn kill_process_true_terminates_with_exit_state() {
             ExecCommandInput {
                 cmd: "sleep 30".to_string(),
                 yield_time_ms: Some(50),
-                workdir: None,
+                workdir: test_workdir(),
                 timeout_ms: None,
             },
             &cfg,
@@ -323,7 +330,7 @@ async fn exec_timeout_terminates_process_and_returns_notice() {
             ExecCommandInput {
                 cmd: "sleep 30".to_string(),
                 yield_time_ms: Some(4_000),
-                workdir: None,
+                workdir: test_workdir(),
                 timeout_ms: Some(1_000),
             },
             &cfg,
@@ -366,7 +373,7 @@ async fn concurrent_sessions_are_independent() {
                 ExecCommandInput {
                     cmd: "sleep 1; echo slow".to_string(),
                     yield_time_ms: Some(2_000),
-                    workdir: None,
+                    workdir: test_workdir(),
                     timeout_ms: None,
                 },
                 &slow_cfg,
@@ -387,7 +394,7 @@ async fn concurrent_sessions_are_independent() {
                 ExecCommandInput {
                     cmd: "echo fast".to_string(),
                     yield_time_ms: Some(2_000),
-                    workdir: None,
+                    workdir: test_workdir(),
                     timeout_ms: None,
                 },
                 &fast_cfg,
@@ -444,7 +451,7 @@ async fn write_stdin_on_one_session_does_not_block_other_session_exec() {
                 ExecCommandInput {
                     cmd: "echo concurrent-exec".to_string(),
                     yield_time_ms: Some(2_000),
-                    workdir: None,
+                    workdir: test_workdir(),
                     timeout_ms: None,
                 },
                 &fast_cfg,
@@ -558,7 +565,7 @@ async fn handle_uniqueness_across_sessions() {
             ExecCommandInput {
                 cmd: "sleep 2".to_string(),
                 yield_time_ms: Some(50),
-                workdir: None,
+                workdir: test_workdir(),
                 timeout_ms: None,
             },
             &cfg,
@@ -571,7 +578,7 @@ async fn handle_uniqueness_across_sessions() {
             ExecCommandInput {
                 cmd: "sleep 2".to_string(),
                 yield_time_ms: Some(50),
-                workdir: None,
+                workdir: test_workdir(),
                 timeout_ms: None,
             },
             &cfg,
@@ -659,7 +666,7 @@ async fn yielded_child_is_reaped_without_a_follow_up_poll() {
             ExecCommandInput {
                 cmd: "sleep 0.15; printf 'reaped-without-poll\\n'".to_string(),
                 yield_time_ms: Some(20),
-                workdir: None,
+                workdir: test_workdir(),
                 timeout_ms: None,
             },
             &cfg,
@@ -712,7 +719,7 @@ async fn background_reaper_and_poll_share_the_terminal_status() {
             ExecCommandInput {
                 cmd: "sleep 0.1; printf 'reaper-race-complete\\n'".to_string(),
                 yield_time_ms: Some(20),
-                workdir: None,
+                workdir: test_workdir(),
                 timeout_ms: None,
             },
             &cfg,
@@ -758,7 +765,7 @@ async fn output_reports_command_cwd() {
             ExecCommandInput {
                 cmd: "pwd".to_string(),
                 yield_time_ms: Some(2_000),
-                workdir: Some(workdir.clone()),
+                workdir: workdir.clone(),
                 timeout_ms: None,
             },
             &cfg,
@@ -774,4 +781,188 @@ async fn output_reports_command_cwd() {
             .output
             .contains(dir.path().to_string_lossy().as_ref())
     );
+}
+
+#[tokio::test]
+async fn invalid_workdir_is_rejected_before_command_side_effect_or_session_eviction() {
+    let mgr = SessionManager::new(1, 20_000);
+    let cfg = Config::default();
+    let running = mgr
+        .exec_command(
+            ExecCommandInput {
+                cmd: "sleep 30".to_string(),
+                yield_time_ms: Some(50),
+                workdir: test_workdir(),
+                timeout_ms: Some(60_000),
+            },
+            &cfg,
+            SessionOrigin::direct(),
+        )
+        .await
+        .expect("first session should start");
+    let handle = running.session_handle.expect("running session handle");
+    let dir = tempdir().expect("tempdir");
+    let marker = dir.path().join("must-not-exist");
+    let missing_workdir = dir.path().join("missing-workdir");
+
+    let err = mgr
+        .exec_command(
+            ExecCommandInput {
+                cmd: format!("touch {}", marker.display()),
+                yield_time_ms: Some(2_000),
+                workdir: missing_workdir.display().to_string(),
+                timeout_ms: None,
+            },
+            &cfg,
+            SessionOrigin::direct(),
+        )
+        .await
+        .expect_err("missing workdir must be rejected");
+    assert!(err.to_string().contains("workdir does not exist"));
+    assert!(
+        !marker.exists(),
+        "invalid routing must have no command side effect"
+    );
+
+    let killed = mgr
+        .write_stdin(
+            WriteStdinInput {
+                session_handle: handle,
+                chars: None,
+                yield_time_ms: Some(6_000),
+                kill_process: Some(true),
+            },
+            &cfg,
+        )
+        .await
+        .expect("pre-existing session must remain reachable");
+    assert_eq!(killed.termination_reason, Some(TerminationReason::Killed));
+}
+
+#[tokio::test]
+async fn relative_and_file_workdirs_are_rejected_before_command_side_effects() {
+    let mgr = SessionManager::new(64, 20_000);
+    let cfg = Config::default();
+    let dir = tempdir().expect("tempdir");
+    let file_workdir = dir.path().join("not-a-directory");
+    std::fs::write(&file_workdir, "x").expect("seed file workdir");
+    let marker = dir.path().join("must-not-exist");
+
+    for (workdir, expected) in [
+        ("relative/path".to_string(), "absolute path"),
+        (file_workdir.display().to_string(), "not a directory"),
+    ] {
+        let err = mgr
+            .exec_command(
+                ExecCommandInput {
+                    cmd: format!("touch {}", marker.display()),
+                    yield_time_ms: Some(2_000),
+                    workdir,
+                    timeout_ms: None,
+                },
+                &cfg,
+                SessionOrigin::direct(),
+            )
+            .await
+            .expect_err("invalid workdir must be rejected");
+        assert!(
+            err.to_string().contains(expected),
+            "unexpected error: {err}"
+        );
+        assert!(!marker.exists(), "invalid workdir must not spawn command");
+    }
+}
+
+#[tokio::test]
+async fn full_running_session_capacity_rejects_new_work_without_orphaning() {
+    let mgr = SessionManager::new(1, 20_000);
+    let cfg = Config::default();
+    let running = mgr
+        .exec_command(
+            ExecCommandInput {
+                cmd: "sleep 30".to_string(),
+                yield_time_ms: Some(50),
+                workdir: test_workdir(),
+                timeout_ms: Some(60_000),
+            },
+            &cfg,
+            SessionOrigin::direct(),
+        )
+        .await
+        .expect("first session should start");
+    let handle = running.session_handle.expect("running session handle");
+    let dir = tempdir().expect("tempdir");
+    let marker = dir.path().join("capacity-command-ran");
+
+    let err = mgr
+        .exec_command(
+            ExecCommandInput {
+                cmd: format!("touch {}", marker.display()),
+                yield_time_ms: Some(2_000),
+                workdir: dir.path().display().to_string(),
+                timeout_ms: None,
+            },
+            &cfg,
+            SessionOrigin::direct(),
+        )
+        .await
+        .expect_err("full running capacity should reject new work");
+    assert!(err.to_string().contains("session capacity reached"));
+    assert!(!marker.exists(), "rejected work must not spawn");
+
+    let killed = mgr
+        .write_stdin(
+            WriteStdinInput {
+                session_handle: handle,
+                chars: None,
+                yield_time_ms: Some(6_000),
+                kill_process: Some(true),
+            },
+            &cfg,
+        )
+        .await
+        .expect("original session must remain reachable");
+    assert_eq!(killed.termination_reason, Some(TerminationReason::Killed));
+}
+
+#[tokio::test]
+async fn concurrent_commands_keep_explicit_workdirs_independent() {
+    let mgr = Arc::new(SessionManager::new(64, 20_000));
+    let cfg = Arc::new(Config::default());
+    let root = tempdir().expect("root tempdir");
+    let a = root.path().join("worktree-a");
+    let b = root.path().join("worktree-b");
+    std::fs::create_dir_all(&a).expect("create a");
+    std::fs::create_dir_all(&b).expect("create b");
+    std::fs::write(a.join("same-repo-shape.txt"), "shared\n").expect("seed a repo shape");
+    std::fs::write(b.join("same-repo-shape.txt"), "shared\n").expect("seed b repo shape");
+
+    let run = |dir: std::path::PathBuf, value: &'static str| {
+        let mgr = mgr.clone();
+        let cfg = cfg.clone();
+        async move {
+            mgr.exec_command(
+                ExecCommandInput {
+                    cmd: format!("cat same-repo-shape.txt; printf '{value}' > rooted.txt; pwd"),
+                    yield_time_ms: Some(2_000),
+                    workdir: dir.display().to_string(),
+                    timeout_ms: None,
+                },
+                &cfg,
+                SessionOrigin::direct(),
+            )
+            .await
+            .expect("rooted command")
+        }
+    };
+
+    let (out_a, out_b) = tokio::join!(run(a.clone(), "a"), run(b.clone(), "b"));
+    assert_eq!(std::fs::read_to_string(a.join("rooted.txt")).unwrap(), "a");
+    assert_eq!(std::fs::read_to_string(b.join("rooted.txt")).unwrap(), "b");
+    assert_eq!(out_a.cwd, a.display().to_string());
+    assert_eq!(out_b.cwd, b.display().to_string());
+    assert!(out_a.output.contains("shared"));
+    assert!(out_b.output.contains("shared"));
+    assert!(out_a.output.contains(a.to_string_lossy().as_ref()));
+    assert!(out_b.output.contains(b.to_string_lossy().as_ref()));
 }

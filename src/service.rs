@@ -124,6 +124,13 @@ mod tests {
         ZodexService::new(Arc::new(Config::default()))
     }
 
+    fn test_workdir() -> String {
+        std::env::current_dir()
+            .expect("test current directory")
+            .to_string_lossy()
+            .to_string()
+    }
+
     #[tokio::test]
     async fn exec_command_service_returns_finished_output() {
         let service = test_service();
@@ -131,7 +138,7 @@ mod tests {
             .exec_command(ExecCommandInput {
                 cmd: "echo service-ok".to_string(),
                 yield_time_ms: Some(2_000),
-                workdir: None,
+                workdir: test_workdir(),
                 timeout_ms: None,
             })
             .await
@@ -151,7 +158,7 @@ mod tests {
             .exec_command(ExecCommandInput {
                 cmd: "bash --noprofile --norc".to_string(),
                 yield_time_ms: Some(50),
-                workdir: None,
+                workdir: test_workdir(),
                 timeout_ms: Some(60_000),
             })
             .await

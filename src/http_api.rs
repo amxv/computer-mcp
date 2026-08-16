@@ -141,6 +141,13 @@ mod tests {
         })
     }
 
+    fn test_workdir() -> String {
+        std::env::current_dir()
+            .expect("test current directory")
+            .to_string_lossy()
+            .to_string()
+    }
+
     fn test_router_with_service(service: ZodexService) -> Router {
         build_http_api_router(test_config(), service)
     }
@@ -246,7 +253,8 @@ mod tests {
             "/v1/exec-command",
             json!({
                 "cmd": "echo http-exit",
-                "yield_time_ms": 2_000
+                "yield_time_ms": 2_000,
+                "workdir": test_workdir()
             }),
             Some(&auth),
         )
@@ -262,7 +270,8 @@ mod tests {
             "/v1/exec-command",
             json!({
                 "cmd": "sleep 5",
-                "yield_time_ms": 50
+                "yield_time_ms": 50,
+                "workdir": test_workdir()
             }),
             Some(&auth),
         )
@@ -289,6 +298,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn exec_command_http_rejects_missing_workdir_before_side_effect() {
+        let app = test_router_with_service(ZodexService::new(test_config()));
+        let auth = format!("Bearer {TEST_API_KEY}");
+        let dir = tempdir().expect("tempdir");
+        let marker = dir.path().join("http-missing-workdir-must-not-run");
+
+        let response = post_json(
+            &app,
+            "/v1/exec-command",
+            json!({
+                "cmd": format!("touch {}", marker.display()),
+                "yield_time_ms": 2_000
+            }),
+            Some(&auth),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(!marker.exists(), "missing workdir must not execute command");
+    }
+
+    #[tokio::test]
     async fn write_stdin_http_continues_real_session() {
         let app = test_router_with_service(ZodexService::new(test_config()));
         let auth = format!("Bearer {TEST_API_KEY}");
@@ -299,6 +330,7 @@ mod tests {
             json!({
                 "cmd": "bash --noprofile --norc",
                 "yield_time_ms": 50,
+                "workdir": test_workdir(),
                 "timeout_ms": 60_000
             }),
             Some(&auth),
@@ -386,7 +418,7 @@ mod tests {
         let input = ExecCommandInput {
             cmd: "printf 'http-parity-exec\\n'".to_string(),
             yield_time_ms: Some(2_000),
-            workdir: None,
+            workdir: test_workdir(),
             timeout_ms: None,
         };
 
@@ -422,7 +454,7 @@ mod tests {
         let shell = ExecCommandInput {
             cmd: "bash --noprofile --norc".to_string(),
             yield_time_ms: Some(50),
-            workdir: None,
+            workdir: test_workdir(),
             timeout_ms: Some(60_000),
         };
 

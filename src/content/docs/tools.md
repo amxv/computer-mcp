@@ -43,7 +43,7 @@ The annotations describe the MCP operation surface from the model/client perspec
 Description:
 
 ```text
-Run a shell command
+Run a shell command in a required absolute existing workdir
 ```
 
 Input:
@@ -60,7 +60,7 @@ Input:
 Fields:
 
 - `cmd`: shell command string
-- `workdir`: optional working directory; defaults to configured `default_workdir`
+- `workdir`: required absolute path to an existing directory; there is no daemon-cwd/default-workdir fallback
 - `yield_time_ms`: how long to wait before returning partial output
 - `timeout_ms`: command timeout, capped by `max_exec_timeout_ms`
 
@@ -108,7 +108,7 @@ Kill session:
 Description:
 
 ```text
-Apply a Codex-style patch to files
+Apply a Codex-style patch using a required absolute existing workdir
 ```
 
 Input:
@@ -126,7 +126,7 @@ Input:
 }
 ```
 
-`workdir` is required. Relative paths in the patch are resolved against `workdir`.
+`workdir` is required and must be an absolute path to an existing directory. Relative paths in the patch are resolved against that explicit workdir. The workdir is an execution anchor, not a sandbox: commands and patches can still reference other absolute paths.
 
 ## Output model
 

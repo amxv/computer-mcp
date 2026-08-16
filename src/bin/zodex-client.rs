@@ -37,7 +37,7 @@ enum Commands {
         #[arg(long)]
         yield_time_ms: Option<u64>,
         #[arg(long)]
-        workdir: Option<String>,
+        workdir: String,
         #[arg(long)]
         timeout_ms: Option<u64>,
     },
@@ -211,11 +211,22 @@ mod tests {
             } => {
                 assert_eq!(cmd, "echo hi");
                 assert_eq!(yield_time_ms, Some(123));
-                assert_eq!(workdir.as_deref(), Some("/tmp"));
+                assert_eq!(workdir, "/tmp");
                 assert_eq!(timeout_ms, Some(999));
             }
             other => panic!("unexpected command parsed: {other:?}"),
         }
+    }
+
+    #[test]
+    fn exec_command_cli_requires_workdir() {
+        let err = Cli::try_parse_from(["zodex-client", "exec-command", "pwd"])
+            .expect_err("exec-command without --workdir must fail");
+        let message = err.to_string();
+        assert!(
+            message.contains("--workdir"),
+            "unexpected clap error: {message}"
+        );
     }
 
     #[test]
