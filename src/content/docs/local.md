@@ -120,7 +120,7 @@ In ChatGPT on the web:
 5. Scan the tools and create the app.
 6. Open a fresh chat, enable/select the Zodex app, and ask ChatGPT to inspect or work on the repo you started Local from.
 
-OpenAI currently documents full custom-MCP write/modify support for Business, Enterprise, and Edu workspaces. Pro developer mode supports read/fetch MCP actions, which is not sufficient for Zodex's command and patch tools. Workspace admins may also need to enable developer mode or approve the app.
+Most paid ChatGPT plans let users enable developer mode and add custom MCP servers. Availability can still depend on workspace settings or administrator policy.
 
 For workspace-specific steps and tunnel visibility troubleshooting, see [Local setup and ChatGPT connection](/docs/local-setup).
 

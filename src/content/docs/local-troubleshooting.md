@@ -45,7 +45,7 @@ Verify:
 - the tunnel/app identity has Tunnels Read + Use;
 - `zodex local status` reports the Local tunnel ready.
 
-For a personal account, use the personal Platform organization tied to that account. A personal-only tunnel does not automatically appear in an Enterprise/Edu workspace.
+For a personal account, use the personal Platform organization tied to that account. If you are using a separate ChatGPT workspace, make sure the tunnel is associated with the workspace you actually selected in ChatGPT.
 
 See [Local setup and ChatGPT connection](/docs/local-setup).
 

@@ -176,11 +176,9 @@ zodex local status
 
 ## Enable developer mode in ChatGPT
 
-OpenAI's UI and plan policy can change, so use the workspace path shown in your current ChatGPT settings.
+OpenAI's UI can change, so use the path shown in your current ChatGPT settings.
 
-Current OpenAI guidance uses **Settings → Apps** and, for eligible workspaces, developer mode / custom apps. Business admins/owners and Enterprise/Edu authorized users can create custom apps; workspace admins can further restrict access.
-
-OpenAI currently documents full MCP write/modify support for Business, Enterprise, and Edu. Pro developer mode supports read/fetch actions only, so it cannot use Zodex's command/patch tools as a full Local coding connection.
+Current OpenAI guidance uses **Settings → Apps** and developer mode / custom apps. Most paid ChatGPT plans let users enable developer mode and add custom MCP servers, although workspace settings or administrator policy can still restrict access.
 
 ## Create the Zodex app in ChatGPT
 
@@ -234,7 +232,7 @@ Check these separately:
 4. **ChatGPT developer mode** — the target account has permission to create/use custom apps.
 5. **Local runtime** — `zodex local status` says the tunnel is ready.
 
-OpenAI explicitly notes that a tunnel associated only with a personal Platform organization does not automatically appear in an Enterprise/Edu workspace.
+If the tunnel belongs to a different Platform organization or ChatGPT workspace than the one you are using, it may not appear in ChatGPT. Check the tunnel's organization/workspace association first.
 
 ## macOS privacy is separate from tunnel setup
 
