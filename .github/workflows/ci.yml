@@ -52,7 +52,28 @@ jobs:
         run: bash scripts/check-local-contract.sh
 
       - name: Run repository validation
-        run: bash scripts/check.sh
+        shell: bash
+        run: |
+          set -euo pipefail
+          log="$(mktemp)"
+          if bash scripts/check.sh 2>&1 | tee "$log"; then
+            exit 0
+          fi
+
+          python3 - "$log" <<'PY'
+          import pathlib
+          import sys
+
+          text = pathlib.Path(sys.argv[1]).read_text(errors="replace")
+          tail = text[-6000:]
+          escaped = (
+              tail.replace("%", "%25")
+              .replace("\r", "%0D")
+              .replace("\n", "%0A")
+          )
+          print(f"::error title=Repository validation failed::{escaped}")
+          PY
+          exit 1
 
   macos:
     name: macOS Apple Silicon validation
@@ -72,4 +93,25 @@ jobs:
         run: bash scripts/check-local-contract.sh
 
       - name: Run repository validation
-        run: bash scripts/check.sh
+        shell: bash
+        run: |
+          set -euo pipefail
+          log="$(mktemp)"
+          if bash scripts/check.sh 2>&1 | tee "$log"; then
+            exit 0
+          fi
+
+          python3 - "$log" <<'PY'
+          import pathlib
+          import sys
+
+          text = pathlib.Path(sys.argv[1]).read_text(errors="replace")
+          tail = text[-6000:]
+          escaped = (
+              tail.replace("%", "%25")
+              .replace("\r", "%0D")
+              .replace("\n", "%0A")
+          )
+          print(f"::error title=Repository validation failed::{escaped}")
+          PY
+          exit 1
