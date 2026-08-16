@@ -602,14 +602,17 @@ async fn cwd_and_truncation_parity_service_http_and_cli() {
     ])
     .await;
 
+    // All three surfaces report the effective process cwd. Resolve the
+    // lexical test path first so macOS /var -> /private/var aliases compare
+    // against the same physical directory identity returned by proc APIs/pwd.
+    let effective_workdir = std::fs::canonicalize(workdir.path())
+        .expect("canonical workdir")
+        .display()
+        .to_string();
     for output in [&direct_cwd, &http_cwd, &cli_cwd] {
         assert_eq!(output.status, CommandStatus::Exited);
-        assert_eq!(output.cwd, workdir.path().to_string_lossy().as_ref());
-        assert!(
-            output
-                .output
-                .contains(workdir.path().to_string_lossy().as_ref())
-        );
+        assert_eq!(output.cwd, effective_workdir);
+        assert!(output.output.contains(&effective_workdir));
     }
 
     let long_output = "x".repeat(200);
