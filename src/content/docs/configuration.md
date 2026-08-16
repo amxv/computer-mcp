@@ -1,189 +1,145 @@
 ---
-title: Configuration
-description: Configure Sprite/server bind addresses, TLS, session limits and GitHub access, plus the separate non-secret user-scoped Zodex Local settings.
+title: "Sprite configuration"
+description: "Configure the remote Sprite server, TLS, session limits, GitHub Apps, workspace defaults, and publisher behavior in /etc/zodex/config.toml."
 order: 4
 category: Architecture
-summary: The Sprite/server `/etc/zodex/config.toml` boundary and the separate `~/.config/zodex/local.toml` Local configuration.
+summary: "The server-side configuration used by zodexd, zodex-prd, the Sprite guest runtime, and GitHub read/write policy."
 ---
 
-## Sprite/server config path
+This page is for **Sprite mode**. Zodex Local has a separate user-scoped configuration; see [Local configuration](/docs/local-configuration).
 
-All CLIs accept a config path. The default is:
+A normal Sprite deployment is configured by `zodex sprite setup`. You usually edit `/etc/zodex/config.toml` only when changing an existing deployment or inspecting a problem.
 
-```bash
+## Where the config lives
+
+Default:
+
+```text
 /etc/zodex/config.toml
 ```
 
-Use `--config` when operating against another file:
+Read it through the Sprite when debugging:
 
 ```bash
-zodex --config /etc/zodex/config.toml status
-zodex-agent --config /etc/zodex/config.toml github list-grants
+sprite exec -- sudo cat /etc/zodex/config.toml
 ```
 
-If the file is missing, zodex loads its built-in defaults.
+Treat the file as sensitive: it contains server keys and paths to private GitHub App credentials.
 
-This `/etc/zodex/config.toml` file belongs to the Sprite/server deployment model. **Zodex Local does not put its user runtime credential or observer bearer here.** Its separate user-scoped config is described below.
+## Server identity and network settings
 
-## Server and API settings
+The Sprite service config controls the `zodexd` server, including its bind addresses/ports, TLS material, and API/MCP authentication key.
 
-Important runtime defaults:
-
-```toml
-bind_host = "0.0.0.0"
-bind_port = 443
-http_bind_port = 8080
-api_key = "zodex-runtime-key"
-tls_mode = "auto"
-tls_cert_path = "/var/lib/zodex/tls/cert.pem"
-tls_key_path = "/var/lib/zodex/tls/key.pem"
-```
-
-`zodexd` always expects TLS cert and key files for the TLS listener. Run one of these before starting the daemon directly:
+After changing network/TLS settings, resync services and verify health:
 
 ```bash
-zodex tls setup
-zodex start
+zodex sprite sync --sprite dev --force-recreate
+zodex sprite health --sprite dev
 ```
 
-The optional HTTP listener is controlled by `http_bind_port`. The same app routes are served, but the `/v1/*` endpoints still require Bearer auth.
+For public MCP routing, use [Sprite: connect ChatGPT](/docs/proxy-mcp).
 
-## Tool execution limits
+## `default_workdir`
 
-Execution-related defaults:
+Sprite server configuration can contain a `default_workdir` for legacy/direct-service contexts and operator presentation.
 
-```toml
-max_sessions = 64
-default_exec_timeout_ms = 7200000
-max_exec_timeout_ms = 7200000
-default_exec_yield_time_ms = 10000
-default_write_yield_time_ms = 10000
-max_output_chars = 200000
-default_workdir = "/workspace"
-```
+It is **not** an MCP execution fallback.
 
-`default_workdir` remains a Sprite/server process/setup default used by operator/runtime lifecycle code. It is **not** an MCP execution fallback. `exec_command` and `apply_patch` require an explicit absolute existing `workdir` in every request. Long-running commands can keep a session open and return a `session_handle` for later polling or stdin writes.
+The shared ChatGPT tool contract makes `exec_command` and `apply_patch` require an explicit absolute existing `workdir`. A missing or relative workdir is rejected before command/patch side effects.
 
-Local follows the same explicit-workdir rule. Its runtime start directory is published to the model as suggested routing guidance only; the backend never substitutes it for a missing field.
+This is especially useful when several conversations or callers use the same Zodex service: routing stays explicit instead of depending on wherever the daemon happened to start.
 
-## Guest users and paths
+## Session settings
 
-Default runtime users and paths:
+The server config includes the limits that govern command sessions, output buffering, default yield behavior, and timeouts.
 
-```toml
-agent_user = "zodex-agent"
-agent_home = "/home/zodex-agent"
-publisher_user = "zodex-publisher"
-service_group = "zodex"
-publisher_socket_path = "/var/lib/zodex/publisher/run/zodex-prd.sock"
-```
+The safe operating rule is simple: tune these when you have a concrete workload reason, not merely to hide a slow command. Long-running work should normally yield a `session_handle` and continue through `write_stdin`.
 
-The agent should not run as root. The publisher path must be writable by the configured publisher user.
+See [MCP tools](/docs/tools) for the model-facing behavior.
 
 ## Reader GitHub App
 
-Reader app fields:
+The reader App provides persistent clone/fetch access.
 
-```toml
-reader_app_id = 123456
-reader_installation_id = 11111111
-reader_private_key_path = "/etc/zodex/reader/private-key.pem"
-```
-
-The reader app should have only `Contents: Read-only`, and be installed on repositories the runtime may read. Clone/fetch tokens request only `Contents: read`. `publish-pr` is handled by the publisher daemon, not the reader app.
-
-## Push-grant GitHub App
-
-Publisher and grant fields:
-
-```toml
-publisher_app_id = 987654
-publisher_client_id = "Iv1.real-device-flow-client-id"
-publisher_private_key_path = "/etc/zodex/publisher/private-key.pem"
-publisher_branch_prefix = "agent"
-publisher_max_bundle_bytes = 33554432
-publisher_max_title_chars = 240
-publisher_max_body_chars = 16000
-```
-
-The publisher / push-grant app should have `Contents: Read & write`, `Pull requests: Read & write`, Device Flow enabled, and user access token expiration enabled. Agent-side `publish-pr` sends a local HEAD bundle to the publisher daemon, which uses the publisher app to push a generated branch and open the PR while keeping credentials inside the daemon.
-
-## Publish targets
-
-Publish targets identify repositories that publisher-side flows can operate on:
-
-```toml
-[[publisher_targets]]
-id = "zodex"
-repo = "amxv/zodex"
-default_base = "main"
-installation_id = 22222222
-
-[[publisher_installations]]
-account = "amxv"
-default_base = "main"
-installation_id = 22222222
-```
-
-`publisher_targets` is the explicit allowlist used by `publish-pr`. `publisher_installations` records account-level installations so operator-only GitHub modes can represent an all-installed-repos scope while still staying inside the GitHub App installation boundary.
-
-The day-to-day `request-push` flow uses the repo argument and active grant state. Publish targets are still useful for internal publisher flows and explicit repo allowlists.
-
-## Zodex Local config
-
-Local uses a separate non-secret TOML file:
+Expected repository permission:
 
 ```text
-${XDG_CONFIG_HOME:-~/.config}/zodex/local.toml
+Contents: Read-only
 ```
 
-Inspect it through the CLI rather than depending on its serialized layout:
+Its configured App/installation/private-key values must match an installation that includes every repository the Sprite should be able to clone.
+
+If clone/fetch breaks, diagnose the reader path before changing any push policy:
 
 ```bash
-zodex local config get
-zodex local config get history.max-age
-zodex local config get history.max-size
-zodex local config get tunnel.id
-zodex local config get tunnel.client-path
+git ls-remote https://github.com/owner/repo.git HEAD
 ```
 
-Writable keys are:
+See [Sprite GitHub Apps](/docs/github-apps).
+
+## Publisher / writer GitHub App
+
+The writer App powers:
+
+- `zodex-agent github publish-pr`;
+- temporary direct-push grants;
+- operator-controlled YOLO mode.
+
+Expected repository permissions:
 
 ```text
-history.max-age
-history.max-size
-tunnel.id
+Contents: Read & write
+Pull requests: Read & write
 ```
 
-Defaults:
+For agent-requested push, also enable Device Flow and user access token expiration and configure the App's client ID.
+
+The writer App installation is the maximum set of repositories that can receive write access; individual grants/YOLO scopes can narrow it further.
+
+## Publisher defaults
+
+`default_base` controls the normal PR base branch when callers do not supply another base. Most repositories use:
 
 ```text
-history.max-age  = 60d
-history.max-size = 500mb
+main
 ```
 
-Change settings only while Local is stopped:
+`zodex sprite setup --default-base main` configures it during provisioning.
+
+## URL authentication mode
+
+Sprite setup exposes `--url-auth`, normally:
+
+```text
+sprite
+```
+
+This controls how operator commands resolve/reach the Sprite URL; it is separate from the Zodex MCP/API key used at the Zodex service itself.
+
+## Applying configuration changes
+
+For changes that affect generated Sprite Services:
 
 ```bash
-zodex local config set history.max-age 30d
-zodex local config set history.max-size 1gb
+zodex sprite sync --sprite dev
 ```
 
-The OpenAI tunnel runtime key is stored behind the macOS Keychain boundary. The observer bearer is a user-only credential under Local state. Neither is serialized into `local.toml`.
+When an old/stale service definition needs replacement:
 
-With default XDG roots, Local's durable paths are:
-
-```text
-~/.local/share/zodex/bin/                  managed tunnel bundle
-~/.local/state/zodex/local/credentials/   observer bearer
-~/.local/state/zodex/local/history/       history.sqlite3
-~/.local/state/zodex/local/logs/          local-runtime.log
+```bash
+zodex sprite sync --sprite dev --force-recreate
 ```
 
-Ephemeral runtime/discovery/tunnel/process state lives separately under:
+Then validate:
 
-```text
-~/.local/state/zodex/local/runtime/
+```bash
+zodex sprite status --sprite dev
+zodex sprite health --sprite dev
 ```
 
-That separation is deliberate: runtime cleanup must not delete Local config, credentials, durable history, or logs.
+## Related guides
+
+- [Sprite](/docs/quickstart)
+- [Sprite GitHub Apps](/docs/github-apps)
+- [Sprite permissions and autonomy](/docs/access-model)
+- [Sprite operations](/docs/sprite-operations)

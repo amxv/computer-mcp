@@ -1,9 +1,9 @@
 ---
-title: Sprite operations
-description: Check runtime health, inspect logs, resync Sprite Services, upgrade binaries, verify the proxy origin, and diagnose older installs.
+title: "Sprite operations"
+description: "Check runtime health, inspect logs, resync Sprite Services, upgrade binaries, verify the proxy origin, and diagnose older installs."
 order: 10
 category: Operations
-summary: Day-to-day commands for keeping a zodex Sprite deployment healthy.
+summary: "Day-to-day commands for keeping a zodex Sprite deployment healthy."
 ---
 
 ## Status
@@ -89,7 +89,7 @@ zodex sprite upgrade --sprite dev-sprite --version latest
 To upgrade while also updating repo or URL auth behavior:
 
 ```bash
-zodex sprite upgrade   --sprite dev-sprite   --version v0.2.10   --repo amxv/zodex   --url-auth sprite
+zodex sprite upgrade   --sprite dev-sprite   --version v0.2.10   --repo owner/repo   --url-auth sprite
 ```
 
 After an upgrade, verify service status, logs, proxy origin, reader-backed clone, and one short command execution through MCP.

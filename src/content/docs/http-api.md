@@ -1,140 +1,85 @@
 ---
-title: HTTP API and client
-description: Use zodex-client or raw HTTP calls against the direct JSON API for command execution, stdin writes, and patch application.
-order: 11
+title: "Sprite HTTP API and client (advanced)"
+description: "Use zodex-client or direct HTTP calls against the traditional zodexd command API for Sprite/direct-service automation."
+order: 10
 category: Operations
-summary: The `/v1/*` API routes, Bearer auth model, request shapes, and thin client commands.
+summary: "The advanced /v1 command API behind zodex-client, including Bearer authentication and command/stdin/patch request shapes."
 ---
 
-This page documents the traditional command-execution JSON API served alongside `zodexd` in direct/Sprite service deployments. It is **not** the Zodex Local observability API.
+Most ChatGPT users should use MCP. This page is for automation or debugging that intentionally calls the traditional `zodexd` JSON API directly.
 
-Local keeps observation on a separate loopback-only, GET-only Bearer API with no execution routes. See [Building a Local watch client](/docs/local-watch-client) for `/v1/status`, Agents, invocation history/output, and SSE.
+## Prefer `zodex-client`
 
-## HTTP routes
-
-In addition to MCP, `zodexd` serves direct JSON routes:
-
-```text
-POST /v1/exec-command
-POST /v1/write-stdin
-POST /v1/apply-patch
-```
-
-These routes use Bearer auth:
-
-```http
-Authorization: Bearer secret-runtime-key
-```
-
-The token must match `api_key` in `/etc/zodex/config.toml`.
-
-## Thin client
-
-`zodex-client` is a debug and automation CLI for the HTTP API:
+The thin client keeps URL/token selection and JSON request details out of scripts:
 
 ```bash
-zodex-client --url https://dev-zodex.example.net --key secret-runtime-key exec-command --cmd "pwd"
-zodex-client --url https://dev-zodex.example.net --key secret-runtime-key apply-patch --workdir /workspace/zodex --patch-file /tmp/change.patch
+zodex-client exec-command --workdir /absolute/path -- command args...
 ```
 
-It exposes these commands:
+Long-running command sessions continue with the client `write-stdin` command, and patches use the client patch command.
 
-```text
-connect
-disconnect
-exec-command
-write-stdin
-apply-patch
+Run:
+
+```bash
+zodex-client --help
 ```
 
-## exec-command request
+for the exact installed-version flags.
 
-Request shape:
+## Authentication
+
+The `/v1/*` command API uses Bearer authentication with the Zodex service API key.
+
+Conceptually:
+
+```http
+Authorization: Bearer <zodex-api-key>
+```
+
+Do not put the key in committed scripts or logs.
+
+## Command execution
+
+The execution route accepts the same logical command fields used by the shared service:
 
 ```json
 {
-  "cmd": "cargo test --quiet",
-  "workdir": "/workspace/zodex",
+  "cmd": "git status --short --branch",
+  "workdir": "/absolute/path/to/repo",
   "yield_time_ms": 1000,
-  "timeout_ms": 7200000
+  "timeout_ms": 10000
 }
 ```
 
-Successful responses include a short `summary`, ANSI-stripped `output`, status, working directory, and exit metadata. If a command is still running, the response includes a `session_handle`.
+`workdir` is required and must be an absolute existing directory.
 
-Running response example:
+A finished command returns output/status immediately. A command that is still running returns a session handle that can be continued.
+
+## Continue a process
+
+Use the stdin/session route with the returned `session_handle` to:
+
+- poll without sending characters;
+- send input;
+- kill the process.
+
+That is the same process-session behavior ChatGPT gets from `write_stdin`.
+
+## Apply a patch
+
+Patch requests include:
 
 ```json
 {
-  "summary": "still running after 1.0s; use session_handle session-token to poll",
-  "output": "...",
-  "status": "running",
-  "cwd": "/workspace/zodex",
-  "session_handle": "session-token"
+  "patch": "*** Begin Patch\n...\n*** End Patch",
+  "workdir": "/absolute/path/to/repo"
 }
 ```
 
-Exited response example:
+The workdir is required and explicit.
 
-```json
-{
-  "summary": "exited 0 after 0.3s",
-  "output": "...",
-  "status": "exited",
-  "cwd": "/workspace/zodex",
-  "exit_code": 0,
-  "termination_reason": "exit"
-}
-```
+## When to use MCP instead
 
-## write-stdin request
+Use the MCP endpoint when the caller is ChatGPT or another MCP-capable agent. It exposes only the three purpose-built tools and avoids writing a custom client around HTTP request/response details.
 
-Poll a running session:
-
-```json
-{
-  "session_handle": "session-token",
-  "yield_time_ms": 1000
-}
-```
-
-Send input:
-
-```json
-{
-  "session_handle": "session-token",
-  "chars": "yes
-",
-  "yield_time_ms": 1000
-}
-```
-
-Terminate a running session:
-
-```json
-{
-  "session_handle": "session-token",
-  "kill_process": true
-}
-```
-
-## apply-patch request
-
-```json
-{
-  "workdir": "/workspace/zodex",
-  "patch": "*** Begin Patch
-*** Update File: README.md
-@@
--old
-+new
-*** End Patch
-"
-}
-```
-
-`workdir` is required. Relative paths inside the patch are resolved against that directory.
-
-## Caller labels
-
-The HTTP API reads `x-caller-label` when present and can fall back to `User-Agent`. That label helps identify request origin in session metadata and logs.
+See [MCP tools](/docs/tools).

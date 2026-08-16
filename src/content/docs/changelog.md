@@ -1,9 +1,9 @@
 ---
-title: Changelog
+title: "Changelog"
 description: "Release notes for zodex."
 order: 99
 category: Reference
-summary: Version-by-version changes for the zodex CLI, agent runtime, proxy, publisher, and Sprite workflows.
+summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workflows, and Local mode."
 ---
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.

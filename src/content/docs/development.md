@@ -1,9 +1,9 @@
 ---
-title: Development and release checks
-description: Build, test, inspect, and release the Rust runtime and the embedded Astro documentation site.
+title: "Maintainer: development and release checks"
+description: "Maintainer reference for building, testing, and releasing Zodex itself; not required to operate Sprite or Local."
 order: 15
 category: Reference
-summary: Commands maintainers should run before changing runtime behavior, CLI behavior, scripts, or docs.
+summary: "Repository-maintainer checks for runtime, CLI, scripts, releases, and docs."
 ---
 
 ## Rust checks
@@ -57,6 +57,8 @@ Keep docs tied to actual zodex behavior:
 - explain when a command needs an active grant
 - document both MCP and direct HTTP routes when changing server behavior
 - update command examples when Clap arguments change
+- when Local observability routes, response fields, filters, SSE event types, discovery fields, API/presentation versions, or recovery semantics change, update [Local observability API](/docs/local-watch-client) in the same change
+- when the first-party watch picker, filters, keyboard controls, presentation behavior, or recovery UX changes, update [Local watch TUI](/docs/local-watch) in the same change
 
 ## Repository scripts
 

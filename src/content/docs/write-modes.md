@@ -1,37 +1,27 @@
 ---
-title: Write modes
-description: "Choose how much GitHub autonomy ChatGPT gets in a zodex session: PR-only, one-off push approval, operator-granted push, timed YOLO, repo-scoped YOLO, or no-TTL YOLO."
-order: 2
-category: Start
-summary: The decision guide for PR-only workflows, push grants, and scoped YOLO mode.
+title: "Sprite write modes"
+description: "Choose PR-only publishing, a temporary repo push grant, operator-granted push, or scoped YOLO for a Sprite coding session."
+order: 3
+category: GitHub Access
+summary: "A practical decision guide for how much GitHub write autonomy to give a Sprite Agent."
 ---
 
-These write modes are the **Sprite GitHub autonomy model**. Zodex Local runs normal shell commands as the trusted logged-in Mac user and can therefore use Git/network credentials already available in that developer environment; the Sprite reader/publisher grant boundary should not be assumed to constrain Local shell access.
+These write modes are the **Sprite GitHub autonomy model**.
 
-zodex is safe by default, but it is not approval-only by design. The operator chooses how much GitHub autonomy ChatGPT gets for the current session, repo, and risk level.
+ChatGPT can clone, inspect, edit, test, and commit inside the Sprite before any direct GitHub push is enabled. When it is time to publish work, choose the smallest write mode that matches the task.
 
-The core idea is:
+## Quick decision table
 
-```text
-read by default -> local work -> PR or push policy -> revoke or expire
-```
-
-ChatGPT can clone, inspect, edit, test, and commit on the Sprite before any GitHub write path is open. When it is time to send work back to GitHub, choose one of the modes below.
-
-## Mode map
-
-| Mode | Command | Best for |
+| Need | Use | Typical command |
 | --- | --- | --- |
-| PR-only | `zodex-agent github publish-pr` | Review-first work, risky repos, new agents, protected branches |
-| Agent-requested push | `zodex-agent github request-push --repo owner/repo` | One-off approval from inside the ChatGPT session |
-| Operator-granted push | `zodex github grant-push --sprite dev --repo owner/repo` | Human-controlled approval from the operator machine |
-| Timed YOLO | `zodex github mode yolo --sprite dev --ttl 2h` | Trusted work sessions where repeated approvals would slow the loop |
-| Repo-scoped YOLO | `zodex github mode yolo --sprite dev --repo owner/repo --ttl 4h` | Trusted work on specific repos only |
-| No-TTL YOLO | `zodex github mode yolo --sprite dev --no-ttl` | Fully trusted personal or development environments |
+| Review before merge | PR-only | `zodex-agent github publish-pr ...` |
+| One repo needs normal push briefly | Agent-requested grant | `zodex-agent github request-push --repo owner/repo` |
+| Human should open the window | Operator grant | `zodex github grant-push --sprite dev --repo owner/repo` |
+| Repeated trusted pushes | Repo-scoped YOLO | `zodex github mode yolo --sprite dev --repo owner/repo --ttl 4h` |
+| Trusted session across installed repos | YOLO | `zodex github mode yolo --sprite dev` |
+| Intentionally indefinite autonomy | No-TTL YOLO | `zodex github mode yolo --sprite dev --no-ttl` |
 
-## PR-only
-
-Use PR-only mode when you want ChatGPT to do the work but keep final review explicit.
+## PR-only: the recommended starting point
 
 ```bash
 zodex-agent github publish-pr \
@@ -41,123 +31,134 @@ zodex-agent github publish-pr \
   --body "Summary and tests."
 ```
 
-`publish-pr` bundles the current committed `HEAD`, sends it to `zodex-prd`, pushes a generated branch, and opens the PR. The publisher credentials stay inside the publisher daemon instead of being exposed to the agent shell.
+Use it when:
 
-Use this mode when:
+- you want a reviewable branch/PR;
+- the repository is important or protected;
+- you are testing a new model/workflow;
+- the Agent does not need ordinary `git push`.
 
-- the repo is important or branch-protected
-- you are trying a new model or prompt
-- you want a reviewable diff before anything lands on `main`
-- you want ChatGPT to avoid direct `git push` entirely
+The writer App token stays inside the publisher service.
 
 ## Agent-requested push
 
-Use `request-push` when ChatGPT has a commit ready and direct push should be allowed once.
-
 ```bash
 zodex-agent github request-push --repo owner/repo
-# then normal Git works inside the Sprite
+```
+
+Then normal Git works for that repo during the grant:
+
+```bash
 git push origin main
 ```
 
-The default active grant TTL is `30m`:
+Defaults:
 
-```bash
-zodex-agent github request-push --repo owner/repo --ttl 30m
+```text
+TTL: 30m
+scope: requested repository
 ```
 
-Use a longer window when the push flow needs more time:
+Change the duration:
 
 ```bash
 zodex-agent github request-push --repo owner/repo --ttl 2h
 ```
 
-Disable TTL enforcement only when the operator intentionally wants that behavior:
+Disable the TTL only intentionally:
 
 ```bash
 zodex-agent github request-push --repo owner/repo --no-ttl
 ```
 
-Use this mode when:
+Revoke:
 
-- ChatGPT has already completed and tested the change
-- you want a normal `git push` without enabling broader YOLO mode
-- the approval should happen directly from the agent-side workflow
+```bash
+zodex-agent github revoke-push --repo owner/repo
+```
+
+Use `--forget-local-auth` as well when you deliberately want to clear cached device-flow auth state.
 
 ## Operator-granted push
 
-Use the operator-side grant when the human should open the write window from their own machine.
+From the operator machine:
 
 ```bash
 zodex github grant-push --sprite dev --repo owner/repo
 ```
 
-Then the Sprite-side agent can push normally:
-
-```bash
-git push origin main
-```
-
-Revoke when finished:
+Revoke:
 
 ```bash
 zodex github revoke-push --sprite dev --repo owner/repo
 ```
 
-Use this mode when:
-
-- the browser approval should stay with the operator
-- ChatGPT cannot conveniently open the device-flow URL from the Sprite
-- you want to control the exact moment a repo becomes writable
+This is useful when the human should control the exact moment the remote Agent gets direct push access.
 
 ## YOLO mode
 
-Use YOLO mode when repeated push approvals are just friction and you trust the ChatGPT session for the selected scope.
+Open a trusted write window:
 
 ```bash
 zodex github mode yolo --sprite dev
 ```
 
-By default, YOLO mode uses a `2h` TTL and applies to all repositories installed for the writer app. Scope it to one or more repos when you want narrower autonomy. Repo-scoped YOLO commands merge with active repo grants instead of replacing them, and each repo keeps the TTL from its own grant command:
+Defaults:
+
+```text
+TTL:   2h
+scope: all repositories installed for the writer App
+```
+
+Narrow it:
 
 ```bash
 zodex github mode yolo --sprite dev --repo owner/repo --ttl 4h
-zodex github mode yolo --sprite dev --repo owner/repo --repo owner/another-repo
 ```
 
-Disable TTL only for intentionally trusted environments:
+Grant several selected repos:
+
+```bash
+zodex github mode yolo \
+  --sprite dev \
+  --repo owner/repo \
+  --repo owner/another-repo \
+  --ttl 4h
+```
+
+Make a new grant indefinite:
 
 ```bash
 zodex github mode yolo --sprite dev --no-ttl
 ```
 
-Check mode state:
+Inspect:
 
 ```bash
 zodex github mode status --sprite dev
 ```
 
-Return to the default policy:
+Return to default:
 
 ```bash
 zodex github mode default --sprite dev
 ```
 
-Use YOLO mode when:
-
-- the repo is yours or low-risk
-- the agent is trusted for the current task
-- the session needs to push multiple small fixes
-- docs, examples, or generated assets are changing quickly
-- repeated approval prompts are slowing down the actual work
+Repo-scoped YOLO grants merge with other active repo grants and keep their own expiry.
 
 ## Recommended progression
 
-For a new setup, start here:
+For a new Sprite deployment:
 
-1. Use PR-only for the first few sessions.
-2. Use `request-push` once you trust the workflow.
-3. Use repo-scoped YOLO for trusted repos where speed matters.
-4. Use all-installed or no-TTL YOLO only for environments where that level of trust is intentional.
+1. Start with PR publishing.
+2. Use a temporary push grant when direct push is genuinely useful.
+3. Move trusted, high-iteration repos to repo-scoped YOLO.
+4. Use broad or no-TTL YOLO only when you intentionally accept that write autonomy.
 
-zodex is built so you can move up and down this ladder without changing the ChatGPT MCP connection.
+The MCP connection does not change as you move between these modes.
+
+## Related guides
+
+- [Sprite permissions and autonomy](/docs/access-model)
+- [Sprite PRs and push grants](/docs/push-grants)
+- [Sprite operator write controls](/docs/operator-grants)
