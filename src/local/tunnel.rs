@@ -56,25 +56,29 @@ impl LocalTunnelProfile {
         let health_url_file = yaml_string(&self.health_url_file.display().to_string())?;
         let token_ref = yaml_string(&format!("file:{}", self.mcp_token_path.display()))?;
         Ok(format!(
-            "config_version: 1\n\
-control_plane:\n\
-  tunnel_id: {tunnel_id}\n\
-  api_key: env:CONTROL_PLANE_API_KEY\n\
-log:\n\
-  level: info\n\
-  format: json\n\
-health:\n\
-  listen_addr: 127.0.0.1:0\n\
-  url_file: {health_url_file}\n\
-mcp:\n\
-  server_urls:\n\
-    - channel: main\n\
-      url: {mcp_url}\n\
-  extra_headers:\n\
-    {header}: {token_ref}\n\
-  discovery_extra_headers:\n\
-    {header}: {token_ref}\n\
-  max_concurrent_requests: {max_concurrency}\n",
+            concat!(
+                "config_version: 1\n",
+                "control_plane:\n",
+                "  tunnel_id: {tunnel_id}\n",
+                "  api_key: env:CONTROL_PLANE_API_KEY\n",
+                "log:\n",
+                "  level: info\n",
+                "  format: json\n",
+                "health:\n",
+                "  listen_addr: 127.0.0.1:0\n",
+                "  url_file: {health_url_file}\n",
+                "mcp:\n",
+                "  server_urls:\n",
+                "    - channel: main\n",
+                "      url: {mcp_url}\n",
+                "  extra_headers:\n",
+                "    {header}: {token_ref}\n",
+                "  max_concurrent_requests: {max_concurrency}\n",
+            ),
+            tunnel_id = tunnel_id,
+            health_url_file = health_url_file,
+            mcp_url = mcp_url,
+            token_ref = token_ref,
             header = canonical_local_mcp_header(),
             max_concurrency = LOCAL_TUNNEL_PROFILE_MAX_CONCURRENT_REQUESTS,
         ))
@@ -496,13 +500,20 @@ mod tests {
         let rendered = profile.render().unwrap();
         assert!(rendered.contains("url: \"http://127.0.0.1:43123/mcp\""));
         assert!(rendered.contains("api_key: env:CONTROL_PLANE_API_KEY"));
-        assert_eq!(rendered.matches("X-Zodex-Local-Token").count(), 2);
+        assert!(rendered.contains("control_plane:\n  tunnel_id:"));
+        assert!(rendered.contains("mcp:\n  server_urls:\n    - channel: main"));
+        assert!(rendered.contains("  extra_headers:\n    X-Zodex-Local-Token:"));
+        // The normal MCP header map is also the baseline for provider
+        // discovery/probes. Repeating the same header in
+        // `discovery_extra_headers` is rejected by tunnel-client v0.0.11.
+        assert_eq!(rendered.matches("X-Zodex-Local-Token").count(), 1);
         assert_eq!(
             rendered
                 .matches("file:/tmp/zodex runtime/mcp-token")
                 .count(),
-            2
+            1
         );
+        assert!(!rendered.contains("discovery_extra_headers"));
         assert!(rendered.contains("listen_addr: 127.0.0.1:0"));
         assert!(rendered.contains(&format!(
             "max_concurrent_requests: {LOCAL_TUNNEL_PROFILE_MAX_CONCURRENT_REQUESTS}"
