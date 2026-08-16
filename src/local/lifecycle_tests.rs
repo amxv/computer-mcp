@@ -328,6 +328,15 @@ fn hidden_runtime_child_entry() {
 async fn hidden_runtime_child_reaches_one_runtime_multi_agent_readiness_and_ttl_shutdown() {
     use std::os::unix::fs::PermissionsExt as _;
 
+    // This fixture exercises a real wall-clock TTL in a separate process. The
+    // TTL is deliberately longer than the workload itself so default-parallel
+    // `cargo test` scheduling cannot consume the access window before the
+    // multi-Agent assertions run. The value is fixture pacing, not a shutdown
+    // latency allowance: the test still proves the original absolute expiry is
+    // unchanged by Agent/process activity and that all work ends at that same
+    // runtime-wide deadline.
+    const RUNTIME_TTL_SECONDS: u64 = 30;
+
     let dir = tempdir().unwrap();
     let paths = test_paths(dir.path());
     paths.ensure_persistent_dirs().unwrap();
@@ -379,10 +388,11 @@ async fn hidden_runtime_child_reaches_one_runtime_multi_agent_readiness_and_ttl_
         &paths,
         &std::env::current_exe().unwrap(),
         &repo,
-        Some(8),
+        Some(RUNTIME_TTL_SECONDS),
         &environment,
     )
     .unwrap();
+    let original_expiry = prepared.expires_at.clone().expect("fixture TTL expiry");
 
     let mut child = tokio::process::Command::new(std::env::current_exe().unwrap())
         .arg("--exact")
@@ -393,6 +403,7 @@ async fn hidden_runtime_child_reaches_one_runtime_multi_agent_readiness_and_ttl_
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .kill_on_drop(true)
         .spawn()
         .unwrap();
 
@@ -504,6 +515,13 @@ async fn hidden_runtime_child_reaches_one_runtime_multi_agent_readiness_and_ttl_
         let status = super::LocalStatusDocument::inspect(&paths).unwrap();
         if status.current_runtime_agent_count == 2 {
             assert_eq!(status.active_process_count, 2);
+            assert_eq!(
+                status
+                    .runtime
+                    .as_ref()
+                    .and_then(|runtime| runtime.expires_at.as_deref()),
+                Some(original_expiry.as_str())
+            );
             break;
         }
         assert!(tokio::time::Instant::now() < agent_deadline);
@@ -514,7 +532,7 @@ async fn hidden_runtime_child_reaches_one_runtime_multi_agent_readiness_and_ttl_
     // configured 5s session TERM grace plus force-reap and the separately
     // bounded history-finalization window. Keep an outer assertion beyond
     // those product bounds so a real wedge still fails deterministically.
-    let output = tokio::time::timeout(Duration::from_secs(24), child.wait_with_output())
+    let output = tokio::time::timeout(Duration::from_secs(48), child.wait_with_output())
         .await
         .expect("hidden runtime child must exit at absolute TTL")
         .unwrap();
@@ -581,8 +599,14 @@ async fn call_exec(
         .send()
         .await
         .unwrap();
-    assert!(response.status().is_success(), "HTTP {}", response.status());
-    response.json().await.unwrap()
+    let status = response.status();
+    let body = response.bytes().await.unwrap();
+    assert!(
+        status.is_success(),
+        "exec for {openai_session} failed (cmd={cmd:?}) with HTTP {status}: {}",
+        String::from_utf8_lossy(&body),
+    );
+    serde_json::from_slice(&body).unwrap()
 }
 
 #[cfg(target_os = "linux")]
@@ -628,8 +652,14 @@ async fn call_write_stdin(
         .send()
         .await
         .unwrap();
-    assert!(response.status().is_success(), "HTTP {}", response.status());
-    response.json().await.unwrap()
+    let status = response.status();
+    let body = response.bytes().await.unwrap();
+    assert!(
+        status.is_success(),
+        "write_stdin for {openai_session} session {session_handle} failed with HTTP {status}: {}",
+        String::from_utf8_lossy(&body),
+    );
+    serde_json::from_slice(&body).unwrap()
 }
 
 #[cfg(target_os = "linux")]

@@ -26,10 +26,7 @@ jobs:
             apt_packages: gcc-aarch64-linux-gnu libc6-dev-arm64-cross
           - target: aarch64-apple-darwin
             archive_name: zodex-aarch64-apple-darwin
-            os: macos-latest
-          - target: x86_64-apple-darwin
-            archive_name: zodex-x86_64-apple-darwin
-            os: macos-latest
+            os: macos-15
 
     steps:
       - name: Checkout
@@ -44,7 +41,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          target: ${{ matrix.target }}
+          targets: ${{ matrix.target }}
 
       - name: Build release binaries
         env:
@@ -72,6 +69,34 @@ jobs:
             cd dist
             shasum -a 256 "${{ matrix.archive_name }}.tar.gz" > "${{ matrix.archive_name }}.tar.gz.sha256"
           )
+
+      - name: Smoke test packaged macOS Local operator
+        if: contains(matrix.target, 'apple-darwin')
+        shell: bash
+        run: |
+          set -euo pipefail
+          smoke_root="$(mktemp -d)"
+          trap 'rm -rf "$smoke_root"' EXIT
+          install_dir="$smoke_root/install"
+          mkdir -p "$install_dir"
+
+          if tar -tzf "dist/${{ matrix.archive_name }}.tar.gz" \
+              | grep -E '/(tunnel-client|cloudflared|cloudflared-manifest\.json|history\.sqlite3|observability-bearer|mcp-token|environment\.json|tunnel-profile\.yaml|local-launch-agent\.plist)$' >/dev/null; then
+            echo "macOS operator release must not bundle Local setup/runtime/private-state files" >&2
+            exit 1
+          fi
+
+          ZODEX_INSTALL_MODE=operator \
+          ZODEX_ASSET_URL="file://${GITHUB_WORKSPACE}/dist/${{ matrix.archive_name }}.tar.gz" \
+          ZODEX_INSTALL_DIR="$install_dir" \
+            bash scripts/install.sh
+
+          test -x "$install_dir/zodex"
+          test ! -e "$install_dir/zodexd"
+          test ! -e "$install_dir/zodex-prd"
+          test ! -e "$install_dir/zodex-agent"
+          "$install_dir/zodex" local --help | grep -q 'Usage: zodex local <COMMAND>'
+          "$install_dir/zodex" local setup --help | grep -q -- '--runtime-key-stdin'
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4

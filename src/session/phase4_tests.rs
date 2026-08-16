@@ -6,7 +6,7 @@ use crate::config::Config;
 use crate::invocation::{InvocationContext, ProviderCallMetadata};
 use crate::protocol::{CommandStatus, ExecCommandInput, TerminationReason, WriteStdinInput};
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use super::{ProcessInspector, SystemProcessInspector};
 use super::{
     SessionManager, SessionOrigin, SessionOutputChunk, SessionOutputObserver, SessionRuntimePolicy,
@@ -128,6 +128,8 @@ async fn output_observer_receives_full_stream_with_invocation_context_while_tool
 
 #[tokio::test]
 async fn whole_runtime_shutdown_preempts_a_long_yield_write_and_closes_admission() {
+    let dir = tempfile::tempdir().unwrap();
+    let shell_pid_file = dir.path().join("interactive-shell.pid");
     let policy = local_policy().with_shutdown_grace(Duration::from_millis(250));
     let mgr = Arc::new(SessionManager::with_policy(8, 20_000, policy));
     let cfg = Arc::new(Config::default());
@@ -148,12 +150,16 @@ async fn whole_runtime_shutdown_preempts_a_long_yield_write_and_closes_admission
 
     let poll_mgr = mgr.clone();
     let poll_cfg = cfg.clone();
+    let shell_pid_file_for_poll = shell_pid_file.clone();
     let poll = tokio::spawn(async move {
         poll_mgr
             .write_stdin(
                 WriteStdinInput {
                     session_handle: handle,
-                    chars: Some("sleep 30\n".to_string()),
+                    chars: Some(format!(
+                        "printf '%s\\n' \"$$\" > '{}'; sleep 30\n",
+                        shell_pid_file_for_poll.display()
+                    )),
                     yield_time_ms: Some(60_000),
                     kill_process: Some(false),
                 },
@@ -161,6 +167,27 @@ async fn whole_runtime_shutdown_preempts_a_long_yield_write_and_closes_admission
             )
             .await
     });
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    let interactive_shell_pid = {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !shell_pid_file.exists() && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let pid = std::fs::read_to_string(&shell_pid_file)
+            .expect("interactive shell should publish its pid before shutdown")
+            .trim()
+            .parse::<i32>()
+            .unwrap();
+        let inspector = SystemProcessInspector;
+        assert!(
+            inspector.identity(pid).unwrap().is_some(),
+            "interactive shell fixture must be alive before shutdown"
+        );
+        pid
+    };
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     let began = Instant::now();
@@ -180,6 +207,21 @@ async fn whole_runtime_shutdown_preempts_a_long_yield_write_and_closes_admission
         .expect("poll should return truthful terminal output");
     assert_eq!(terminal.status, CommandStatus::Exited);
     assert_eq!(terminal.termination_reason, Some(TerminationReason::Killed));
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        let inspector = SystemProcessInspector;
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while inspector.identity(interactive_shell_pid).unwrap().is_some()
+            && Instant::now() < deadline
+        {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(
+            inspector.identity(interactive_shell_pid).unwrap().is_none(),
+            "whole-runtime shutdown left interactive shell {interactive_shell_pid} alive after its wrapper exited"
+        );
+    }
 
     let error = mgr
         .exec_command(
@@ -229,6 +271,94 @@ async fn multi_session_shutdown_uses_one_shared_grace_window() {
     assert!(
         elapsed < Duration::from_millis(2_800),
         "three sessions appear to have consumed serial grace windows: {elapsed:?}"
+    );
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[tokio::test]
+async fn whole_runtime_shutdown_keeps_background_job_owned_after_shell_exit() {
+    let dir = tempfile::tempdir().unwrap();
+    let background_pid_file = dir.path().join("background.pid");
+    let policy = local_policy().with_shutdown_grace(Duration::from_millis(300));
+    let mgr = SessionManager::with_policy(8, 20_000, policy);
+    let cfg = Config::default();
+
+    let output = mgr
+        .exec_command(
+            ExecCommandInput {
+                cmd: format!(
+                    "sleep 60 & printf '%s\\n' \"$!\" > '{}'",
+                    background_pid_file.display()
+                ),
+                yield_time_ms: Some(2_000),
+                workdir: dir.path().display().to_string(),
+                timeout_ms: Some(60_000),
+            },
+            &cfg,
+            SessionOrigin::direct(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(output.status, CommandStatus::Exited);
+
+    let background_pid = std::fs::read_to_string(&background_pid_file)
+        .expect("background fixture should publish its pid")
+        .trim()
+        .parse::<i32>()
+        .unwrap();
+    let inspector = SystemProcessInspector;
+    assert!(
+        inspector.identity(background_pid).unwrap().is_some(),
+        "background job must still be alive after its shell leader exits"
+    );
+    let background_pgid = unsafe { nix::libc::getpgid(background_pid) };
+    assert!(
+        background_pgid > 0,
+        "background job should retain a process group"
+    );
+    let visible_group_members = inspector
+        .process_group_members(background_pgid, 32)
+        .unwrap();
+    assert!(
+        visible_group_members
+            .iter()
+            .any(|member| member.pid == background_pid),
+        "process-group inspection must see the live background job"
+    );
+    let runtime = mgr
+        .sessions
+        .read()
+        .await
+        .values()
+        .next()
+        .expect("retained session runtime")
+        .clone();
+    assert!(
+        runtime
+            .inner
+            .lock()
+            .await
+            .owned_group_members
+            .iter()
+            .any(|member| member.pid == background_pid),
+        "session runtime must retain the stable background member identity after leader reap"
+    );
+    let counts = mgr.session_counts().await.unwrap();
+    assert_eq!(
+        counts.running, 1,
+        "an exited shell with a live owned background process must remain non-evictable"
+    );
+
+    let shutdown = mgr.shutdown_all().await.unwrap();
+    assert_eq!(shutdown.sessions_signaled, 1);
+
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while inspector.identity(background_pid).unwrap().is_some() && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        inspector.identity(background_pid).unwrap().is_none(),
+        "whole-runtime shutdown left background job {background_pid} alive after its shell leader exited"
     );
 }
 

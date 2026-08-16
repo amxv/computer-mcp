@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - zodex-local
+    paths:
+      - .github/workflows/ci.yml
+      - .github/workflows/release.yml
+      - Cargo.toml
+      - Cargo.lock
+      - scripts/check.sh
+      - scripts/check-local-contract.sh
+      - scripts/install.sh
+      - src/**
+      - tests/**
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/ci.yml
+      - .github/workflows/release.yml
+      - Cargo.toml
+      - Cargo.lock
+      - scripts/check.sh
+      - scripts/check-local-contract.sh
+      - scripts/install.sh
+      - src/**
+      - tests/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Linux validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Validate Local and RMCP contract
+        run: bash scripts/check-local-contract.sh
+
+      - name: Run repository validation
+        run: bash scripts/check.sh
+
+  macos:
+    name: macOS Apple Silicon validation
+    runs-on: macos-15
+    env:
+      CARGO_BUILD_TARGET: aarch64-apple-darwin
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust for target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Validate Local and RMCP contract
+        run: bash scripts/check-local-contract.sh
+
+      - name: Run repository validation
+        run: bash scripts/check.sh

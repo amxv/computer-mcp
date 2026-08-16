@@ -224,6 +224,47 @@ resolve_release_checksum_url() {
   printf '%s.sha256\n' "${asset_url}"
 }
 
+operator_local_runtime_dir() {
+  local state_home="${XDG_STATE_HOME:-${HOME}/.local/state}"
+  printf '%s/zodex/local/runtime\n' "${state_home}"
+}
+
+ensure_local_stopped_before_operator_replace() {
+  local installed_zodex="$1"
+
+  # Fresh installs cannot be replacing the executable that owns an active
+  # Local runtime. Linux operator installs have no Local host runtime.
+  [[ -e "${installed_zodex}" ]] || return 0
+  [[ "$(uname -s)" == "Darwin" ]] || return 0
+
+  local runtime_dir
+  runtime_dir="$(operator_local_runtime_dir)"
+  local marker
+  for marker in state.json discovery.json bootstrap.json; do
+    if [[ -e "${runtime_dir}/${marker}" ]]; then
+      die "Zodex Local runtime state is present at ${runtime_dir}; run 'zodex local stop' before upgrading or replacing ${installed_zodex}"
+    fi
+  done
+}
+
+install_operator_binary_atomically() {
+  local source="$1"
+  local destination="$2"
+  local destination_dir
+  destination_dir="$(dirname "${destination}")"
+  local temporary
+  temporary="$(mktemp "${destination_dir}/.zodex-install.XXXXXX")"
+
+  if ! install -m 0755 "${source}" "${temporary}"; then
+    rm -f "${temporary}"
+    return 1
+  fi
+  if ! mv -f "${temporary}" "${destination}"; then
+    rm -f "${temporary}"
+    return 1
+  fi
+}
+
 install_operator_binaries_from_dir() {
   local src_dir="$1"
   local install_dir="${ZODEX_INSTALL_DIR}"
@@ -235,9 +276,10 @@ install_operator_binaries_from_dir() {
 
   [[ -x "${src_dir}/zodex" ]] || die "missing executable ${src_dir}/zodex"
   install -d -m 0755 "${install_dir}"
-  install -m 0755 "${src_dir}/zodex" "${install_dir}/zodex"
+  ensure_local_stopped_before_operator_replace "${install_dir}/zodex"
+  install_operator_binary_atomically "${src_dir}/zodex" "${install_dir}/zodex"
   if [[ -x "${src_dir}/zodex-client" ]]; then
-    install -m 0755 "${src_dir}/zodex-client" "${install_dir}/zodex-client"
+    install_operator_binary_atomically "${src_dir}/zodex-client" "${install_dir}/zodex-client"
   fi
 
   cat <<EOF

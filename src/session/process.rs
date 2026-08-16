@@ -41,6 +41,10 @@ pub trait ProcessInspector: Send + Sync {
     fn descendants(&self, _pid: i32, _limit: usize) -> Result<Vec<ProcessIdentity>> {
         Ok(Vec::new())
     }
+
+    fn process_group_members(&self, _pgid: i32, _limit: usize) -> Result<Vec<ProcessIdentity>> {
+        Ok(Vec::new())
+    }
 }
 
 pub trait ProcessControl: ProcessInspector {
@@ -61,6 +65,10 @@ impl ProcessInspector for SystemProcessInspector {
 
     fn descendants(&self, pid: i32, limit: usize) -> Result<Vec<ProcessIdentity>> {
         system_descendant_identities(pid, limit)
+    }
+
+    fn process_group_members(&self, pgid: i32, limit: usize) -> Result<Vec<ProcessIdentity>> {
+        system_process_group_members(pgid, limit)
     }
 }
 
@@ -244,6 +252,43 @@ fn system_descendant_identities(pid: i32, limit: usize) -> Result<Vec<ProcessIde
     Ok(result)
 }
 
+#[cfg(target_os = "linux")]
+fn system_process_group_members(pgid: i32, limit: usize) -> Result<Vec<ProcessIdentity>> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+
+    let scan_limit = limit.saturating_mul(16).clamp(256, 8192);
+    let entries = match std::fs::read_dir("/proc") {
+        Ok(entries) => entries,
+        Err(_) => return Ok(Vec::new()),
+    };
+    let mut result = Vec::new();
+    for entry in entries.flatten().take(scan_limit) {
+        let raw = entry.file_name();
+        let raw = raw.to_string_lossy();
+        if !raw.bytes().all(|byte| byte.is_ascii_digit()) {
+            continue;
+        }
+        let Ok(pid) = raw.parse::<i32>() else {
+            continue;
+        };
+        let Some(stat) = read_linux_proc_stat(pid) else {
+            continue;
+        };
+        if stat.pgrp != pgid {
+            continue;
+        }
+        if let Some(identity) = system_process_identity(pid)? {
+            result.push(identity);
+            if result.len() >= limit {
+                break;
+            }
+        }
+    }
+    Ok(result)
+}
+
 #[cfg(target_os = "macos")]
 fn system_process_identity(pid: i32) -> Result<Option<ProcessIdentity>> {
     use std::mem::{MaybeUninit, size_of};
@@ -359,6 +404,65 @@ fn system_descendant_identities(pid: i32, limit: usize) -> Result<Vec<ProcessIde
     Ok(result)
 }
 
+#[cfg(target_os = "macos")]
+fn system_process_group_members(pgid: i32, limit: usize) -> Result<Vec<ProcessIdentity>> {
+    use std::mem::{MaybeUninit, size_of};
+
+    use nix::libc;
+
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+
+    let scan_limit = limit.saturating_mul(16).clamp(256, 8192);
+    let mut pids = vec![0 as libc::pid_t; scan_limit];
+    let count = unsafe {
+        libc::proc_listallpids(
+            pids.as_mut_ptr().cast(),
+            (pids.len() * size_of::<libc::pid_t>()) as i32,
+        )
+    };
+    if count <= 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut result = Vec::new();
+    for pid in pids.into_iter().take(count as usize) {
+        if pid <= 0 {
+            continue;
+        }
+        let mut info = MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+        let expected = size_of::<libc::proc_bsdinfo>();
+        let read = unsafe {
+            libc::proc_pidinfo(
+                pid,
+                libc::PROC_PIDTBSDINFO,
+                0,
+                info.as_mut_ptr().cast(),
+                expected as i32,
+            )
+        };
+        if read as usize != expected {
+            continue;
+        }
+        let info = unsafe { info.assume_init() };
+        if info.pbi_pgid as i32 != pgid {
+            continue;
+        }
+        result.push(ProcessIdentity {
+            pid,
+            birth: ProcessBirthIdentity::MacOsStartTime {
+                seconds: info.pbi_start_tvsec,
+                microseconds: info.pbi_start_tvusec,
+            },
+        });
+        if result.len() >= limit {
+            break;
+        }
+    }
+    Ok(result)
+}
+
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn system_process_identity(_pid: i32) -> Result<Option<ProcessIdentity>> {
     Ok(None)
@@ -371,6 +475,11 @@ fn system_live_cwd(_pid: i32) -> Option<String> {
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn system_descendant_identities(_pid: i32, _limit: usize) -> Result<Vec<ProcessIdentity>> {
+    Ok(Vec::new())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn system_process_group_members(_pgid: i32, _limit: usize) -> Result<Vec<ProcessIdentity>> {
     Ok(Vec::new())
 }
 

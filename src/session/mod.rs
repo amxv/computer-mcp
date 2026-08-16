@@ -26,7 +26,10 @@ mod query;
 mod shutdown;
 
 use output::{OutputBuffer, next_char_boundary, spawn_reader};
-use shutdown::wait_for_session_exits_until;
+use shutdown::{
+    maybe_force_kill, reap_exit_code, request_termination, signal_owned_group_members,
+    snapshot_descendants_before_termination, wait_for_session_exits_until,
+};
 
 pub use policy::{
     OwnedProcess, OwnedProcessObserver, SessionOutputChunk, SessionOutputCompletion,
@@ -109,6 +112,8 @@ struct SessionInner {
     terminate_started_at: Option<Instant>,
     force_killed: bool,
     require_exit_before_return: bool,
+    leader_identity: Option<ProcessIdentity>,
+    owned_group_members: Vec<ProcessIdentity>,
 }
 
 struct SessionRuntime {
@@ -149,7 +154,8 @@ impl SessionRuntime {
 
     async fn is_exited(&self) -> Result<bool> {
         let mut inner = self.inner.lock().await;
-        Ok(reap_exit_code(&mut inner)?.is_some())
+        let leader_exited = reap_exit_code(&mut inner, self.process_inspector.as_ref())?.is_some();
+        Ok(leader_exited && inner.owned_group_members.is_empty())
     }
 
     fn release_process_ownership(&self) {
@@ -259,7 +265,6 @@ impl SessionRuntime {
                 let mut inner = self.inner.lock().await;
                 inner.last_used_at = SystemTime::now();
 
-                maybe_force_kill(&mut inner);
                 if let Some(live_cwd) = self.process_inspector.live_cwd(inner.pid) {
                     inner.last_known_cwd = live_cwd;
                 }
@@ -280,7 +285,13 @@ impl SessionRuntime {
                     );
                 }
 
-                match reap_exit_code(&mut inner)? {
+                let reaped_exit_code = reap_exit_code(&mut inner, self.process_inspector.as_ref())?;
+                maybe_force_kill(&mut inner, self.process_inspector.as_ref())?;
+
+                match reaped_exit_code {
+                    Some(_)
+                        if inner.require_exit_before_return
+                            && !inner.owned_group_members.is_empty() => {}
                     Some(code) => {
                         let termination_reason = if inner.timed_out {
                             TerminationReason::Timeout
@@ -504,7 +515,7 @@ impl SessionManager {
                 "Local runtime could not establish a stable process identity for PID {pid}; command was terminated before being admitted"
             );
         }
-        let owned_process = identity.map(|identity| OwnedProcess {
+        let owned_process = identity.clone().map(|identity| OwnedProcess {
             internal_session_id,
             session_handle: session_handle_arc,
             identity,
@@ -545,6 +556,8 @@ impl SessionManager {
                 terminate_started_at: None,
                 force_killed: false,
                 require_exit_before_return: false,
+                leader_identity: identity,
+                owned_group_members: Vec::new(),
             }),
             process_inspector: self.policy.process_inspector().clone(),
             process_observer,
@@ -576,7 +589,7 @@ impl SessionManager {
             .await
             .map_err(|err| anyhow!("failed while waiting for new session output: {err}"))?;
 
-        if output.status == CommandStatus::Exited {
+        if output.status == CommandStatus::Exited && runtime.is_exited().await? {
             self.remove_session(&session_handle).await;
         }
 
@@ -608,7 +621,7 @@ impl SessionManager {
             .continue_session(input, yield_time_ms, self.poll_interval)
             .await?;
 
-        if output.status == CommandStatus::Exited {
+        if output.status == CommandStatus::Exited && runtime.is_exited().await? {
             self.remove_session(&session_handle).await;
         }
 
@@ -651,55 +664,57 @@ impl SessionManager {
             .values()
             .cloned()
             .collect::<Vec<_>>();
+
+        // Snapshot ordinary descendants before TERM while each tracked group
+        // leader still provides stable ownership evidence. A shell wrapper can
+        // exit immediately on TERM while a child in the same process group
+        // survives and is reparented to PID 1; discovering only after TERM
+        // loses that child and can leave it running after a seemingly clean
+        // shutdown. Stable descendant identities make the later force pass
+        // safe without blindly trusting a numeric PID/PGID after leader exit.
+        let discovered_descendants =
+            snapshot_descendants_before_termination(&runtimes, RUNTIME_DESCENDANT_DISCOVERY_LIMIT)
+                .await;
+
         let mut sessions_signaled = 0;
         for runtime in &runtimes {
             let mut inner = runtime.inner.lock().await;
-            if reap_exit_code(&mut inner)?.is_none() {
+            if reap_exit_code(&mut inner, runtime.process_inspector.as_ref())?.is_none() {
                 inner.kill_requested = true;
                 inner.require_exit_before_return = true;
                 request_termination(&mut inner);
+                sessions_signaled += 1;
+            } else if !inner.owned_group_members.is_empty() {
+                inner.kill_requested = true;
+                inner.require_exit_before_return = true;
+                inner.terminate_started_at.get_or_insert_with(Instant::now);
+                signal_owned_group_members(
+                    &inner,
+                    runtime.process_inspector.as_ref(),
+                    ProcessSignal::Terminate,
+                )?;
                 sessions_signaled += 1;
             } else {
                 runtime.release_process_ownership();
             }
         }
 
-        // Process groups remain the primary ownership boundary. Once TERM has
-        // been fanned out to every group, take one bounded platform-specific
-        // descendant snapshot for best-effort cleanup of ordinary children
-        // that escaped their original group. Stable birth identities let the
-        // later KILL pass reject obvious PID reuse.
-        let mut discovered_descendants = Vec::new();
+        // Process groups remain the primary ownership boundary. Also signal
+        // the pre-TERM stable descendant snapshot so ordinary children that
+        // escape or outlive their group leader participate in the same global
+        // grace window.
         let mut descendants_signaled = 0;
-        for runtime in &runtimes {
-            let pid = runtime.inner.lock().await.pid;
-            match runtime
-                .process_inspector
-                .descendants(pid, RUNTIME_DESCENDANT_DISCOVERY_LIMIT)
-            {
-                Ok(descendants) => {
-                    for descendant in descendants {
-                        match process::signal_process_if_matching(
-                            runtime.process_inspector.as_ref(),
-                            &descendant,
-                            ProcessSignal::Terminate,
-                        ) {
-                            Ok(true) => descendants_signaled += 1,
-                            Ok(false) => {}
-                            Err(error) => warn!(
-                                event = "session_descendant_terminate_failed",
-                                root_pid = pid,
-                                descendant_pid = descendant.pid,
-                                error = %error,
-                            ),
-                        }
-                        discovered_descendants
-                            .push((runtime.process_inspector.clone(), descendant));
-                    }
-                }
+        for (inspector, descendant) in &discovered_descendants {
+            match process::signal_process_if_matching(
+                inspector.as_ref(),
+                descendant,
+                ProcessSignal::Terminate,
+            ) {
+                Ok(true) => descendants_signaled += 1,
+                Ok(false) => {}
                 Err(error) => warn!(
-                    event = "session_descendant_discovery_failed",
-                    root_pid = pid,
+                    event = "session_descendant_terminate_failed",
+                    descendant_pid = descendant.pid,
                     error = %error,
                 ),
             }
@@ -710,10 +725,20 @@ impl SessionManager {
         let mut sessions_force_killed = 0;
         for runtime in &runtimes {
             let mut inner = runtime.inner.lock().await;
-            if reap_exit_code(&mut inner)?.is_none() {
+            if reap_exit_code(&mut inner, runtime.process_inspector.as_ref())?.is_none() {
                 inner.force_killed = true;
                 process::signal_process_group(inner.pid, ProcessSignal::Kill)?;
                 sessions_force_killed += 1;
+            } else if !inner.owned_group_members.is_empty() {
+                inner.force_killed = true;
+                if signal_owned_group_members(
+                    &inner,
+                    runtime.process_inspector.as_ref(),
+                    ProcessSignal::Kill,
+                )? > 0
+                {
+                    sessions_force_killed += 1;
+                }
             }
         }
 
@@ -809,30 +834,18 @@ impl SessionManager {
     }
 }
 
-fn reap_exit_code(inner: &mut SessionInner) -> Result<Option<i32>> {
-    if let Some(exit_code) = inner.reaped_exit_code {
-        return Ok(Some(exit_code));
-    }
-
-    let Some(status) = inner.child.try_wait()? else {
-        return Ok(None);
-    };
-    let exit_code = status.code().unwrap_or(-1);
-    inner.reaped_exit_code = Some(exit_code);
-    Ok(Some(exit_code))
-}
-
 fn spawn_child_reaper(runtime: Arc<SessionRuntime>, poll_interval: Duration) {
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(poll_interval).await;
             let reaped = {
                 let mut inner = runtime.inner.lock().await;
-                reap_exit_code(&mut inner)
+                let result = reap_exit_code(&mut inner, runtime.process_inspector.as_ref());
+                result.map(|exit| (exit, inner.owned_group_members.is_empty()))
             };
 
             match reaped {
-                Ok(Some(exit_code)) => {
+                Ok((Some(exit_code), true)) => {
                     info!(
                         event = "session_child_reaped",
                         internal_session_id = runtime.internal_session_id,
@@ -842,7 +855,7 @@ fn spawn_child_reaper(runtime: Arc<SessionRuntime>, poll_interval: Duration) {
                     runtime.release_process_ownership();
                     break;
                 }
-                Ok(None) => {}
+                Ok((Some(_), false)) | Ok((None, _)) => {}
                 Err(err) => {
                     warn!(
                         event = "session_child_reap_failed",
@@ -911,22 +924,6 @@ fn system_time_epoch_ms(t: SystemTime) -> u128 {
         .as_millis()
 }
 
-fn request_termination(inner: &mut SessionInner) {
-    if inner.terminate_started_at.is_some() {
-        return;
-    }
-
-    inner.terminate_started_at = Some(Instant::now());
-    #[cfg(unix)]
-    {
-        let _ = process::signal_process_group(inner.pid, ProcessSignal::Terminate);
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = inner.child.start_kill();
-    }
-}
-
 async fn snapshot_output_after_exit(output: &Arc<OutputBuffer>) -> String {
     // Child exit can race the asynchronous PTY reader. Wait for the reader's
     // terminal EOF/EIO signal before taking the final snapshot so trailing
@@ -937,28 +934,6 @@ async fn snapshot_output_after_exit(output: &Arc<OutputBuffer>) -> String {
         .wait_for_reader_done(Duration::from_millis(EXIT_OUTPUT_DRAIN_TIMEOUT_MS))
         .await;
     output.snapshot()
-}
-
-fn maybe_force_kill(inner: &mut SessionInner) {
-    let Some(started) = inner.terminate_started_at else {
-        return;
-    };
-    if inner.force_killed {
-        return;
-    }
-    if started.elapsed() < Duration::from_millis(TERMINATE_GRACE_PERIOD_MS) {
-        return;
-    }
-
-    inner.force_killed = true;
-    #[cfg(unix)]
-    {
-        let _ = process::signal_process_group(inner.pid, ProcessSignal::Kill);
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = inner.child.start_kill();
-    }
 }
 
 fn unknown_session_handle(session_handle: &str) -> anyhow::Error {
