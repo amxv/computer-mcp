@@ -39,22 +39,37 @@
   display: inline-flex;
   min-width: 0;
   align-items: center;
-  gap: 4px;
-  padding: 3px 4px 3px 2px;
+  gap: 6px;
+  padding: 0;
 }
 
-.diff-expand-button:hover,
 .diff-copy-button:hover:not(:disabled) {
   background: var(--surface-hover);
   color: var(--text);
 }
 
 .diff-chevron {
-  width: 10px;
-  color: var(--faint);
-  font-size: 10px;
-  line-height: 1;
-  text-align: center;
+  display: inline-grid;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.diff-chevron svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+
+.diff-expand-button:hover .diff-chevron {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+  color: var(--text);
 }
 
 .diff-operation {
@@ -118,9 +133,16 @@
 }
 
 .diff-copy-button {
-  min-width: 36px;
-  padding: 3px 5px;
-  font-size: 8px;
+  display: inline-grid;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  place-items: center;
+}
+
+.diff-copy-button svg {
+  width: 14px;
+  height: 14px;
 }
 
 .diff-copy-button:disabled {
@@ -282,10 +304,7 @@
 
 @media (max-width: 720px) {
   .file-change-header {
-    grid-template-columns: auto minmax(0, 1fr) auto;
-  }
-
-  .diff-copy-button {
-    display: none;
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    gap: 5px;
   }
 }

@@ -13,6 +13,7 @@ describe('diff highlight engine', () => {
       ['go', 'package main'],
       ['bash', 'echo "$HOME"'],
       ['python', 'def value() -> str:'],
+      ['css', '.button { display: grid; }'],
       ['json', '{"enabled": true}'],
       ['ini', 'edition = "2024"'],
     ]

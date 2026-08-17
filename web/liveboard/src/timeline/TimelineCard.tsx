@@ -35,6 +35,16 @@ export function TimelineCard(props: {
       />
     )
   }
+
+  if (
+    props.record.kind !== 'stdin' &&
+    props.record.kind !== 'kill' &&
+    props.record.kind !== 'poll_aggregate' &&
+    props.record.kind !== 'generic'
+  ) {
+    return null
+  }
+
   return (
     <article
       class="timeline-card"
@@ -101,6 +111,7 @@ export function TimelineCard(props: {
             return (
               <>
                 <div class="timeline-card-heading">
+                  <span class={`card-status card-status-${record.status}`} aria-hidden="true" />
                   <span class="card-kind">{record.tool_name}</span>
                   <span>{record.status}</span>
                 </div>

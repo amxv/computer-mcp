@@ -23,8 +23,13 @@ export function AgentTimeline(props: {
   let userScrollIntentUntil = 0
   let lastMeasuredTotalSize = 0
   let followResizeFrame: number | undefined
+  let returnToLiveFrame: number | undefined
 
   const noteUserScrollIntent = () => {
+    if (returnToLiveFrame !== undefined) {
+      cancelAnimationFrame(returnToLiveFrame)
+      returnToLiveFrame = undefined
+    }
     userScrollIntentUntil = performance.now() + 250
   }
 
@@ -74,6 +79,7 @@ export function AgentTimeline(props: {
 
   onCleanup(() => {
     if (followResizeFrame !== undefined) cancelAnimationFrame(followResizeFrame)
+    if (returnToLiveFrame !== undefined) cancelAnimationFrame(returnToLiveFrame)
   })
 
   createEffect(() => {
@@ -84,9 +90,16 @@ export function AgentTimeline(props: {
     props.controller.setDiffExpansionDefault(props.diffsExpanded ?? true)
   })
 
-  const scrollToLiveEnd = () => {
+  const scrollToLiveEnd = (behavior: ScrollBehavior = 'auto') => {
     if (scrollElement) {
-      scrollElement.scrollTop = scrollElement.scrollHeight
+      if (behavior === 'smooth') {
+        scrollElement.scrollTo({
+          top: scrollElement.scrollHeight,
+          behavior,
+        })
+      } else {
+        scrollElement.scrollTop = scrollElement.scrollHeight
+      }
     }
   }
 
@@ -126,7 +139,36 @@ export function AgentTimeline(props: {
 
   const returnToLive = () => {
     props.controller.returnToLive()
-    scrollToLiveEnd()
+    if (!scrollElement) return
+    if (returnToLiveFrame !== undefined) cancelAnimationFrame(returnToLiveFrame)
+    const startTop = scrollElement.scrollTop
+    const targetTop = Math.max(0, scrollElement.scrollHeight - scrollElement.clientHeight)
+    const distance = targetTop - startTop
+    if (
+      Math.abs(distance) < 2 ||
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    ) {
+      scrollElement.scrollTop = targetTop
+      return
+    }
+    const startedAt = performance.now()
+    const durationMs = 180
+    const tick = (now: number) => {
+      if (!scrollElement?.isConnected) {
+        returnToLiveFrame = undefined
+        return
+      }
+      const progress = Math.min(1, (now - startedAt) / durationMs)
+      const eased = 1 - (1 - progress) ** 3
+      scrollElement.scrollTop = startTop + distance * eased
+      if (progress < 1) {
+        returnToLiveFrame = requestAnimationFrame(tick)
+      } else {
+        returnToLiveFrame = undefined
+        scrollElement.scrollTop = scrollElement.scrollHeight
+      }
+    }
+    returnToLiveFrame = requestAnimationFrame(tick)
   }
 
   return (

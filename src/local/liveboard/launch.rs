@@ -33,7 +33,7 @@ impl BrowserLauncher for SystemBrowserLauncher {
 
 #[cfg(target_os = "macos")]
 pub async fn run_local_liveboard(paths: &LocalPaths) -> Result<()> {
-    run_local_liveboard_with_launcher(paths, &SystemBrowserLauncher).await
+    run_local_liveboard_with_launcher(paths, Some(&SystemBrowserLauncher)).await
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -42,13 +42,25 @@ pub async fn run_local_liveboard(_paths: &LocalPaths) -> Result<()> {
 }
 
 #[cfg(target_os = "macos")]
+pub async fn run_local_liveboard_without_open(paths: &LocalPaths) -> Result<()> {
+    run_local_liveboard_with_launcher(paths, None).await
+}
+
+#[cfg(not(target_os = "macos"))]
+pub async fn run_local_liveboard_without_open(_paths: &LocalPaths) -> Result<()> {
+    bail!("Zodex Local Liveboard is only available on macOS")
+}
+
+#[cfg(target_os = "macos")]
 pub(crate) async fn run_local_liveboard_with_launcher(
     paths: &LocalPaths,
-    launcher: &dyn BrowserLauncher,
+    launcher: Option<&dyn BrowserLauncher>,
 ) -> Result<()> {
     let host = start_liveboard_host(paths).await?;
     println!("Liveboard: {}", host.url());
-    if let Err(error) = launcher.open(host.url()) {
+    if let Some(launcher) = launcher
+        && let Err(error) = launcher.open(host.url())
+    {
         eprintln!(
             "warning: could not open the default browser automatically: {error:#}\nOpen {} manually.",
             host.url()

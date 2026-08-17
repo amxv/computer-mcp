@@ -86,10 +86,70 @@ export function ChevronRightIcon(props: IconProps) {
   )
 }
 
+export function ChevronDownIcon(props: IconProps) {
+  return (
+    <IconFrame {...props}>
+      <path d="m4.5 7.5 5.5 5 5.5-5" />
+    </IconFrame>
+  )
+}
+
+export function FolderIcon(props: IconProps) {
+  return (
+    <IconFrame {...props}>
+      <path d="M3 6.5A1.5 1.5 0 0 1 4.5 5H8l1.5 2H15.5A1.5 1.5 0 0 1 17 8.5v6A1.5 1.5 0 0 1 15.5 16h-11A1.5 1.5 0 0 1 3 14.5Z" />
+    </IconFrame>
+  )
+}
+
+export function TerminalIcon(props: IconProps) {
+  return (
+    <IconFrame {...props}>
+      <path d="m4 6 4 4-4 4" />
+      <path d="M10 14h6" />
+    </IconFrame>
+  )
+}
+
 export function CheckIcon(props: IconProps) {
   return (
     <IconFrame {...props}>
       <path d="m4 10 4 4 8-9" />
+    </IconFrame>
+  )
+}
+
+export function CopyIcon(props: IconProps) {
+  return (
+    <IconFrame {...props}>
+      <rect x="7" y="7" width="9" height="9" rx="1.5" />
+      <path d="M13 7V5.5A1.5 1.5 0 0 0 11.5 4h-7A1.5 1.5 0 0 0 3 5.5v7A1.5 1.5 0 0 0 4.5 14H7" />
+    </IconFrame>
+  )
+}
+
+export function SunIcon(props: IconProps) {
+  return (
+    <IconFrame {...props}>
+      <circle cx="10" cy="10" r="3" />
+      <path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.3 4.3l1.4 1.4M14.3 14.3l1.4 1.4M15.7 4.3l-1.4 1.4M5.7 14.3l-1.4 1.4" />
+    </IconFrame>
+  )
+}
+
+export function SystemThemeIcon(props: IconProps) {
+  return (
+    <IconFrame {...props}>
+      <rect x="3" y="4" width="14" height="10" rx="1.5" />
+      <path d="M7 17h6M10 14v3" />
+    </IconFrame>
+  )
+}
+
+export function MoonIcon(props: IconProps) {
+  return (
+    <IconFrame {...props}>
+      <path d="M15.5 12.8A6.2 6.2 0 0 1 7.2 4.5 6.5 6.5 0 1 0 15.5 12.8Z" />
     </IconFrame>
   )
 }

@@ -451,6 +451,16 @@ describe('independent virtualized Agent timeline', () => {
       expect(container.querySelectorAll('.command-card')).toHaveLength(4),
     )
     activeController.toggleCommandExpansion('command-200')
+    expect(
+      container.querySelector('[data-agent-timeline="a111"] [aria-label="Command output"]'),
+    ).toBeNull()
+    activeController.appendLiveOutput({
+      presentationId: 'command-200',
+      invocationId: 200,
+      sequence: 1,
+      text: '1\n',
+      displayState: 'available',
+    })
     await vi.waitFor(() =>
       expect(
         container.querySelector('[data-agent-timeline="a111"] [aria-label="Command output"]'),
@@ -482,7 +492,7 @@ describe('independent virtualized Agent timeline', () => {
     })
     outputObserver.observe(output, { childList: true, characterData: true, subtree: true })
 
-    for (let sequence = 1; sequence <= 2_000; sequence += 1) {
+    for (let sequence = 2; sequence <= 2_000; sequence += 1) {
       activeController.appendLiveOutput({
         presentationId: 'command-200',
         invocationId: 200,

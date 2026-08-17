@@ -33,6 +33,20 @@
 .command-status-error .command-status-dot { background: var(--danger); }
 .command-status-incomplete .command-status-dot { background: var(--recent); }
 
+.command-terminal-icon {
+  display: inline-grid;
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  place-items: center;
+  color: var(--faint);
+}
+
+.command-terminal-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
 .command-spinner {
   width: 11px;
   height: 11px;
@@ -47,48 +61,57 @@
 .command-line {
   min-width: 0;
   flex: 1 1 auto;
-  overflow: hidden;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 10px;
   line-height: 1.45;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .command-prompt { color: var(--faint); }
 
 .command-chevron,
 .command-audit-button {
+  display: inline-grid;
+  height: 24px;
   flex: 0 0 auto;
   cursor: pointer;
-  border: 0;
-  border-radius: 5px;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
   background: transparent;
   color: var(--muted);
 }
 
 .command-chevron {
-  display: grid;
   width: 24px;
-  height: 24px;
-  place-items: center;
-  font-size: 15px;
+  padding: 0;
 }
 
-.command-chevron[aria-expanded='true'] span { transform: rotate(180deg); }
+.command-chevron-hidden {
+  display: none;
+}
+
+.command-chevron svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+  transition: transform 120ms ease;
+}
+
+.command-chevron[aria-expanded='true'] svg { transform: rotate(180deg); }
 
 .command-audit-button {
-  padding: 4px 6px;
+  min-width: 42px;
+  padding: 0 7px;
   font-size: 9px;
-  opacity: 0;
 }
 
-.command-card:hover .command-audit-button,
-.command-audit-button:focus-visible,
-.command-audit-button[aria-expanded='true'] { opacity: 1; }
-
 .command-chevron:hover,
-.command-audit-button:hover {
+.command-audit-button:hover,
+.command-chevron[aria-expanded='true'],
+.command-audit-button[aria-expanded='true'] {
+  border-color: var(--border-strong);
   background: var(--surface-hover);
   color: var(--text);
 }

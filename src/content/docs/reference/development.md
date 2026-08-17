@@ -31,6 +31,15 @@ The tests cover binary manifests, CLI behavior, GitHub App scripts, install beha
 
 Liveboard is an isolated frontend package under `web/liveboard`. On macOS its production assets are embedded into the `zodex` binary by `build.rs`; Linux/Sprite builds do not require frontend tooling.
 
+For visual development against the real currently running Local runtime, use the attached dev server:
+
+```bash
+cd web/liveboard
+bun run dev:live
+```
+
+The launcher builds a repo-local Zodex viewer once, starts `zodex local watch --no-open` against the active Local observer, and runs Vite with HMR. Vite proxies Liveboard API, SSE, and preference requests through that temporary same-origin capability host, so the observability bearer remains outside browser JavaScript. It does not restart or replace the running Local runtime.
+
 ```bash
 cd web/liveboard
 bun install --frozen-lockfile

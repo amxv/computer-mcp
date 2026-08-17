@@ -18,6 +18,8 @@ zodex local watch
 
 Zodex starts a temporary loopback Liveboard host, prints its capability URL, and asks macOS to open that URL in your default browser. Keep the `watch` command running while you use the board.
 
+Use `zodex local watch --no-open` when you want the same temporary Liveboard host without launching a browser. This is useful for local frontend development and other workflows that need to attach their own browser surface to the read-only host.
+
 If the browser cannot be opened automatically, the CLI prints the URL so you can open it manually.
 
 Press `Ctrl-C` in the `watch` process to stop the temporary Liveboard host. This does **not** stop the Local runtime or revoke ChatGPT access. Use `zodex local stop` for that.

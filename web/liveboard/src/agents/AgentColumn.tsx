@@ -1,19 +1,27 @@
-import { Show, createEffect, createSignal, type JSX } from 'solid-js'
+import {
+  For,
+  Show,
+  createEffect,
+  createSignal,
+  onCleanup,
+  onMount,
+  type JSX,
+} from 'solid-js'
 
 import type { ApiAgent } from '../api/client'
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
+  ChevronDownIcon,
   CheckIcon,
   CloseIcon,
   EditIcon,
+  FolderIcon,
   GripIcon,
   HideIcon,
 } from '../ui/icons'
 import {
   agentActivity,
-  compactWorkdir,
-  mostRecentWorkdir,
   relativeActivityLabel,
 } from './model'
 
@@ -35,7 +43,11 @@ interface AgentColumnProps {
 export function AgentColumn(props: AgentColumnProps) {
   const [editingAlias, setEditingAlias] = createSignal(false)
   const [aliasDraft, setAliasDraft] = createSignal(props.alias ?? '')
+  const [workdirsOverflow, setWorkdirsOverflow] = createSignal(false)
+  const [workdirsExpanded, setWorkdirsExpanded] = createSignal(false)
   let aliasInput: HTMLInputElement | undefined
+  let workdirsInline: HTMLSpanElement | undefined
+  let workdirsResizeObserver: ResizeObserver | undefined
 
   createEffect(() => {
     if (!editingAlias()) setAliasDraft(props.alias ?? '')
@@ -49,12 +61,31 @@ export function AgentColumn(props: AgentColumnProps) {
     }
   })
 
-  const workdir = () => mostRecentWorkdir(props.agent)
+  const workdirs = () => props.agent.workdirs.map((workdir) => workdir.normalized_workdir)
+  const measureWorkdirs = () => {
+    if (!workdirsInline) return
+    setWorkdirsOverflow(workdirsInline.scrollWidth > workdirsInline.clientWidth + 1)
+  }
   const activity = () => agentActivity(props.agent, props.nowMs)
   const saveAlias = () => {
     props.onAliasSave(aliasDraft().trim())
     setEditingAlias(false)
   }
+
+  createEffect(() => {
+    workdirs().join('\0')
+    setWorkdirsExpanded(false)
+    queueMicrotask(measureWorkdirs)
+  })
+  createEffect(() => {
+    if (!workdirsOverflow()) setWorkdirsExpanded(false)
+  })
+  onMount(() => {
+    if (typeof ResizeObserver === 'undefined') return
+    workdirsResizeObserver = new ResizeObserver(measureWorkdirs)
+    if (workdirsInline) workdirsResizeObserver.observe(workdirsInline)
+  })
+  onCleanup(() => workdirsResizeObserver?.disconnect())
 
   return (
     <section
@@ -84,6 +115,15 @@ export function AgentColumn(props: AgentColumnProps) {
                     <strong class="agent-alias">{props.alias}</strong>
                   </Show>
                   <code class="agent-id">{props.agent.id}</code>
+                  <button
+                    type="button"
+                    class="icon-button identity-edit"
+                    aria-label={`Edit alias for Agent ${props.agent.id}`}
+                    title="Edit alias"
+                    onClick={() => setEditingAlias(true)}
+                  >
+                    <EditIcon />
+                  </button>
                 </>
               }
             >
@@ -142,16 +182,7 @@ export function AgentColumn(props: AgentColumnProps) {
             </button>
             <button
               type="button"
-              class="icon-button"
-              aria-label={`Edit alias for Agent ${props.agent.id}`}
-              title="Edit alias"
-              onClick={() => setEditingAlias(true)}
-            >
-              <EditIcon />
-            </button>
-            <button
-              type="button"
-              class="icon-button"
+              class="icon-button agent-header-control"
               aria-label={`Remove Agent ${props.agent.id} from board`}
               title="Remove from board"
               onClick={props.onHide}
@@ -172,14 +203,46 @@ export function AgentColumn(props: AgentColumnProps) {
           <span class="activity-time">
             {relativeActivityLabel(props.agent.last_seen_at_ms, props.nowMs)}
           </span>
-          <Show when={workdir()}>
-            {(value) => (
-              <span class="workdir" title={value().normalized_workdir}>
-                {compactWorkdir(value().normalized_workdir)}
-              </span>
-            )}
+          <Show when={workdirs().length > 0}>
+            <span
+              ref={workdirsInline}
+              class="workdir-badges"
+              classList={{ 'workdir-badges-overflow': workdirsOverflow() }}
+              aria-label="Agent workdirs"
+            >
+              <For each={workdirs()}>
+                {(workdir) => (
+                  <span class="workdir-badge" title={workdir}>
+                    {workdir}
+                  </span>
+                )}
+              </For>
+            </span>
+          </Show>
+          <Show when={workdirsOverflow()}>
+            <button
+              type="button"
+              class="agent-workdirs-toggle"
+              aria-label={`${workdirsExpanded() ? 'Collapse' : 'Expand'} workdirs for Agent ${props.agent.id}`}
+              aria-expanded={workdirsExpanded()}
+              title={workdirsExpanded() ? 'Collapse workdirs' : 'Show all workdirs'}
+              onClick={() => setWorkdirsExpanded((expanded) => !expanded)}
+            >
+              {workdirsExpanded() ? <ChevronDownIcon /> : <FolderIcon />}
+            </button>
           </Show>
         </div>
+        <Show when={workdirsExpanded() && workdirsOverflow()}>
+          <div class="agent-workdirs-expanded" aria-label="Expanded Agent workdirs">
+            <For each={workdirs()}>
+              {(workdir) => (
+                <span class="workdir-badge" title={workdir}>
+                  {workdir}
+                </span>
+              )}
+            </For>
+          </div>
+        </Show>
       </header>
       <Show
         when={props.children}

@@ -1,6 +1,7 @@
 import hljs from 'highlight.js/lib/core'
 import type { LanguageFn } from 'highlight.js'
 import bash from 'highlight.js/lib/languages/bash'
+import css from 'highlight.js/lib/languages/css'
 import go from 'highlight.js/lib/languages/go'
 import ini from 'highlight.js/lib/languages/ini'
 import javascript from 'highlight.js/lib/languages/javascript'
@@ -19,6 +20,7 @@ const EAGER_LANGUAGE_REGISTRY = [
   ['go', go],
   ['bash', bash],
   ['python', python],
+  ['css', css],
   ['json', json],
   ['ini', ini],
 ] as const satisfies readonly [DiffSyntaxLanguage, LanguageFn][]

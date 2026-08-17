@@ -107,6 +107,7 @@ describe('AgentStreamController', () => {
       sequence: 4,
       text: 'a',
     })
+    expect(controller.commandOutputAvailability('inv-1')()).toBe(true)
     controller.appendLiveOutput({
       presentationId: 'inv-1',
       invocationId: 1,

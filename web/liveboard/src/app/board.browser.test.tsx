@@ -149,7 +149,7 @@ describe('Liveboard board shell', () => {
     document.body.append(container)
     containerCurrent = container
     disposeCurrent = render(() => <App />, container)
-    await vi.waitFor(() => expect(document.body.textContent).toContain('Zodex Liveboard'))
+    await vi.waitFor(() => expect(document.body.textContent).toContain('zodex'))
 
     const visibleColumns = () =>
       Array.from(document.querySelectorAll<HTMLElement>('[data-agent-column]')).map(
@@ -157,9 +157,16 @@ describe('Liveboard board shell', () => {
       )
     expect(visibleColumns()).toEqual(['a111', 'b222', 'c333', 'd444'])
     expect(visibleColumns()).not.toContain('e555')
+    expect(
+      element<HTMLElement>('[data-agent-id="a111"] .workdir-badge').textContent,
+    ).toContain('/workspace/repos/project-1')
 
     buttonWithText('All Agents').click()
-    await vi.waitFor(() => expect(document.body.textContent).toContain('Current Local runtime'))
+    await vi.waitFor(() => expect(document.body.textContent).toContain('All Agents'))
+    expect(document.body.textContent).not.toContain('Current Local runtime')
+    expect(document.body.textContent).toContain('1 active process')
+    const firstDrawerRow = element<HTMLElement>('.drawer-agent-main')
+    expect(firstDrawerRow.firstElementChild?.classList.contains('activity-dot')).toBe(true)
     const fifthRow = Array.from(
       document.querySelectorAll<HTMLButtonElement>('.drawer-agent'),
     ).find((button) => button.textContent?.includes('e555'))
@@ -268,7 +275,7 @@ describe('Liveboard board shell', () => {
       expect(patches.some((patch) => patch.diffs_expanded === false)).toBe(true),
     )
 
-    dispatchChange(element<HTMLSelectElement>('select[aria-label="Liveboard theme"]'), 'dark')
+    element<HTMLButtonElement>('button[aria-label^="Theme: System"]').click()
     await vi.waitFor(() => expect(document.documentElement.dataset.theme).toBe('dark'))
     expect(getComputedStyle(document.documentElement).colorScheme).toBe('dark')
   })

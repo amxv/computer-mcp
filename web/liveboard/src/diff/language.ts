@@ -5,6 +5,7 @@ export type DiffSyntaxLanguage =
   | 'go'
   | 'bash'
   | 'python'
+  | 'css'
   | 'json'
   | 'ini'
 
@@ -12,6 +13,7 @@ const EXTENSION_TO_LANGUAGE: Readonly<Record<string, DiffSyntaxLanguage>> = {
   bash: 'bash',
   cjs: 'javascript',
   cts: 'typescript',
+  css: 'css',
   fish: 'bash',
   go: 'go',
   ini: 'ini',
@@ -38,6 +40,7 @@ export const EAGER_DIFF_LANGUAGES: readonly DiffSyntaxLanguage[] = [
   'go',
   'bash',
   'python',
+  'css',
   'json',
   'ini',
 ]

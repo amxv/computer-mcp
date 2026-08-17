@@ -1,6 +1,6 @@
 import type { LiveboardPreferences, ThemePreference } from '../api/client'
 import type { RuntimeConnectionState } from '../streams/runtime'
-import { AgentsIcon } from './icons'
+import { AgentsIcon, MoonIcon, SunIcon, SystemThemeIcon } from './icons'
 
 interface ToolbarProps {
   preferences: LiveboardPreferences
@@ -18,6 +18,22 @@ interface ToolbarProps {
 }
 
 export function Toolbar(props: ToolbarProps) {
+  const nextTheme = (): ThemePreference => {
+    switch (props.preferences.theme) {
+      case 'light':
+        return 'system'
+      case 'system':
+        return 'dark'
+      case 'dark':
+        return 'light'
+    }
+  }
+  const themeLabel = () =>
+    props.preferences.theme === 'system'
+      ? 'System'
+      : props.preferences.theme === 'light'
+        ? 'Light'
+        : 'Dark'
   const connectionState = () => props.connectionState ?? 'connected'
   const connectionLabel = () => {
     switch (connectionState()) {
@@ -36,7 +52,18 @@ export function Toolbar(props: ToolbarProps) {
   return (
     <header class="toolbar">
       <div class="toolbar-brand-group">
-        <strong class="brand">Zodex Liveboard</strong>
+        <strong class="brand">zodex</strong>
+      </div>
+      <div class="toolbar-controls">
+        <span class="preference-state" role="status" aria-live="polite">
+          {props.error ? (
+            <span class="preference-error" title={props.error} aria-label="Save failed">
+              !
+            </span>
+          ) : props.saving ? (
+            <span class="preference-spinner" aria-label="Saving preferences" />
+          ) : null}
+        </span>
         <span
           class="connection-detail"
           aria-label={`Local observer ${connectionLabel().toLowerCase()}`}
@@ -47,11 +74,9 @@ export function Toolbar(props: ToolbarProps) {
             aria-hidden="true"
           />
           {connectionState() === 'connected'
-            ? `${props.currentAgentCount} ${props.currentAgentCount === 1 ? 'Agent' : 'Agents'}${props.activeProcessCount > 0 ? ` · ${props.activeProcessCount} active` : ''}`
+            ? `${props.currentAgentCount} ${props.currentAgentCount === 1 ? 'Agent' : 'Agents'} · ${props.activeProcessCount} ${props.activeProcessCount === 1 ? 'process' : 'processes'} running`
             : connectionLabel()}
         </span>
-      </div>
-      <div class="toolbar-controls">
         <button type="button" class="toolbar-button" onClick={props.onOpenAgents}>
           <AgentsIcon />
           <span>All Agents</span>
@@ -92,23 +117,21 @@ export function Toolbar(props: ToolbarProps) {
         >
           Diff {props.preferences.diffs_expanded ? 'open' : 'closed'}
         </button>
-        <label class="toolbar-field theme-field">
-          <span>Theme</span>
-          <select
-            aria-label="Liveboard theme"
-            value={props.preferences.theme}
-            onChange={(event) =>
-              props.onThemeChange(event.currentTarget.value as ThemePreference)
-            }
-          >
-            <option value="system">System</option>
-            <option value="light">Light</option>
-            <option value="dark">Dark</option>
-          </select>
-        </label>
-        <span class="preference-state" role="status" aria-live="polite">
-          {props.error ? 'Save failed' : props.saving ? 'Saving…' : ''}
-        </span>
+        <button
+          type="button"
+          class="toolbar-button theme-toggle"
+          aria-label={`Theme: ${themeLabel()}. Switch to ${nextTheme()}`}
+          title={`Theme: ${themeLabel()}`}
+          onClick={() => props.onThemeChange(nextTheme())}
+        >
+          {props.preferences.theme === 'light' ? (
+            <SunIcon />
+          ) : props.preferences.theme === 'system' ? (
+            <SystemThemeIcon />
+          ) : (
+            <MoonIcon />
+          )}
+        </button>
       </div>
     </header>
   )

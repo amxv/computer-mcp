@@ -11,3 +11,7 @@ coverage/
 .wrangler/
 .vercel
 .env*.local
+
+# Local Liveboard browser-test failure artifacts
+/web/liveboard/.vitest-attachments/
+/web/liveboard/src/**/__screenshots__/

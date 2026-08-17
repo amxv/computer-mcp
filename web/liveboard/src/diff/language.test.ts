@@ -16,6 +16,7 @@ describe('diff language mapping', () => {
     expect(resolveDiffSyntaxLanguage('shell/login.zsh')).toBe('bash')
     expect(resolveDiffSyntaxLanguage('shell/config.fish')).toBe('bash')
     expect(resolveDiffSyntaxLanguage('tools/check.pyw')).toBe('python')
+    expect(resolveDiffSyntaxLanguage('ui/styles.css')).toBe('css')
     expect(resolveDiffSyntaxLanguage('tsconfig.jsonc')).toBe('json')
     expect(resolveDiffSyntaxLanguage('Cargo.toml')).toBe('ini')
     expect(resolveDiffSyntaxLanguage('.config/app.ini')).toBe('ini')
@@ -27,6 +28,7 @@ describe('diff language mapping', () => {
       'go',
       'bash',
       'python',
+      'css',
       'json',
       'ini',
     ])

@@ -2,6 +2,7 @@ import { Show, createSignal } from 'solid-js'
 
 import type { PresentationRecord } from '../api/client'
 import type { AgentStreamController } from '../streams/AgentStreamController'
+import { ChevronDownIcon, TerminalIcon } from '../ui/icons'
 import { CommandAudit } from './CommandAudit'
 import { ExpandedCommandOutput } from './ExpandedCommandOutput'
 
@@ -59,6 +60,9 @@ export function CommandCard(props: {
   nowMs: number
 }) {
   const expanded = props.controller.commandExpanded(props.record.presentation_id)
+  const streamedOutputAvailability = props.controller.commandOutputAvailability(
+    props.record.presentation_id,
+  )
   const [auditOpen, setAuditOpen] = createSignal(false)
   const outcome = () => commandOutcome(props.record)
   const durationMs = () =>
@@ -67,6 +71,14 @@ export function CommandCard(props: {
       ? Math.max(0, props.nowMs - props.record.started_at_ms)
       : 0)
   const final = () => props.record.status !== 'running'
+  const showCompactOutcome = () =>
+    outcome().compact !== 'Completed' && outcome().compact !== 'Failed'
+  const hasOutput = () => {
+    if ((props.record.output?.length ?? 0) > 0) return true
+    const streamed = streamedOutputAvailability()
+    if (streamed !== undefined) return streamed
+    return props.record.started_at_ms < props.controller.attachWatermarkMs
+  }
 
   return (
     <article
@@ -87,6 +99,9 @@ export function CommandCard(props: {
             <span class="command-spinner" aria-hidden="true" />
           </Show>
         </span>
+        <span class="command-terminal-icon" aria-hidden="true">
+          <TerminalIcon />
+        </span>
         <code class="command-line">
           <span class="command-prompt">$ </span>
           {props.record.command}
@@ -102,15 +117,20 @@ export function CommandCard(props: {
         <button
           type="button"
           class="command-chevron"
+          classList={{ 'command-chevron-hidden': !hasOutput() }}
+          aria-hidden={!hasOutput()}
           aria-label={expanded() ? 'Collapse command output' : 'Expand command output'}
           aria-expanded={expanded()}
+          tabIndex={hasOutput() ? 0 : -1}
           onClick={() => props.controller.toggleCommandExpansion(props.record.presentation_id)}
         >
-          <span aria-hidden="true">⌄</span>
+          <ChevronDownIcon />
         </button>
       </div>
       <div class="command-meta">
-        <span>{outcome().compact}</span>
+        <Show when={showCompactOutcome()}>
+          <span>{outcome().compact}</span>
+        </Show>
         <span>{formatDuration(durationMs())}</span>
         <Show when={props.record.exit_code !== null && final()}>
           <span>exit {props.record.exit_code}</span>
@@ -124,7 +144,7 @@ export function CommandCard(props: {
           </span>
         </Show>
       </div>
-      <Show when={expanded()}>
+      <Show when={hasOutput() && expanded()}>
         <ExpandedCommandOutput
           state={props.controller.outputState(
             props.record.presentation_id,

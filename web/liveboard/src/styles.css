@@ -106,6 +106,10 @@ select:focus-visible {
   outline-offset: 2px;
 }
 
+.toolbar-field select:focus-visible {
+  outline: none;
+}
+
 .app-shell {
   display: flex;
   height: 100vh;
@@ -121,9 +125,9 @@ select:focus-visible {
   align-items: center;
   justify-content: space-between;
   gap: 14px;
-  padding: 7px 10px 7px 14px;
-  border-bottom: 1px solid var(--border);
-  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  padding: 13px 10px 7px 14px;
+  border-bottom: 0;
+  background: transparent;
 }
 
 .toolbar-brand-group,
@@ -137,22 +141,33 @@ select:focus-visible {
 
 .toolbar-brand-group {
   min-width: 0;
-  gap: 10px;
+  height: 30px;
 }
 
 .brand {
+  display: inline-flex;
+  height: 30px;
   flex: 0 0 auto;
-  font-size: 13px;
-  font-weight: 650;
+  align-items: center;
+  padding-top: 1px;
+  font-size: 20px;
+  font-weight: 720;
+  line-height: 1;
   letter-spacing: -0.015em;
 }
 
 .connection-detail {
+  height: 30px;
+  flex: 0 0 auto;
+  align-items: center;
   min-width: 0;
+  margin-right: 4px;
   gap: 6px;
   overflow: hidden;
   color: var(--muted);
   font-size: 11px;
+  line-height: 1;
+  padding-top: 0;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
@@ -167,6 +182,7 @@ select:focus-visible {
 
 .toolbar-controls {
   min-width: 0;
+  margin-left: auto;
   gap: 6px;
   overflow-x: auto;
   scrollbar-width: none;
@@ -193,15 +209,10 @@ select:focus-visible {
   padding: 0 9px;
 }
 
-.toolbar-button:hover,
-.toolbar-button[aria-pressed='true'] {
+.toolbar-button:hover {
   border-color: var(--border-strong);
   background: var(--surface-hover);
   color: var(--text);
-}
-
-.toolbar-button[aria-pressed='true'] {
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 24%, transparent);
 }
 
 .compact-control {
@@ -228,15 +239,40 @@ select:focus-visible {
   font-size: 11px;
 }
 
-.theme-field select {
-  min-width: 72px;
+.theme-toggle {
+  width: 30px;
+  padding: 0;
+  justify-content: center;
 }
 
 .preference-state {
-  min-width: 52px;
+  display: inline-grid;
+  width: 14px;
+  height: 30px;
+  flex: 0 0 14px;
+  place-items: center;
+}
+
+.preference-spinner {
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid color-mix(in srgb, var(--muted) 32%, transparent);
+  border-top-color: var(--muted);
+  border-radius: 999px;
+  animation: preference-spin 700ms linear infinite;
+}
+
+.preference-error {
   color: var(--danger);
-  font-size: 10px;
-  text-align: right;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+@keyframes preference-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .board-wrap {
@@ -296,8 +332,8 @@ select:focus-visible {
   display: flex;
   min-width: 0;
   flex: 1 1 auto;
-  align-items: baseline;
-  gap: 7px;
+  align-items: center;
+  gap: 6px;
   overflow: hidden;
 }
 
@@ -323,6 +359,17 @@ select:focus-visible {
 .agent-identity:not(:has(.agent-alias)) .agent-id {
   color: var(--text);
   font-size: 11px;
+}
+
+.identity-edit {
+  width: 22px;
+  height: 22px;
+  margin-left: -2px;
+}
+
+.identity-edit svg {
+  width: 14px;
+  height: 14px;
 }
 
 .alias-input {
@@ -352,8 +399,21 @@ select:focus-visible {
   place-items: center;
   border: 0;
   border-radius: 6px;
+  padding: 0;
   background: transparent;
   color: var(--muted);
+}
+
+.agent-header-control {
+  border: 1px solid var(--border);
+}
+
+.agent-header-control:hover:not(:disabled) {
+  border-color: var(--border-strong);
+}
+
+.agent-header-control svg {
+  display: block;
 }
 
 .icon-button:hover:not(:disabled) {
@@ -378,6 +438,7 @@ select:focus-visible {
 .agent-context-row {
   display: flex;
   min-width: 0;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 6px;
   margin-top: 5px;
@@ -416,13 +477,72 @@ select:focus-visible {
   color: var(--faint);
 }
 
-.workdir {
+.workdir-badges {
+  display: flex;
   min-width: 0;
-  flex: 1 1 auto;
+  max-width: 100%;
+  flex: 0 1 auto;
+  margin-left: auto;
+  justify-content: flex-start;
+  gap: 4px;
   overflow: hidden;
-  text-align: right;
-  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.workdir-badges-overflow {
+  visibility: hidden;
+}
+
+.workdir-badge {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 1px 5px;
+  background: color-mix(in srgb, var(--surface-raised) 76%, transparent);
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 8.5px;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+.agent-workdirs-toggle {
+  display: inline-grid;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  cursor: pointer;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0;
+  background: var(--surface-raised);
+  color: var(--muted);
+}
+
+.agent-workdirs-toggle:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.agent-workdirs-toggle svg {
+  width: 14px;
+  height: 14px;
+  transition: transform 120ms ease;
+}
+
+.agent-workdirs-toggle[aria-expanded='true'] svg {
+  transform: rotate(180deg);
+}
+
+.agent-workdirs-expanded {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 7px;
 }
 
 .agent-timeline-placeholder {
@@ -524,7 +644,7 @@ select:focus-visible {
 
 .drawer-header {
   display: flex;
-  min-height: 58px;
+  min-height: 52px;
   flex: 0 0 auto;
   align-items: center;
   justify-content: space-between;
@@ -547,12 +667,6 @@ select:focus-visible {
 .drawer-header h2 {
   font-size: 13px;
   font-weight: 650;
-}
-
-.drawer-header p {
-  margin-top: 2px;
-  color: var(--muted);
-  font-size: 10px;
 }
 
 .drawer-list {
@@ -582,7 +696,11 @@ select:focus-visible {
   text-align: left;
 }
 
-.drawer-agent + .drawer-agent {
+.drawer-agent-entry {
+  position: relative;
+}
+
+.drawer-agent-entry + .drawer-agent-entry {
   margin-top: 3px;
 }
 
@@ -609,11 +727,12 @@ select:focus-visible {
 }
 
 .drawer-agent-main {
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 10px;
 }
 
 .drawer-agent-identity {
+  flex: 1 1 auto;
   gap: 7px;
   overflow: hidden;
 }
@@ -634,17 +753,75 @@ select:focus-visible {
 }
 
 .drawer-agent-meta {
-  justify-content: space-between;
-  gap: 12px;
+  justify-content: flex-start;
+  gap: 6px;
   color: var(--muted);
   font-size: 10px;
 }
 
-.drawer-agent-meta span:last-child {
+.drawer-agent-activity {
+  flex: 0 0 auto;
+}
+
+.drawer-agent-meta-toggle {
+  padding-right: 28px;
+}
+
+.drawer-workdirs-inline {
+  display: flex;
   min-width: 0;
+  flex: 1 1 auto;
+  gap: 4px;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.drawer-workdirs-inline-overflow {
+  visibility: hidden;
+}
+
+.drawer-workdirs-toggle {
+  position: absolute;
+  right: 8px;
+  bottom: 6px;
+  display: inline-grid;
+  width: 24px;
+  height: 24px;
+  cursor: pointer;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0;
+  background: var(--surface-raised);
+  color: var(--muted);
+}
+
+.drawer-workdirs-toggle:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.drawer-workdirs-toggle svg {
+  width: 13px;
+  height: 13px;
+  transition: transform 120ms ease;
+}
+
+.drawer-workdirs-toggle[aria-expanded='true'] svg {
+  transform: rotate(180deg);
+}
+
+.drawer-workdirs-expanded {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: -1px 1px 0;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+  border-top: 0;
+  border-radius: 0 0 7px 7px;
+  padding: 7px 10px 8px;
+  background: color-mix(in srgb, var(--surface-raised) 86%, var(--accent-soft));
 }
 
 .bootstrap-surface {
@@ -700,6 +877,12 @@ select:focus-visible {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
   }
+
+  .preference-spinner {
+    animation: none;
+    border-color: var(--muted);
+    border-right-color: transparent;
+  }
 }
 
 .connection-connecting,
@@ -730,6 +913,10 @@ select:focus-visible {
   scrollbar-color: var(--border-strong) transparent;
 }
 
+.agent-timeline-scroll:focus {
+  outline: none;
+}
+
 .agent-timeline-canvas {
   position: relative;
   width: 100%;
@@ -757,35 +944,21 @@ select:focus-visible {
   font-size: 9px;
 }
 
-.history-control::before,
-.history-control::after {
-  position: absolute;
-  top: 50%;
-  width: 22%;
-  height: 1px;
-  background: var(--border);
-  content: '';
-}
-
-.history-control::before {
-  left: 0;
-}
-
-.history-control::after {
-  right: 0;
-}
-
 .history-button {
   z-index: 1;
   cursor: pointer;
-  border: 0;
-  padding: 3px 8px;
-  background: var(--surface);
+  min-height: 24px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0 8px;
+  background: transparent;
   color: var(--muted);
   font-size: 9px;
 }
 
 .history-button:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
   color: var(--text);
 }
 
@@ -922,11 +1095,13 @@ select:focus-visible {
   cursor: pointer;
   border: 1px solid var(--border-strong);
   border-radius: 999px;
-  padding: 5px 9px;
+  min-height: 32px;
+  padding: 7px 12px;
   background: var(--surface-raised);
   box-shadow: 0 4px 16px rgb(0 0 0 / 14%);
   color: var(--text);
-  font-size: 9px;
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .timeline-error {

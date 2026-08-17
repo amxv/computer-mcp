@@ -118,6 +118,39 @@ function button(label: string) {
 }
 
 describe('command card', () => {
+  it('hides the output control for a viewer-observed command until output actually arrives', async () => {
+    const stream = controller()
+    const current = command({ started_at_ms: 3_000 })
+    stream.upsert(current, false)
+    const container = document.createElement('div')
+    document.body.append(container)
+    containerCurrent = container
+    disposeCurrent = render(
+      () => (
+        <CommandCard
+          record={current}
+          controller={stream}
+          runtimeId="runtime-one"
+          nowMs={4_000}
+        />
+      ),
+      container,
+    )
+
+    const outputToggle = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Expand command output"]',
+    )!
+    expect(getComputedStyle(outputToggle).display).toBe('none')
+    stream.appendLiveOutput({
+      presentationId: 'inv-10',
+      invocationId: 10,
+      sequence: 1,
+      text: 'hello\n',
+      displayState: 'available',
+    })
+    await vi.waitFor(() => expect(getComputedStyle(outputToggle).display).not.toBe('none'))
+  })
+
   it('stays collapsed by default, coalesces 1000 live chunks, and transitions status accessibly', async () => {
     const stream = controller()
     const [record, setRecord] = createSignal(command())
@@ -198,7 +231,7 @@ describe('command card', () => {
     await vi.waitFor(() =>
       expect(container.querySelector('[aria-label="Command exited successfully"]')).not.toBeNull(),
     )
-    expect(container.textContent).toContain('Completed')
+    expect(container.textContent).not.toContain('Completed')
     expect(container.textContent).toContain('exit 0')
 
     const failed = command({
@@ -212,6 +245,8 @@ describe('command card', () => {
     await vi.waitFor(() =>
       expect(container.querySelector('[aria-label="Failed with exit 7"]')).not.toBeNull(),
     )
+    expect(container.textContent).not.toContain('Failed')
+    expect(container.textContent).toContain('exit 7')
 
     const killed = command({
       status: 'exited',
@@ -390,6 +425,50 @@ describe('command card', () => {
     expect(container.textContent).toContain('yes')
     expect(container.textContent).toContain('Process termination requested')
     expect(container.textContent?.match(/targets Agent b222/g)).toHaveLength(2)
+  })
+
+  it('renders failed generic tools with the same red status dot language as failed commands', () => {
+    const stream = controller()
+    const failedGeneric: PresentationRecord = {
+      presentation_id: 'inv-22',
+      primary_invocation_id: 22,
+      raw_evidence_count: 1,
+      raw_invocation_ids: [22],
+      raw_invocation_ids_truncated: false,
+      agent_id: 'a111',
+      declared_workdir: '/repo',
+      normalized_workdir: '/repo',
+      new_workdir: null,
+      started_at_ms: 1_000,
+      duration_ms: 10,
+      evidence: {
+        evidence_state: 'complete',
+        capture_state: 'complete',
+        degraded: false,
+        reason: null,
+      },
+      kind: 'generic',
+      tool_name: 'apply_patch',
+      status: 'failed',
+      summary: 'Failed to find expected lines',
+    }
+    const container = document.createElement('div')
+    document.body.append(container)
+    containerCurrent = container
+    disposeCurrent = render(
+      () => (
+        <TimelineCard
+          record={failedGeneric}
+          controller={stream}
+          runtimeId="runtime-one"
+          nowMs={2_000}
+        />
+      ),
+      container,
+    )
+    expect(container.querySelector('.card-status-failed')).not.toBeNull()
+    expect(container.textContent).toContain('apply_patch')
+    expect(container.textContent).toContain('failed')
   })
 
   it('loads checkpoint metadata only after Audit opens, then exact evidence only after selection', async () => {

@@ -12,6 +12,12 @@ import type {
   PresentationRecord,
 } from '../api/client'
 import type { AgentStreamController } from '../streams/AgentStreamController'
+import {
+  CheckIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  CopyIcon,
+} from '../ui/icons'
 import type { DiffHighlighter } from './HighlightWorkerClient'
 import { resolveDiffSyntaxLanguage } from './language'
 
@@ -175,12 +181,22 @@ function FileChangeItem(props: {
   const diffKey = () => `${props.record.presentation_id}:file-change:${props.index}`
   const expanded = props.controller.diffExpanded(diffKey())
   const [copied, setCopied] = createSignal(false)
+  let copyFeedbackTimeout: ReturnType<typeof setTimeout> | undefined
+
+  onCleanup(() => {
+    if (copyFeedbackTimeout !== undefined) clearTimeout(copyFeedbackTimeout)
+  })
 
   const copy = async () => {
     const clipboard = navigator.clipboard
     if (!clipboard) return
     await clipboard.writeText(copyText(props.change))
     setCopied(true)
+    if (copyFeedbackTimeout !== undefined) clearTimeout(copyFeedbackTimeout)
+    copyFeedbackTimeout = setTimeout(() => {
+      setCopied(false)
+      copyFeedbackTimeout = undefined
+    }, 2_000)
   }
 
   return (
@@ -197,7 +213,9 @@ function FileChangeItem(props: {
           aria-label={`${expanded() ? 'Collapse' : 'Expand'} diff for ${props.change.path}`}
           onClick={() => props.controller.toggleDiffExpansion(diffKey())}
         >
-          <span class="diff-chevron" aria-hidden="true">{expanded() ? '▾' : '▸'}</span>
+          <span class="diff-chevron" aria-hidden="true">
+            {expanded() ? <ChevronDownIcon /> : <ChevronRightIcon />}
+          </span>
           <span class="diff-operation">{operationLabel(props.change.operation)}</span>
         </button>
         <div class="diff-path" title={props.change.old_path ? `${props.change.old_path} → ${props.change.path}` : props.change.path}>
@@ -226,7 +244,7 @@ function FileChangeItem(props: {
           title={copied() ? 'Copied' : 'Copy diff'}
           onClick={() => void copy()}
         >
-          {copied() ? 'Copied' : 'Copy'}
+          {copied() ? <CheckIcon /> : <CopyIcon />}
         </button>
       </div>
       <Show when={props.change.write_mode}>

@@ -3,8 +3,8 @@ use std::io::IsTerminal as _;
 use zodex::local::{
     HistoryFormat, HistoryQuery, LocalConfig, LocalHistoryReader, LocalPaths, LocalStatusDocument,
     LocalStatusState, RuntimeKey, build_presentation, clear_local_history, ensure_offline_mutation,
-    parse_human_duration, render_presentation, run_local_liveboard, run_local_watch,
-    validate_tunnel_id, WatchOptions,
+    parse_human_duration, render_presentation, run_local_liveboard,
+    run_local_liveboard_without_open, run_local_watch, validate_tunnel_id, WatchOptions,
 };
 
 #[cfg(target_os = "macos")]
@@ -65,11 +65,14 @@ enum LocalCommand {
         json: bool,
     },
     /// Open the read-only Local Liveboard, or explicitly use the terminal viewer.
-    #[command(after_help = "Examples:\n  zodex local watch\n  zodex local watch --tui\n  zodex local watch --tui --agent k7m2\n  zodex local watch --tui --all")]
+    #[command(after_help = "Examples:\n  zodex local watch\n  zodex local watch --no-open\n  zodex local watch --tui\n  zodex local watch --tui --agent k7m2\n  zodex local watch --tui --all")]
     Watch {
         /// Use the terminal viewer instead of the default web Liveboard.
         #[arg(long)]
         tui: bool,
+        /// Serve Liveboard without opening the default browser.
+        #[arg(long, conflicts_with = "tui")]
+        no_open: bool,
         /// In TUI mode, open or wait for one four-character Agent ID.
         #[arg(long, requires = "tui", conflicts_with = "all")]
         agent: Option<String>,
@@ -188,13 +191,20 @@ async fn handle_local_command(command: LocalCommand) -> Result<()> {
             run_native_local_start(&paths, &start_dir, ttl_seconds).await
         }
         LocalCommand::Status { json } => print_local_status(&paths, json),
-        LocalCommand::Watch { tui, agent, all } => {
+        LocalCommand::Watch {
+            tui,
+            no_open,
+            agent,
+            all,
+        } => {
             if let Some(agent) = agent.as_deref() {
                 validate_agent_id(agent)?;
             }
             ensure_local_runtime_host()?;
             if tui {
                 run_local_watch(&paths, WatchOptions { agent, all }).await
+            } else if no_open {
+                run_local_liveboard_without_open(&paths).await
             } else {
                 run_local_liveboard(&paths).await
             }

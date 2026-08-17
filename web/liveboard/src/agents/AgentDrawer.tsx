@@ -1,11 +1,16 @@
-import { For, Show, createEffect } from 'solid-js'
+import {
+  For,
+  Show,
+  createEffect,
+  createSignal,
+  onCleanup,
+  onMount,
+} from 'solid-js'
 
 import type { ApiAgent, LiveboardPreferences } from '../api/client'
-import { AgentsIcon, CloseIcon } from '../ui/icons'
+import { AgentsIcon, ChevronDownIcon, CloseIcon } from '../ui/icons'
 import {
   agentActivity,
-  compactWorkdir,
-  mostRecentWorkdir,
   relativeActivityLabel,
 } from './model'
 
@@ -17,6 +22,124 @@ interface AgentDrawerProps {
   nowMs: number
   onClose: () => void
   onAdd: (agentId: string) => void
+}
+
+function AgentDrawerRow(props: {
+  agent: ApiAgent
+  alias?: string
+  onBoard: boolean
+  boardFull: boolean
+  nowMs: number
+  onAdd: () => void
+}) {
+  const [workdirsOverflow, setWorkdirsOverflow] = createSignal(false)
+  const [workdirsExpanded, setWorkdirsExpanded] = createSignal(false)
+  let workdirsInline: HTMLSpanElement | undefined
+  let resizeObserver: ResizeObserver | undefined
+
+  const activity = () => agentActivity(props.agent, props.nowMs)
+  const workdirs = () => props.agent.workdirs.map((workdir) => workdir.normalized_workdir)
+  const workdirsText = () => workdirs().join(', ')
+  const addDisabled = () => props.onBoard || props.boardFull
+  const measureWorkdirs = () => {
+    const element = workdirsInline
+    if (!element) return
+    setWorkdirsOverflow(element.scrollWidth > element.clientWidth + 1)
+  }
+
+  createEffect(() => {
+    workdirsText()
+    setWorkdirsExpanded(false)
+    queueMicrotask(measureWorkdirs)
+  })
+  createEffect(() => {
+    if (!workdirsOverflow()) setWorkdirsExpanded(false)
+  })
+  onMount(() => {
+    if (typeof ResizeObserver === 'undefined') return
+    resizeObserver = new ResizeObserver(measureWorkdirs)
+    if (workdirsInline) resizeObserver.observe(workdirsInline)
+  })
+  onCleanup(() => resizeObserver?.disconnect())
+
+  return (
+    <div class="drawer-agent-entry">
+      <button
+        type="button"
+        class="drawer-agent"
+        classList={{ 'drawer-agent-selected': props.onBoard }}
+        aria-pressed={props.onBoard}
+        disabled={addDisabled()}
+        title={
+          props.onBoard
+            ? `${props.agent.id} is already visible`
+            : props.boardFull
+              ? 'Board is at its configured maximum'
+              : `Add Agent ${props.agent.id} to board`
+        }
+        onClick={props.onAdd}
+      >
+        <div class="drawer-agent-main">
+          <span class={`activity-dot activity-${activity()}`} aria-hidden="true" />
+          <div class="drawer-agent-identity">
+            <Show when={props.alias}>
+              <strong>{props.alias}</strong>
+            </Show>
+            <code>{props.agent.id}</code>
+          </div>
+        </div>
+        <div
+          class="drawer-agent-meta"
+          classList={{ 'drawer-agent-meta-toggle': workdirsOverflow() }}
+        >
+          <span class="drawer-agent-activity">
+            {props.agent.active_process_count > 0
+              ? `${props.agent.active_process_count} active ${props.agent.active_process_count === 1 ? 'process' : 'processes'}`
+              : relativeActivityLabel(props.agent.last_seen_at_ms, props.nowMs)}
+          </span>
+          <Show when={workdirsText()}>
+            <span
+              ref={workdirsInline}
+              class="drawer-workdirs-inline"
+              classList={{ 'drawer-workdirs-inline-overflow': workdirsOverflow() }}
+              aria-label="Agent workdirs"
+            >
+              <For each={workdirs()}>
+                {(workdir) => (
+                  <span class="workdir-badge" title={workdir}>
+                    {workdir}
+                  </span>
+                )}
+              </For>
+            </span>
+          </Show>
+        </div>
+      </button>
+      <Show when={workdirsOverflow()}>
+        <button
+          type="button"
+          class="drawer-workdirs-toggle"
+          aria-label={`${workdirsExpanded() ? 'Collapse' : 'Expand'} workdirs for Agent ${props.agent.id}`}
+          aria-expanded={workdirsExpanded()}
+          title={workdirsExpanded() ? 'Collapse workdirs' : 'Show all workdirs'}
+          onClick={() => setWorkdirsExpanded((expanded) => !expanded)}
+        >
+          <ChevronDownIcon />
+        </button>
+      </Show>
+      <Show when={workdirsExpanded() && workdirsOverflow()}>
+        <div class="drawer-workdirs-expanded" aria-label="Expanded Agent workdirs">
+          <For each={workdirs()}>
+            {(workdir) => (
+              <span class="workdir-badge" title={workdir}>
+                {workdir}
+              </span>
+            )}
+          </For>
+        </div>
+      </Show>
+    </div>
+  )
 }
 
 export function AgentDrawer(props: AgentDrawerProps) {
@@ -42,10 +165,7 @@ export function AgentDrawer(props: AgentDrawerProps) {
           <header class="drawer-header">
             <div class="drawer-title-row">
               <AgentsIcon />
-              <div>
-                <h2 id="drawer-title">All Agents</h2>
-                <p>Current Local runtime</p>
-              </div>
+              <h2 id="drawer-title">All Agents</h2>
             </div>
             <button
               ref={closeButton}
@@ -66,49 +186,15 @@ export function AgentDrawer(props: AgentDrawerProps) {
                 {(agent) => {
                   const onBoard = () => props.visibleIds.includes(agent.id)
                   const preference = () => props.preferences.agents[agent.id]
-                  const workdir = () => mostRecentWorkdir(agent)
-                  const activity = () => agentActivity(agent, props.nowMs)
-                  const addDisabled = () => onBoard() || isFull()
                   return (
-                    <button
-                      type="button"
-                      class="drawer-agent"
-                      classList={{ 'drawer-agent-selected': onBoard() }}
-                      aria-pressed={onBoard()}
-                      disabled={addDisabled()}
-                      title={
-                        onBoard()
-                          ? `${agent.id} is already visible`
-                          : isFull()
-                            ? 'Board is at its configured maximum'
-                            : `Add Agent ${agent.id} to board`
-                      }
-                      onClick={() => props.onAdd(agent.id)}
-                    >
-                      <div class="drawer-agent-main">
-                        <div class="drawer-agent-identity">
-                          <Show when={preference()?.alias}>
-                            <strong>{preference()?.alias}</strong>
-                          </Show>
-                          <code>{agent.id}</code>
-                        </div>
-                        <span class={`activity-dot activity-${activity()}`} aria-hidden="true" />
-                      </div>
-                      <div class="drawer-agent-meta">
-                        <span>
-                          {agent.active_process_count > 0
-                            ? `${agent.active_process_count} active`
-                            : relativeActivityLabel(agent.last_seen_at_ms, props.nowMs)}
-                        </span>
-                        <Show when={workdir()}>
-                          {(value) => (
-                            <span title={value().normalized_workdir}>
-                              {compactWorkdir(value().normalized_workdir)}
-                            </span>
-                          )}
-                        </Show>
-                      </div>
-                    </button>
+                    <AgentDrawerRow
+                      agent={agent}
+                      alias={preference()?.alias}
+                      onBoard={onBoard()}
+                      boardFull={isFull()}
+                      nowMs={props.nowMs}
+                      onAdd={() => props.onAdd(agent.id)}
+                    />
                   )
                 }}
               </For>

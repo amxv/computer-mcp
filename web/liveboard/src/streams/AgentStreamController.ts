@@ -68,6 +68,7 @@ export interface AgentStreamController {
     displayReason?: string,
   ) => void
   outputState: (presentationId: string, invocationId: number) => CommandOutputState
+  commandOutputAvailability: (presentationId: string) => Accessor<boolean | undefined>
   markOutputRecoveryNeeded: () => void
   lastLiveOutputSequence: (presentationId: string) => number | undefined
   commandExpanded: (presentationId: string) => Accessor<boolean>
@@ -97,6 +98,7 @@ export function createAgentStreamController(
 ): AgentStreamController {
   const cards = new Map<string, CardSlot>()
   const outputStates = new Map<string, CommandOutputState>()
+  const [outputAvailability, setOutputAvailability] = createSignal(new Map<string, boolean>())
   const commandExpansion = new Map<string, ExpansionSlot>()
   const diffExpansion = new Map<string, ExpansionSlot>()
   const unseenIds = new Set<string>()
@@ -123,8 +125,20 @@ export function createAgentStreamController(
     setUnseenCount(unseenIds.size)
   }
 
+  const markOutputAvailability = (presentationId: string, available: boolean) => {
+    setOutputAvailability((current) => {
+      if (current.get(presentationId) === available) return current
+      const next = new Map(current)
+      next.set(presentationId, available)
+      return next
+    })
+  }
+
   const upsert = (record: PresentationRecord, activity = true): boolean => {
     if (disposed || record.agent_id !== options.agentId) return false
+    if (record.kind === 'command' && (record.output?.length ?? 0) > 0) {
+      markOutputAvailability(record.presentation_id, true)
+    }
     const existing = cards.get(record.presentation_id)
     if (existing) {
       existing.setRecord(record)
@@ -247,6 +261,9 @@ export function createAgentStreamController(
       displayReason,
     }) => {
       if (disposed) return
+      if (text.length > 0 || displayState === 'unavailable') {
+        markOutputAvailability(presentationId, true)
+      }
       const record = cards.get(presentationId)?.record()
       const existingOutputState = outputStates.get(presentationId)
       if (
@@ -271,9 +288,17 @@ export function createAgentStreamController(
       markActivity(presentationId)
     },
     completeLiveOutput: (presentationId, displayState, displayReason) => {
-      outputStates.get(presentationId)?.markComplete(displayState, displayReason)
+      const state = outputStates.get(presentationId)
+      if (displayState === 'unavailable') {
+        markOutputAvailability(presentationId, true)
+      } else if (outputAvailability().get(presentationId) !== true) {
+        markOutputAvailability(presentationId, (state?.materialize().length ?? 0) > 0)
+      }
+      state?.markComplete(displayState, displayReason)
     },
     outputState,
+    commandOutputAvailability: (presentationId) => () =>
+      outputAvailability().get(presentationId),
     markOutputRecoveryNeeded: () => {
       for (const state of outputStates.values()) state.markRecoveryNeeded()
     },
@@ -312,6 +337,7 @@ export function createAgentStreamController(
       disposed = true
       cards.clear()
       outputStates.clear()
+      setOutputAvailability(new Map())
       commandExpansion.clear()
       diffExpansion.clear()
       unseenIds.clear()

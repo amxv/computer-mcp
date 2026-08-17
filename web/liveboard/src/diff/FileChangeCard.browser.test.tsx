@@ -165,6 +165,8 @@ afterEach(() => {
   containerCurrent?.remove()
   disposeCurrent = undefined
   containerCurrent = undefined
+  vi.useRealTimers()
+  Reflect.deleteProperty(navigator, 'clipboard')
   applyTheme('system')
 })
 
@@ -187,6 +189,40 @@ function mount(
 }
 
 describe('file change cards', () => {
+  it('shows copy success as a check icon for two seconds without changing button width', async () => {
+    vi.useFakeTimers()
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    })
+    const stream = controller()
+    const highlighter = new ImmediateHighlighter()
+    const value = record([
+      change('edited', '/repo/src/main.rs', {
+        lines: [{ kind: 'add', old_line: null, new_line: 1, text: 'const next = 1' }],
+      }),
+    ])
+    const container = mount(() => value, stream, highlighter)
+    const copyButton = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Copy diff for /repo/src/main.rs"]',
+    )!
+    const widthBefore = copyButton.getBoundingClientRect().width
+
+    copyButton.click()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(writeText).toHaveBeenCalledWith('+const next = 1')
+    expect(copyButton.getAttribute('aria-label')).toBe('Diff copied for /repo/src/main.rs')
+    expect(copyButton.getBoundingClientRect().width).toBe(widthBefore)
+
+    await vi.advanceTimersByTimeAsync(1_999)
+    expect(copyButton.getAttribute('aria-label')).toBe('Diff copied for /repo/src/main.rs')
+    await vi.advanceTimersByTimeAsync(1)
+    expect(copyButton.getAttribute('aria-label')).toBe('Copy diff for /repo/src/main.rs')
+  })
+
   it('renders canonical operations, gutters, tones and one highlight batch per expanded file', async () => {
     const stream = controller()
     const highlighter = new ImmediateHighlighter()
@@ -339,6 +375,7 @@ describe('file change cards', () => {
       ['/repo/cmd/server.go', 'package main'],
       ['/repo/scripts/build.sh', 'echo "$HOME"'],
       ['/repo/tools/check.py', 'def value():'],
+      ['/repo/ui/styles.css', '.button { display: grid; }'],
       ['/repo/config/data.json', '{"value": 1}'],
       ['/repo/Cargo.toml', 'edition = "2024"'],
     ] as const
@@ -353,16 +390,19 @@ describe('file change cards', () => {
     )
     const container = mount(() => value, stream, highlighter)
     await vi.waitFor(
-      () => expect(container.querySelectorAll('.diff-source-highlight')).toHaveLength(8),
+      () => expect(container.querySelectorAll('.diff-source-highlight')).toHaveLength(9),
       { timeout: 5_000 },
     )
-    expect(highlightCalls).toBe(8)
+    expect(highlightCalls).toBe(9)
 
     for (const width of [920, 460, 280]) {
       container.style.width = `${width}px`
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
       for (const header of container.querySelectorAll<HTMLElement>('.file-change-header')) {
         expect(header.scrollWidth).toBeLessThanOrEqual(header.clientWidth + 1)
+        expect(
+          getComputedStyle(header.querySelector<HTMLButtonElement>('.diff-copy-button')!).display,
+        ).not.toBe('none')
       }
     }
 
@@ -377,6 +417,6 @@ describe('file change cards', () => {
     const darkRow = getComputedStyle(addRow).backgroundColor
     expect(darkToken).not.toBe(lightToken)
     expect(darkRow).not.toBe(lightRow)
-    expect(highlightCalls).toBe(8)
+    expect(highlightCalls).toBe(9)
   })
 })

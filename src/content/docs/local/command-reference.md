@@ -89,22 +89,24 @@ Options:
 
 ```text
 --tui            use the terminal viewer instead of the default web Liveboard
+--no-open        serve Liveboard without opening the default browser
 --agent <AGENT>  in TUI mode, watch/wait for one four-character Agent ID
 --all            in TUI mode, combine all Agents
 ```
 
-`--agent` requires `--tui` and cannot be combined with `--all`. `--all` also requires `--tui`.
+`--no-open` is web-Liveboard only and cannot be combined with `--tui`. `--agent` requires `--tui` and cannot be combined with `--all`. `--all` also requires `--tui`.
 
 Examples:
 
 ```bash
 zodex local watch
+zodex local watch --no-open
 zodex local watch --tui
 zodex local watch --tui --agent k7m2
 zodex local watch --tui --all
 ```
 
-Plain `watch` starts the temporary same-origin Liveboard host and opens the browser UI. The terminal viewer is explicit. See [Watch and Liveboard](/docs/local/watch) for both interfaces and [Local observability API](/docs/local/observability-api) to build another client.
+Plain `watch` starts the temporary same-origin Liveboard host and opens the browser UI. `--no-open` keeps that host in the foreground without launching a browser. The terminal viewer is explicit. See [Watch and Liveboard](/docs/local/watch) for both interfaces and [Local observability API](/docs/local/observability-api) to build another client.
 
 ## `zodex local history`
 

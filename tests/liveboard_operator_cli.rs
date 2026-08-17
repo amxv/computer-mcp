@@ -21,3 +21,15 @@ fn local_watch_agent_filters_require_explicit_tui_mode() {
         );
     }
 }
+
+#[test]
+fn local_watch_no_open_is_web_only() {
+    let output = Command::new(env!("CARGO_BIN_EXE_zodex"))
+        .args(["local", "watch", "--tui", "--no-open"])
+        .output()
+        .expect("run zodex local watch --tui --no-open");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--no-open"));
+    assert!(stderr.contains("--tui"));
+}
