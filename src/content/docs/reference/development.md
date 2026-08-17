@@ -76,7 +76,6 @@ Run script-specific tests when changing them:
 ```bash
 cargo test --quiet --test install_script
 cargo test --quiet --test github_app_scripts
-cargo test --quiet --test sprite_scripts
 ```
 
 ## Release awareness

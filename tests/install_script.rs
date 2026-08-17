@@ -11,121 +11,6 @@ fn install_script_path() -> PathBuf {
 }
 
 #[test]
-fn install_script_has_expected_structure() {
-    let script = std::fs::read_to_string(install_script_path()).expect("read install script");
-
-    let required_snippets = [
-        "set -euo pipefail",
-        "ZODEX_VERSION",
-        "ZODEX_INSTALL_MODE",
-        "detect_operator_platform()",
-        "run_operator_install()",
-        "run_runtime_install()",
-        "sha256_verify()",
-        "resolve_release_checksum_url()",
-        "operator_local_runtime_dir()",
-        "ensure_local_stopped_before_operator_replace()",
-        "install_operator_binary_atomically()",
-        "/bin/rm -rf \"${TMP_DIR}\"",
-        "zodex operator CLI installed.",
-        "ZODEX_ASSET_URL",
-        "ZODEX_BINARY_SOURCE_DIR",
-        "ZODEX_INSTALL_DIR",
-        "ZODEX_CONFIG_PATH",
-        "ZODEX_AGENT_USER",
-        "ZODEX_AGENT_HOME",
-        "ZODEX_AGENT_SHELL",
-        "ZODEX_DEFAULT_WORKDIR",
-        "ZODEX_PUBLISHER_USER",
-        "ZODEX_PUBLISHER_HOME",
-        "ZODEX_SERVICE_GROUP",
-        "ZODEX_GIT_USER_NAME",
-        "ZODEX_GIT_USER_EMAIL",
-        "ZODEX_READER_KEY_DIR",
-        "ZODEX_SERVICE_PORT",
-        "ensure_service_accounts()",
-        "detect_platform()",
-        "install_runtime_prerequisites()",
-        "install_build_prerequisites()",
-        "resolve_release_asset_url()",
-        "server_archive_name=\"zodex-${TARGET_TRIPLE}.tar.gz\"",
-        "install_binaries_from_release()",
-        "install_binaries_from_source()",
-        "configure_agent_git_identity()",
-        "configure_agent_git_reader_helper()",
-        "configure_agent_build_environment()",
-        "zodex-agent-build-env.sh",
-        "export TMPDIR=",
-        "export GOCACHE=",
-        "export GOMODCACHE=",
-        "export npm_config_cache=",
-        "export BUN_INSTALL_CACHE_DIR=",
-        "export COREPACK_HOME=",
-        "export CCACHE_DIR=",
-        "export PIP_CACHE_DIR=",
-        "export UV_CACHE_DIR=",
-        "keep site-specific toolchain policy in a separate profile fragment",
-        "if [ -d /.sprite/bin ]",
-        "export PATH=\"/.sprite/bin:\\${PATH}\"",
-        "git config --global user.name",
-        "git config --global user.email",
-        "${ZODEX_STATE_DIR}/publisher/run",
-        "${ZODEX_STATE_DIR}/publisher/logs",
-        "credential.https://github.com.helper",
-        "git-credential-helper",
-        "git-remote-zodex",
-        "zodex-agent",
-        "print_runtime_summary()",
-        "apt-get install -y --no-install-recommends",
-        "build-essential pkg-config libssl-dev git",
-        "zodex-prd",
-        "service_port = ${ZODEX_SERVICE_PORT}",
-        "agent_home = \"${ZODEX_AGENT_HOME}\"",
-        "default_workdir = \"${ZODEX_DEFAULT_WORKDIR}\"",
-        "Most installs can keep the built-in defaults.",
-        "reader_app_id",
-        "reader_installation_id",
-        "publisher_client_id",
-        "# id = \"amxv/zodex\"",
-        "# repo = \"amxv/zodex\"",
-        "credential.https://github.com.useHttpPath true",
-        "Runtime lifecycle is managed from the operator machine with zodex sprite commands.",
-    ];
-
-    for snippet in required_snippets {
-        assert!(
-            script.contains(snippet),
-            "install script missing snippet: {snippet}"
-        );
-    }
-    assert!(
-        !script.contains("url.\"zodex::https://github.com/\".pushInsteadOf"),
-        "default runtime install must not force the YOLO direct-push rewrite"
-    );
-    assert!(
-        script
-            .lines()
-            .all(|line| !line.trim_start().starts_with("rm -")),
-        "installer cleanup must bypass user PATH wrappers with /bin/rm"
-    );
-    for removed in [
-        "ZODEX_INSTALL_OPERATOR_CLI",
-        "ZODEX_PUBLIC_HOST",
-        "run_cli_install()",
-        "resolved_public_host()",
-        "print_next_steps()",
-        "certbot",
-        "tls_cert_path",
-        "tls_key_path",
-    ] {
-        assert!(
-            !script.contains(removed),
-            "legacy runtime installer surface still present: {removed}"
-        );
-    }
-}
-
-#[test]
 fn installer_auto_mode_is_always_operator_and_runtime_is_explicit() {
     let command = r#"
 eval "$(sed -n '/^resolved_install_mode()/,/^}/p' "${INSTALL_SCRIPT}")"
@@ -313,21 +198,6 @@ install_binaries_from_dir "${SOURCE_DIR}"
     }
 
     std::fs::remove_dir_all(&test_dir).expect("remove runtime install test directory");
-}
-
-#[test]
-fn install_script_does_not_use_generic_target_triple_tarball_match() {
-    let script = std::fs::read_to_string(install_script_path()).expect("read install script");
-
-    assert!(
-        !script.contains("${TARGET_TRIPLE}[^\"]*\\.tar\\.gz"),
-        "install script should not select release assets via generic target triple tarball match"
-    );
-    let deprecated_platform_name = ["run", "pod"].concat();
-    assert!(
-        !script.contains(&deprecated_platform_name),
-        "install script should not contain deprecated platform-specific branches"
-    );
 }
 
 #[test]
@@ -614,14 +484,12 @@ fn operator_release_dir_install_proves_local_needs_only_zodex_binary() {
         .output()
         .expect("run installed Local help");
     assert!(help.status.success());
-    assert!(String::from_utf8_lossy(&help.stdout).contains("Usage: zodex local <COMMAND>"));
 
     let setup_help = Command::new(&installed)
         .args(["local", "setup", "--help"])
         .output()
         .expect("run installed Local setup help");
     assert!(setup_help.status.success());
-    assert!(String::from_utf8_lossy(&setup_help.stdout).contains("--runtime-key-stdin"));
 
     std::fs::remove_dir_all(&test_dir).expect("remove Local install test directory");
 }

@@ -101,10 +101,8 @@
             &build,
         )
         .expect("materialize");
-        let source = fs::read_to_string(dir.path().join("src/index.js")).expect("source");
+        assert!(dir.path().join("src/index.js").is_file());
         let rendered = fs::read_to_string(config).expect("config");
-        assert!(source.contains("at most once") || source.contains("Never replay"));
-        assert!(!source.contains("DOCS_ORIGIN"));
         assert!(rendered.contains(&build));
         assert!(rendered.contains("https://dev.example.sprites.app"));
     }

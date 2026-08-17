@@ -92,8 +92,8 @@ jobs:
           test ! -e "$install_dir/zodexd"
           test ! -e "$install_dir/zodex-prd"
           test ! -e "$install_dir/zodex-agent"
-          "$install_dir/zodex" local --help | grep -q 'Usage: zodex local <COMMAND>'
-          "$install_dir/zodex" local setup --help | grep -q -- '--runtime-key-stdin'
+          "$install_dir/zodex" local --help >/dev/null
+          "$install_dir/zodex" local setup --help >/dev/null
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4

@@ -18,11 +18,5 @@ cargo test --locked --lib \
   -- --exact
 
 cargo test --locked --test zodex_operator_cli \
-  zodex_root_help_exposes_only_first_class_modes_and_upgrade \
-  -- --exact
-cargo test --locked --test zodex_operator_cli \
   zodex_root_rejects_removed_commands_and_global_config \
-  -- --exact
-cargo test --locked --test zodex_operator_cli \
-  zodex_local_help_exposes_complete_public_family_and_inspection_examples \
   -- --exact

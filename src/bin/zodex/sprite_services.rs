@@ -189,22 +189,6 @@ fn restart_sprite_services(sprite: &str, org: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
-fn local_sprite_health_probe_script() -> &'static str {
-    r#"set -euo pipefail
-for attempt in $(seq 1 20); do
-  if curl -fsS http://127.0.0.1:8080/health | grep -F '"status":"ok"' >/dev/null; then
-    exit 0
-  fi
-  if [[ "$attempt" -lt 20 ]]; then
-    sleep 1
-  fi
-done
-echo "zodexd did not become healthy within 20 seconds" >&2
-exit 1
-"#
-}
-
 fn sync_sprite_services(
     sprite: &str,
     org: Option<&str>,

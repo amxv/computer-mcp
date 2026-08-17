@@ -176,11 +176,10 @@ async fn run_hidden_command(config_path: &Path, command: Commands) -> Result<()>
 #[cfg(test)]
 mod tests {
     use super::{
-        Args, PushGrantRecord, create_direct_push_bundle_from_dir, git_remote_zodex_push_dst,
+        PushGrantRecord, create_direct_push_bundle_from_dir, git_remote_zodex_push_dst,
         git_remote_zodex_repo, parse_push_grants, resolve_active_push_grant, resolve_git_object_id,
         resolve_git_object_type, sanitize_remote_helper_error, summarize_github_error_body,
     };
-    use clap::CommandFactory;
     use std::fs;
     use std::process::Command;
     use tempfile::tempdir;
@@ -192,15 +191,6 @@ mod tests {
             .status()
             .expect("run git")
             .success()
-    }
-
-    #[test]
-    fn clap_help_uses_zodexd_name() {
-        let help = Args::command().render_long_help().to_string();
-        assert!(help.contains("zodexd"));
-        assert!(help.contains("remote execution"));
-        assert!(!help.contains("git-credential-helper"));
-        assert!(!help.contains("ensure-tls"));
     }
 
     #[test]

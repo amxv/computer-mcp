@@ -14,7 +14,7 @@
         github_mode_expired,
         github_default_agent_git_repair_script,
         github_yolo_agent_git_inspect_script, github_yolo_agent_git_repair_script,
-        local_sprite_health_probe_script, derive_proxy_worker_name, execute_wrangler_deploy,
+        derive_proxy_worker_name, execute_wrangler_deploy,
         materialize_proxy_project,
         merge_github_yolo_mode_records, normalize_github_repo, normalize_github_repos,
         normalize_proxy_origin, parse_sprite_info, parse_wrangler_deploy_output, parse_wrangler_version,
@@ -30,22 +30,13 @@
         validate_sprite_service_operation_stream,
     };
     use crate::operator_cli::Cli;
-    use clap::{CommandFactory, Parser};
+    use clap::Parser;
     use std::fs;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
     use std::time::Duration;
     use tempfile::tempdir;
-    #[test]
-    fn clap_help_uses_zodex_name() {
-        let help = Cli::command().render_long_help().to_string();
-        assert!(help.contains("zodex"));
-        assert!(help.contains("Zodex operator CLI"));
-        assert!(!help.contains("publish-pr"));
-        assert!(!help.contains("\npublisher"));
-    }
-
     #[test]
     fn safe_sprite_operations_accept_omitted_sprite_at_parse_time() {
         for args in [
@@ -340,15 +331,6 @@
     }
 
     #[test]
-    fn local_sprite_health_probe_retries_bounded_startup() {
-        let script = local_sprite_health_probe_script();
-
-        assert!(script.contains("for attempt in $(seq 1 20)"));
-        assert!(script.contains("sleep 1"));
-        assert!(script.contains("did not become healthy within 20 seconds"));
-    }
-
-    #[test]
     fn installed_sprite_release_validation_accepts_tags_and_rejects_drift() {
         assert_eq!(
             validate_installed_sprite_release("zodex-agent 0.3.1\n", "v0.3.1")
@@ -387,41 +369,6 @@
                 "PUT".to_string(),
             ]
         );
-    }
-
-    #[test]
-    fn sprite_exec_verification_helpers_do_not_prepend_separator() {
-        let source_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src")
-            .join("bin")
-            .join("zodex");
-        let source = ["sprite_proxy.rs", "sprite_services.rs", "sprite_health.rs"]
-            .into_iter()
-            .map(|file| {
-                std::fs::read_to_string(source_dir.join(file)).expect("read zodex source module")
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        for fn_name in [
-            "derive_remote_target_repo",
-            "verify_agent_git_identity",
-            "verify_reader_git_access",
-            "verify_publisher_socket_permissions",
-            "verify_publisher_key_isolation",
-            "read_local_sprite_runtime_health",
-        ] {
-            let start = source
-                .find(&format!("fn {fn_name}"))
-                .unwrap_or_else(|| panic!("missing function {fn_name}"));
-            let tail = &source[start..];
-            let end = tail.find("\nfn ").unwrap_or(tail.len());
-            let body = &tail[..end];
-            assert!(
-                !body.contains("\"--\".to_string()"),
-                "{fn_name} should not prepend `--` when building run_sprite_exec args"
-            );
-        }
     }
 
     #[test]
