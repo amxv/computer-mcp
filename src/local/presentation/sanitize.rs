@@ -1,11 +1,18 @@
+use std::io::Write as _;
+use std::sync::{Arc, Mutex};
+
 const PREVIEW_ELLIPSIS: &str = "…";
 const PREVIEW_INPUT_SCAN_MULTIPLIER: usize = 8;
 const PREVIEW_INPUT_SCAN_SLOP: usize = 256;
 
 pub(crate) fn sanitize_display_text(input: &str) -> String {
     let stripped = strip_ansi_escapes::strip_str(input);
-    let mut output = String::with_capacity(stripped.len());
-    for ch in stripped.chars() {
+    sanitize_stripped_text(&stripped)
+}
+
+fn sanitize_stripped_text(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    for ch in input.chars() {
         match ch {
             '\n' | '\t' => output.push(ch),
             value if value.is_control() || is_bidi_control(value) => {
@@ -15,6 +22,69 @@ pub(crate) fn sanitize_display_text(input: &str) -> String {
         }
     }
     output
+}
+
+#[derive(Clone, Default)]
+struct SharedDisplayBuffer(Arc<Mutex<Vec<u8>>>);
+
+impl std::io::Write for SharedDisplayBuffer {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0
+            .lock()
+            .expect("display sanitizer buffer poisoned")
+            .extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Stateful display sanitizer for a sequence of PTY chunks.
+///
+/// ANSI/OSC parser state is deliberately retained across `push` calls because
+/// PTY chunk boundaries are arbitrary. Each returned string contains only the
+/// display delta produced by that one raw chunk after the parser has consumed
+/// all preceding chunks.
+pub(crate) struct StreamingDisplaySanitizer {
+    writer: strip_ansi_escapes::Writer<SharedDisplayBuffer>,
+    output: Arc<Mutex<Vec<u8>>>,
+}
+
+impl StreamingDisplaySanitizer {
+    pub(crate) fn new() -> Self {
+        let sink = SharedDisplayBuffer::default();
+        let output = sink.0.clone();
+        Self {
+            writer: strip_ansi_escapes::Writer::new(sink),
+            output,
+        }
+    }
+
+    pub(crate) fn push(&mut self, raw: &str) -> String {
+        self.writer
+            .write_all(raw.as_bytes())
+            .expect("writing to the in-memory display sanitizer cannot fail");
+        self.writer
+            .flush()
+            .expect("flushing the in-memory display sanitizer cannot fail");
+        let bytes = std::mem::take(
+            &mut *self
+                .output
+                .lock()
+                .expect("display sanitizer buffer poisoned"),
+        );
+        let stripped = String::from_utf8(bytes)
+            .expect("ANSI stripping valid UTF-8 PTY text must preserve UTF-8");
+        sanitize_stripped_text(&stripped)
+    }
+}
+
+impl Default for StreamingDisplaySanitizer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 fn is_bidi_control(value: char) -> bool {

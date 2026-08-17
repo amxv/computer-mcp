@@ -21,22 +21,27 @@ use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_util::sync::CancellationToken;
 
 use crate::local::history::{
-    HISTORY_LIVE_EVENT_SCHEMA_VERSION, HistoryLiveEvent, LocalHistoryReader,
-    normalize_declared_workdir,
+    HISTORY_LIVE_EVENT_SCHEMA_VERSION, HistoryLiveEvent, HistoryTimelineCursor,
+    HistoryTimelineMode, HistoryTimelineQuery, LocalHistoryReader, normalize_declared_workdir,
 };
 use crate::local::presentation::{PRESENTATION_SCHEMA_VERSION, build_presentation};
 use crate::local::{HistoryQuery, LocalHistoryRuntime};
 
 use super::model::{
     ApiAgent, ApiAgentDetail, ApiAgentList, ApiError, ApiInvocationDetail, ApiInvocationList,
-    ApiLogicalInvocation, ApiOutputPage, ApiStatusDocument, LOCAL_OBSERVABILITY_API_VERSION,
-    presentation_version, schema_version,
+    ApiLogicalInvocation, ApiOutputPage, ApiStatusDocument, ApiTimelineCheckpointPage,
+    ApiTimelineDetail, ApiTimelinePage, LOCAL_OBSERVABILITY_API_VERSION, presentation_version,
+    schema_version,
 };
 
 const DEFAULT_INVOCATION_LIMIT: usize = 50;
 const MAX_INVOCATION_LIMIT: usize = 100;
 const DEFAULT_OUTPUT_CHUNK_LIMIT: usize = 16;
 const MAX_OUTPUT_CHUNK_LIMIT: usize = 64;
+const DEFAULT_TIMELINE_LIMIT: usize = 50;
+const MAX_TIMELINE_LIMIT: usize = 100;
+const DEFAULT_CHECKPOINT_LIMIT: usize = 25;
+const MAX_CHECKPOINT_LIMIT: usize = 100;
 
 #[derive(Clone)]
 struct ApiState {
@@ -117,6 +122,12 @@ pub(super) fn build_router(history: Arc<LocalHistoryRuntime>, token: HeaderValue
         .route("/v1/invocations", get(invocations))
         .route("/v1/invocations/{id}", get(invocation_detail))
         .route("/v1/invocations/{id}/output", get(invocation_output))
+        .route("/v1/timeline", get(timeline))
+        .route("/v1/timeline/{presentation_id}", get(timeline_detail))
+        .route(
+            "/v1/timeline/{presentation_id}/checkpoints",
+            get(timeline_checkpoints),
+        )
         .route("/v1/events", get(events))
         .with_state(Arc::new(ApiState { history }))
         .layer(middleware::from_fn_with_state(
@@ -314,6 +325,7 @@ async fn invocation_detail(
 struct OutputQuery {
     cursor: Option<u64>,
     limit: Option<usize>,
+    view: Option<String>,
 }
 
 async fn invocation_output(
@@ -329,14 +341,192 @@ async fn invocation_output(
     }
     let cursor = query.cursor.unwrap_or(0);
     let path = state.history.database_path().to_path_buf();
-    let page = run_blocking(move || LocalHistoryReader::output_page(&path, id, cursor, limit))
-        .await?
-        .ok_or_else(|| not_found(format!("invocation {id} was not found")))?;
-    Ok(Json(ApiOutputPage {
+    let view = query.view.as_deref().unwrap_or("raw");
+    let runtime_id = state.history.runtime_id().to_string();
+    let response = match view {
+        "raw" => {
+            let page =
+                run_blocking(move || LocalHistoryReader::output_page(&path, id, cursor, limit))
+                    .await?
+                    .ok_or_else(|| not_found(format!("invocation {id} was not found")))?;
+            ApiOutputPage {
+                schema_version: schema_version(),
+                runtime_id,
+                invocation_id: id,
+                view: "raw".to_string(),
+                chunks: page.chunks,
+                next_cursor: page.next_cursor,
+                display_state: None,
+                display_reason: None,
+            }
+        }
+        "display" => {
+            let page = run_blocking(move || {
+                LocalHistoryReader::display_output_page(&path, id, cursor, limit)
+            })
+            .await?
+            .ok_or_else(|| not_found(format!("invocation {id} was not found")))?;
+            ApiOutputPage {
+                schema_version: schema_version(),
+                runtime_id,
+                invocation_id: id,
+                view: "display".to_string(),
+                chunks: page.chunks,
+                next_cursor: page.next_cursor,
+                display_state: Some(page.display_state),
+                display_reason: page.display_reason,
+            }
+        }
+        other => return Err(bad_request(format!("unsupported output view `{other}`"))),
+    };
+    Ok(Json(response))
+}
+
+#[derive(Debug, Deserialize)]
+struct TimelineQuery {
+    limit: Option<usize>,
+    cursor: Option<String>,
+    agent_id: Option<String>,
+    workdir: Option<String>,
+    before_ms: Option<i64>,
+    recovery_since_ms: Option<i64>,
+}
+
+async fn timeline(
+    State(state): State<Arc<ApiState>>,
+    Query(query): Query<TimelineQuery>,
+) -> Result<Json<ApiTimelinePage>, ApiFailure> {
+    let limit = query.limit.unwrap_or(DEFAULT_TIMELINE_LIMIT);
+    if limit == 0 || limit > MAX_TIMELINE_LIMIT {
+        return Err(bad_request(format!(
+            "limit must be between 1 and {MAX_TIMELINE_LIMIT}"
+        )));
+    }
+    if query.before_ms.is_some() && query.recovery_since_ms.is_some() {
+        return Err(bad_request(
+            "before_ms cannot be combined with recovery_since_ms",
+        ));
+    }
+    if let Some(agent_id) = query.agent_id.as_deref() {
+        validate_agent_id(agent_id)?;
+    }
+    let normalized_workdir = normalize_api_workdir(query.workdir.as_deref())?;
+    let cursor = query
+        .cursor
+        .as_deref()
+        .map(HistoryTimelineCursor::decode)
+        .transpose()
+        .map_err(|error| bad_request(format!("invalid timeline cursor: {error}")))?;
+    let mode = if let Some(since_ms) = query.recovery_since_ms {
+        if cursor
+            .as_ref()
+            .is_some_and(|cursor| !cursor.matches_recovery(since_ms))
+        {
+            return Err(bad_request(
+                "timeline cursor does not match recovery_since_ms",
+            ));
+        }
+        HistoryTimelineMode::Recovery {
+            since_ms,
+            active_process_invocation_ids: state.history.active_process_invocation_ids(),
+        }
+    } else {
+        if cursor
+            .as_ref()
+            .is_some_and(|cursor| !cursor.matches_history(query.before_ms))
+        {
+            return Err(bad_request("timeline cursor does not match before_ms"));
+        }
+        HistoryTimelineMode::History {
+            before_ms: query.before_ms,
+        }
+    };
+    let path = state.history.database_path().to_path_buf();
+    let page = run_blocking(move || {
+        LocalHistoryReader::timeline(
+            &path,
+            &HistoryTimelineQuery {
+                limit,
+                cursor,
+                agent_id: query.agent_id,
+                normalized_workdir,
+                mode,
+            },
+        )
+    })
+    .await?;
+    Ok(Json(ApiTimelinePage {
         schema_version: schema_version(),
+        presentation_version: PRESENTATION_SCHEMA_VERSION,
         runtime_id: state.history.runtime_id().to_string(),
-        invocation_id: id,
-        chunks: page.chunks,
+        records: page.records,
+        has_more: page.has_more,
+        next_cursor: page.next_cursor,
+    }))
+}
+
+async fn timeline_detail(
+    State(state): State<Arc<ApiState>>,
+    AxumPath(presentation_id): AxumPath<String>,
+) -> Result<Json<ApiTimelineDetail>, ApiFailure> {
+    let root_id = parse_presentation_id(&presentation_id)?;
+    let path = state.history.database_path().to_path_buf();
+    let record = run_blocking(move || LocalHistoryReader::timeline_detail(&path, root_id))
+        .await?
+        .ok_or_else(|| not_found(format!("timeline record `{presentation_id}` was not found")))?;
+    Ok(Json(ApiTimelineDetail {
+        schema_version: schema_version(),
+        presentation_version: PRESENTATION_SCHEMA_VERSION,
+        runtime_id: state.history.runtime_id().to_string(),
+        record,
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+struct CheckpointQuery {
+    limit: Option<usize>,
+    cursor: Option<String>,
+}
+
+async fn timeline_checkpoints(
+    State(state): State<Arc<ApiState>>,
+    AxumPath(presentation_id): AxumPath<String>,
+    Query(query): Query<CheckpointQuery>,
+) -> Result<Json<ApiTimelineCheckpointPage>, ApiFailure> {
+    let root_id = parse_presentation_id(&presentation_id)?;
+    let limit = query.limit.unwrap_or(DEFAULT_CHECKPOINT_LIMIT);
+    if limit == 0 || limit > MAX_CHECKPOINT_LIMIT {
+        return Err(bad_request(format!(
+            "limit must be between 1 and {MAX_CHECKPOINT_LIMIT}"
+        )));
+    }
+    let cursor = query
+        .cursor
+        .as_deref()
+        .map(HistoryTimelineCursor::decode)
+        .transpose()
+        .map_err(|error| bad_request(format!("invalid checkpoint cursor: {error}")))?;
+    if cursor
+        .as_ref()
+        .is_some_and(|cursor| !cursor.matches_checkpoints(root_id))
+    {
+        return Err(bad_request(
+            "checkpoint cursor belongs to a different timeline record",
+        ));
+    }
+    let path = state.history.database_path().to_path_buf();
+    let page = run_blocking(move || {
+        LocalHistoryReader::timeline_checkpoints(&path, root_id, limit, cursor.as_ref())
+    })
+    .await?
+    .ok_or_else(|| not_found(format!("timeline record `{presentation_id}` was not found")))?;
+    Ok(Json(ApiTimelineCheckpointPage {
+        schema_version: schema_version(),
+        presentation_version: PRESENTATION_SCHEMA_VERSION,
+        runtime_id: state.history.runtime_id().to_string(),
+        presentation_id,
+        checkpoints: page.checkpoints,
+        has_more: page.has_more,
         next_cursor: page.next_cursor,
     }))
 }
@@ -452,6 +642,32 @@ fn validate_agent_id(value: &str) -> Result<(), ApiFailure> {
         return Ok(());
     }
     Err(bad_request("agent_id must match [a-z0-9]{4}"))
+}
+
+fn normalize_api_workdir(value: Option<&str>) -> Result<Option<String>, ApiFailure> {
+    value
+        .map(|workdir| {
+            if !Path::new(workdir).is_absolute() {
+                return Err(bad_request("workdir must be an absolute path"));
+            }
+            normalize_declared_workdir(workdir)
+                .ok_or_else(|| bad_request("workdir could not be normalized"))
+        })
+        .transpose()
+}
+
+fn parse_presentation_id(value: &str) -> Result<i64, ApiFailure> {
+    let id = value
+        .strip_prefix("inv-")
+        .and_then(|raw| raw.parse::<i64>().ok())
+        .filter(|id| *id > 0)
+        .ok_or_else(|| bad_request("presentation_id must match `inv-<positive invocation id>`"))?;
+    if format!("inv-{id}") != value {
+        return Err(bad_request(
+            "presentation_id must use the canonical `inv-<id>` form",
+        ));
+    }
+    Ok(id)
 }
 
 type ApiFailure = (StatusCode, Json<ApiError>);

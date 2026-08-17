@@ -181,6 +181,7 @@ pub(crate) struct HistoryOutputMetadata {
     pub capture_state: String,
     pub capture_reason: Option<String>,
     pub first_cursor: Option<u64>,
+    pub last_cursor: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -425,12 +426,17 @@ impl LocalHistoryReader {
         let Some((capture_state, capture_reason)) = capture else {
             return Ok(None);
         };
-        let (chunk_count, size_bytes, first_cursor): (i64, i64, Option<i64>) = connection
+        let (chunk_count, size_bytes, first_cursor, last_cursor): (
+            i64,
+            i64,
+            Option<i64>,
+            Option<i64>,
+        ) = connection
             .query_row(
-                "SELECT COUNT(*), COALESCE(SUM(length(CAST(text AS BLOB))), 0), MIN(sequence)
+                "SELECT COUNT(*), COALESCE(SUM(length(CAST(text AS BLOB))), 0), MIN(sequence), MAX(sequence)
                  FROM invocation_output_chunks WHERE invocation_id = ?1",
                 [invocation_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .context("failed to summarize Local invocation output")?;
         Ok(Some(HistoryOutputMetadata {
@@ -440,6 +446,7 @@ impl LocalHistoryReader {
             capture_state,
             capture_reason,
             first_cursor: first_cursor.and_then(|value| u64::try_from(value).ok()),
+            last_cursor: last_cursor.and_then(|value| u64::try_from(value).ok()),
         }))
     }
 
@@ -569,7 +576,7 @@ impl LocalHistoryReader {
     }
 }
 
-fn open_read_only(path: &Path) -> Result<Connection> {
+pub(super) fn open_read_only(path: &Path) -> Result<Connection> {
     Connection::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -661,31 +668,40 @@ fn load_file_evidence(
         )
         .context("failed to prepare Local file-evidence query")?;
     statement
-        .query_map([invocation_id], |row| {
-            let ordinal: i64 = row.get(0)?;
-            Ok(HistoryFileEvidence {
-                ordinal: ordinal as u32,
-                source_kind: row.get(1)?,
-                operation_hint: row.get(2)?,
-                path_before: row.get(3)?,
-                path_after: row.get(4)?,
-                before_state: row.get(5)?,
-                before_text: row.get(6)?,
-                before_reason: row.get(7)?,
-                destination_before_state: row.get(8)?,
-                destination_before_text: row.get(9)?,
-                destination_before_reason: row.get(10)?,
-                after_state: row.get(11)?,
-                after_text: row.get(12)?,
-                after_reason: row.get(13)?,
-                source_after_state: row.get(14)?,
-                source_after_text: row.get(15)?,
-                source_after_reason: row.get(16)?,
-            })
-        })
+        .query_map([invocation_id], map_file_evidence)
         .context("failed to query Local file evidence")?
         .collect::<rusqlite::Result<Vec<_>>>()
         .context("failed to decode Local file evidence")
+}
+
+pub(super) fn map_file_evidence(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoryFileEvidence> {
+    map_file_evidence_at(row, 0)
+}
+
+pub(super) fn map_file_evidence_at(
+    row: &rusqlite::Row<'_>,
+    offset: usize,
+) -> rusqlite::Result<HistoryFileEvidence> {
+    let ordinal: i64 = row.get(offset)?;
+    Ok(HistoryFileEvidence {
+        ordinal: ordinal as u32,
+        source_kind: row.get(offset + 1)?,
+        operation_hint: row.get(offset + 2)?,
+        path_before: row.get(offset + 3)?,
+        path_after: row.get(offset + 4)?,
+        before_state: row.get(offset + 5)?,
+        before_text: row.get(offset + 6)?,
+        before_reason: row.get(offset + 7)?,
+        destination_before_state: row.get(offset + 8)?,
+        destination_before_text: row.get(offset + 9)?,
+        destination_before_reason: row.get(offset + 10)?,
+        after_state: row.get(offset + 11)?,
+        after_text: row.get(offset + 12)?,
+        after_reason: row.get(offset + 13)?,
+        source_after_state: row.get(offset + 14)?,
+        source_after_text: row.get(offset + 15)?,
+        source_after_reason: row.get(offset + 16)?,
+    })
 }
 
 fn load_agent_summary(connection: &Connection, agent_id: &str) -> Result<HistoryAgentSummary> {

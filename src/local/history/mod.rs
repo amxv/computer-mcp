@@ -1,9 +1,13 @@
 mod events;
 mod file_store;
 mod lifecycle;
+mod output_display;
 mod query;
 mod schema;
 mod store;
+mod timeline;
+mod timeline_cursor;
+mod timeline_polls;
 mod worker;
 
 #[cfg(test)]
@@ -20,6 +24,8 @@ mod recovery_tests;
 mod shutdown_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod timeline_tests;
 
 pub use query::{
     HistoryAgentSummary, HistoryAgentWorkdir, HistoryFileEvidence, HistoryFormat,
@@ -31,6 +37,8 @@ pub use worker::{LocalHistoryRuntime, LocalHistoryRuntimeConfig};
 pub(crate) use events::{HISTORY_LIVE_EVENT_SCHEMA_VERSION, HistoryLiveEvent};
 pub(crate) use query::{HistoryAgentRecord, HistoryOutputChunk, HistoryOutputMetadata};
 pub(crate) use store::normalize_declared_workdir;
+pub(crate) use timeline::{HistoryTimelineCheckpoint, HistoryTimelineMode, HistoryTimelineQuery};
+pub(crate) use timeline_cursor::HistoryTimelineCursor;
 
 use std::fs;
 use std::path::Path;

@@ -2,6 +2,29 @@ use serde_json::Value;
 
 use crate::local::{HistoryFileEvidence, HistoryInvocation};
 
+use super::PresentationEvidence;
+
+#[derive(Debug, Clone)]
+pub(crate) struct PresentationPollAggregateInput {
+    pub count: usize,
+    pub final_status: Option<String>,
+    pub final_cwd: Option<String>,
+    pub final_exit_code: Option<i64>,
+    pub final_termination_reason: Option<String>,
+    pub latest_completed_at_ms: Option<i64>,
+    pub caller_agent_ids: Vec<String>,
+    pub cross_agent: bool,
+    pub raw_invocation_ids: Vec<i64>,
+    pub evidence: PresentationEvidence,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PresentationOrphanPollInput {
+    pub primary_invocation_id: i64,
+    pub started_at_ms: i64,
+    pub aggregate: PresentationPollAggregateInput,
+}
+
 /// Purpose-specific input to canonical presentation normalization.
 ///
 /// The current raw-history path adapts `HistoryInvocation` into this shape.
@@ -47,6 +70,13 @@ pub(crate) struct PresentationInput {
     pub output_preview: Option<String>,
     pub output_preview_truncated: bool,
     pub file_evidence: Vec<HistoryFileEvidence>,
+    /// Lean timeline queries can provide exact folded-poll metadata without
+    /// materializing every child invocation or its cumulative result body.
+    pub folded_polls: Option<PresentationPollAggregateInput>,
+    /// Legacy/retained polls whose parent is no longer provable remain one
+    /// conservative canonical aggregate. Timeline queries populate this to
+    /// keep that aggregate bounded even for very long poll histories.
+    pub orphan_poll_group: Option<PresentationOrphanPollInput>,
 }
 
 impl From<&HistoryInvocation> for PresentationInput {
@@ -101,6 +131,8 @@ impl From<&HistoryInvocation> for PresentationInput {
             output_preview: record.output_preview.clone(),
             output_preview_truncated: record.output_preview_truncated,
             file_evidence: record.file_evidence.clone(),
+            folded_polls: None,
+            orphan_poll_group: None,
         }
     }
 }

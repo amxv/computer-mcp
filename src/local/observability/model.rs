@@ -1,8 +1,12 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::local::history::{HistoryAgentRecord, HistoryOutputChunk, HistoryOutputMetadata};
-use crate::local::presentation::{PRESENTATION_SCHEMA_VERSION, PresentationDocument};
+use crate::local::history::{
+    HistoryAgentRecord, HistoryOutputChunk, HistoryOutputMetadata, HistoryTimelineCheckpoint,
+};
+use crate::local::presentation::{
+    PRESENTATION_SCHEMA_VERSION, PresentationDocument, PresentationRecord,
+};
 use crate::local::{HistoryAgentWorkdir, HistoryInvocation, HistoryStoreStatus};
 
 pub const LOCAL_OBSERVABILITY_API_VERSION: u32 = 1;
@@ -138,8 +142,42 @@ pub(crate) struct ApiOutputPage {
     pub schema_version: u32,
     pub runtime_id: String,
     pub invocation_id: i64,
+    pub view: String,
     pub chunks: Vec<HistoryOutputChunk>,
     pub next_cursor: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct ApiTimelinePage {
+    pub schema_version: u32,
+    pub presentation_version: u32,
+    pub runtime_id: String,
+    pub records: Vec<PresentationRecord>,
+    pub has_more: bool,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct ApiTimelineDetail {
+    pub schema_version: u32,
+    pub presentation_version: u32,
+    pub runtime_id: String,
+    pub record: PresentationRecord,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct ApiTimelineCheckpointPage {
+    pub schema_version: u32,
+    pub presentation_version: u32,
+    pub runtime_id: String,
+    pub presentation_id: String,
+    pub checkpoints: Vec<HistoryTimelineCheckpoint>,
+    pub has_more: bool,
+    pub next_cursor: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

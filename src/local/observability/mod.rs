@@ -5,6 +5,8 @@ mod server;
 mod recovery_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod timeline_tests;
 
 #[cfg(test)]
 pub(crate) use model::ApiLogicalInvocation;

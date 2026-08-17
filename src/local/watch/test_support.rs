@@ -120,6 +120,7 @@ pub(super) fn detail(
             capture_state: "complete".to_owned(),
             capture_reason: None,
             first_cursor: None,
+            last_cursor: None,
         },
     }
 }

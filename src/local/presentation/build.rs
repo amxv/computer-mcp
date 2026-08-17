@@ -4,7 +4,6 @@ use std::path::Path;
 
 use crate::invocation::InvocationStart;
 
-use super::PresentationInput;
 use super::diff::build_text_diff;
 use super::model::{
     PRESENTATION_RAW_INVOCATION_ID_SAMPLE_LIMIT, PRESENTATION_SCHEMA_VERSION, PresentationAgent,
@@ -13,6 +12,7 @@ use super::model::{
     PresentationWriteMode,
 };
 use super::sanitize::{sanitize_display_text, sanitize_preview};
+use super::{PresentationInput, PresentationOrphanPollInput, PresentationPollAggregateInput};
 use crate::local::file_evidence::parse_file_capture_plans;
 use crate::local::{HistoryAgentSummary, HistoryFileEvidence, HistoryInvocation};
 
@@ -70,6 +70,10 @@ pub(crate) fn build_presentation_inputs(
     let mut emitted_legacy_orphans = HashSet::new();
     let mut presented = Vec::new();
     for record in records {
+        if let Some(orphan) = record.orphan_poll_group.as_ref() {
+            presented.push(orphan_poll_aggregate_record(record, orphan));
+            continue;
+        }
         if is_poll(record) {
             if let Some(parent_id) = record.target_created_by_invocation_id {
                 if command_ids.contains(&parent_id) {
@@ -176,7 +180,7 @@ fn command_record(record: &PresentationInput, polls: &[&PresentationInput]) -> P
         .unwrap_or("<unavailable command>");
     let (command, _) = sanitize_preview(command, MAX_COMMAND_PREVIEW_CHARS);
     let latest_poll = polls.last().copied();
-    let facts = command_facts(record, latest_poll);
+    let facts = command_facts(record, latest_poll, record.folded_polls.as_ref());
     let output_source = record
         .output_preview
         .as_deref()
@@ -186,17 +190,32 @@ fn command_record(record: &PresentationInput, polls: &[&PresentationInput]) -> P
         .map(|(value, truncated)| (Some(value), truncated || record.output_preview_truncated))
         .unwrap_or((None, false));
 
-    let poll_summary = (!polls.is_empty()).then(|| PresentationPollSummary {
-        count: polls.len(),
-        final_status: latest_poll.map(status_for),
-        caller_agent_ids: unique_agent_ids(polls),
-        cross_agent: polls.iter().any(|poll| poll.cross_agent == Some(true)),
-    });
-    let identity = raw_identity(
-        record.id,
-        polls.len().saturating_add(1),
-        iter::once(record.id).chain(polls.iter().map(|poll| poll.id)),
-    );
+    let (poll_summary, identity, poll_evidence) = if let Some(aggregate) = &record.folded_polls {
+        (
+            (aggregate.count > 0).then(|| poll_summary_from_aggregate(aggregate)),
+            raw_identity(
+                record.id,
+                aggregate.count.saturating_add(1),
+                iter::once(record.id).chain(aggregate.raw_invocation_ids.iter().copied()),
+            ),
+            (aggregate.count > 0).then_some(&aggregate.evidence),
+        )
+    } else {
+        (
+            (!polls.is_empty()).then(|| PresentationPollSummary {
+                count: polls.len(),
+                final_status: latest_poll.map(status_for),
+                caller_agent_ids: unique_agent_ids(polls),
+                cross_agent: polls.iter().any(|poll| poll.cross_agent == Some(true)),
+            }),
+            raw_identity(
+                record.id,
+                polls.len().saturating_add(1),
+                iter::once(record.id).chain(polls.iter().map(|poll| poll.id)),
+            ),
+            None,
+        )
+    };
 
     let mut presented = record_with_kind(
         record,
@@ -213,7 +232,9 @@ fn command_record(record: &PresentationInput, polls: &[&PresentationInput]) -> P
             polls: poll_summary,
         },
     );
-    if !polls.is_empty() {
+    if let Some(poll_evidence) = poll_evidence {
+        presented.evidence = combine_evidence_values(&presented.evidence, poll_evidence);
+    } else if !polls.is_empty() {
         let mut evidence_records = Vec::with_capacity(polls.len() + 1);
         evidence_records.push(record);
         evidence_records.extend(polls.iter().copied());
@@ -222,9 +243,21 @@ fn command_record(record: &PresentationInput, polls: &[&PresentationInput]) -> P
     presented
 }
 
+fn poll_summary_from_aggregate(
+    aggregate: &PresentationPollAggregateInput,
+) -> PresentationPollSummary {
+    PresentationPollSummary {
+        count: aggregate.count,
+        final_status: aggregate.final_status.clone(),
+        caller_agent_ids: aggregate.caller_agent_ids.clone(),
+        cross_agent: aggregate.cross_agent,
+    }
+}
+
 fn command_facts(
     record: &PresentationInput,
     latest_poll: Option<&PresentationInput>,
+    aggregate: Option<&PresentationPollAggregateInput>,
 ) -> CommandFacts {
     let lifecycle_cwd = record
         .process_cwd
@@ -254,6 +287,30 @@ fn command_facts(
             duration_ms: record.duration_ms,
         },
         _ => {
+            if let Some(aggregate) = aggregate
+                && aggregate.count > 0
+            {
+                return CommandFacts {
+                    status: aggregate
+                        .final_status
+                        .clone()
+                        .unwrap_or_else(|| status_for(record)),
+                    effective_cwd: aggregate
+                        .final_cwd
+                        .as_deref()
+                        .or(record.result_cwd.as_deref())
+                        .map(sanitize_display_text),
+                    exit_code: aggregate.final_exit_code.or(record.result_exit_code),
+                    termination_reason: aggregate
+                        .final_termination_reason
+                        .clone()
+                        .or_else(|| record.result_termination_reason.clone()),
+                    duration_ms: aggregate
+                        .latest_completed_at_ms
+                        .map(|completed| completed.saturating_sub(record.started_at_ms))
+                        .or(record.duration_ms),
+                };
+            }
             let latest = latest_poll.unwrap_or(record);
             CommandFacts {
                 status: status_for(latest),
@@ -356,6 +413,36 @@ fn orphan_poll_record(
     record.started_at_ms = earliest.started_at_ms;
     record.evidence = combined_evidence(polls);
     record
+}
+
+fn orphan_poll_aggregate_record(
+    record: &PresentationInput,
+    orphan: &PresentationOrphanPollInput,
+) -> PresentationRecord {
+    let handle = record
+        .target_session_handle
+        .as_deref()
+        .unwrap_or("<unknown-session>");
+    let mut presented = record_with_kind(
+        record,
+        raw_identity(
+            orphan.primary_invocation_id,
+            orphan.aggregate.count,
+            orphan.aggregate.raw_invocation_ids.iter().copied(),
+        ),
+        record.duration_ms,
+        PresentationKind::PollAggregate {
+            target_session_handle: sanitize_display_text(handle),
+            count: orphan.aggregate.count,
+            final_status: orphan.aggregate.final_status.clone(),
+            creator_agent_id: record.target_created_by_agent_id.clone(),
+            caller_agent_ids: orphan.aggregate.caller_agent_ids.clone(),
+            cross_agent: orphan.aggregate.cross_agent,
+        },
+    );
+    presented.started_at_ms = orphan.started_at_ms;
+    presented.evidence = orphan.aggregate.evidence.clone();
+    presented
 }
 
 fn generic_record(record: &PresentationInput) -> PresentationRecord {
@@ -501,6 +588,36 @@ fn combined_evidence(records: &[&PresentationInput]) -> PresentationEvidence {
         capture_state: capture_state.to_string(),
         degraded,
         reason,
+    }
+}
+
+fn combine_evidence_values(
+    left: &PresentationEvidence,
+    right: &PresentationEvidence,
+) -> PresentationEvidence {
+    let evidence_state =
+        if left.evidence_state == "incomplete" || right.evidence_state == "incomplete" {
+            "incomplete"
+        } else if left.evidence_state == "pending" || right.evidence_state == "pending" {
+            "pending"
+        } else {
+            "complete"
+        };
+    let capture_state = if left.capture_state == "incomplete" || right.capture_state == "incomplete"
+    {
+        "incomplete"
+    } else if left.capture_state == "pending" || right.capture_state == "pending" {
+        "pending"
+    } else if left.capture_state == "complete" || right.capture_state == "complete" {
+        "complete"
+    } else {
+        "not_applicable"
+    };
+    PresentationEvidence {
+        evidence_state: evidence_state.to_string(),
+        capture_state: capture_state.to_string(),
+        degraded: left.degraded || right.degraded,
+        reason: left.reason.clone().or_else(|| right.reason.clone()),
     }
 }
 
