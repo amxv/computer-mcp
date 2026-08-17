@@ -8,6 +8,11 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.3.4 — 2026-08-18
+
+- Kept large file changes as structured Liveboard diff cards instead of falling back to generic `apply_patch completed` rows, with fast large-file trimming, time-bounded diffing, and a 500-row preview cap for very large changes.
+- Made kill events resolve their exact parent command through the retained process/invocation link, so Liveboard shows a `kill` badge with the command being terminated instead of an opaque termination-request message.
+
 ## 0.3.3 — 2026-08-18
 
 - Added presentation schema v3 and history schema v5 with persisted materialized file-change summaries/full bodies, projection-aware timeline/SSE delivery, and batch diff hydration so expanded diffs stay single-request while collapsed diffs remain lightweight.
