@@ -178,7 +178,7 @@ zodex local status
 
 OpenAI's UI can change, so use the path shown in your current ChatGPT settings.
 
-Current OpenAI guidance uses **Settings → Apps** and developer mode / custom apps. For full write/modify MCP, the current guide supports **ChatGPT Business and Enterprise/Edu on ChatGPT web**; **Pro custom MCP remains read/fetch-only**. Workspace administrator policy can further restrict access. Re-check the [current OpenAI guide](https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt) because availability can change independently of Zodex.
+Current OpenAI guidance uses **Settings → Apps** and developer mode / custom apps. Most OpenAI paid plans support custom MCP servers.
 
 ## Create the Zodex app in ChatGPT
 

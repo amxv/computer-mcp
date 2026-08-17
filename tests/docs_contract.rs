@@ -76,9 +76,7 @@ fn local_guide_preserves_trusted_host_tunnel_and_current_chatgpt_prerequisite() 
         assert!(guide.contains(required), "Local guide missing `{required}`");
     }
     for required in [
-        "ChatGPT Business and Enterprise/Edu on ChatGPT web",
-        "Pro custom MCP remains read/fetch-only",
-        "https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt",
+        "Most OpenAI paid plans support custom MCP servers",
         "curl -fsSL https://zodex.ashray.xyz/install.sh | sh",
     ] {
         assert!(
@@ -110,8 +108,7 @@ fn sprite_quick_start_documents_canonical_worker_and_one_setup_command() {
         "zodex sprite proxy deploy --sprite zodex-dev",
         "--cloudflare-account <id-or-name>",
         "zodex sprite connect --sprite zodex-dev",
-        "Business or Enterprise/Edu on ChatGPT web",
-        "Pro custom MCP remains read/fetch-only",
+        "Most OpenAI paid plans support custom MCP servers",
         "start the Sprite manually",
     ] {
         assert!(

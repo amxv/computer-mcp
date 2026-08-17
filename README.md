@@ -58,7 +58,7 @@ Start here: [Sprite guide](https://zodex.ashray.xyz/docs/sprite)
 
 ## ChatGPT availability
 
-OpenAI's current custom-app guidance documents full write/modify MCP for **ChatGPT Business and Enterprise/Edu on ChatGPT web**. **Pro custom MCP remains read/fetch-only.** Check the current OpenAI guidance before setup because plan and workspace availability can change: [Developer mode and MCP apps in ChatGPT](https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt).
+Most OpenAI paid plans support custom MCP servers.
 
 ## Why only three tools?
 

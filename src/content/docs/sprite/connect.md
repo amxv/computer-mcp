@@ -104,7 +104,7 @@ OpenAI's current guidance for custom MCP apps on ChatGPT web is:
 
 Zodex's endpoint already embeds its capability secret. Do not paste that key into an unrelated authentication field. OpenAI's current custom-app guide documents OAuth where authentication is used, but does not document a static custom-header/API-key field for this flow.
 
-For full write/modify MCP, current OpenAI guidance supports **Business and Enterprise/Edu on ChatGPT web**. **Pro custom MCP remains read/fetch-only.** See [Developer mode and MCP apps in ChatGPT](https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt).
+Most OpenAI paid plans support custom MCP servers.
 
 ## Reconnect later
 

@@ -27,7 +27,7 @@ You need:
 - two user-owned GitHub Apps for the repositories ChatGPT should access;
 - a Wrangler-capable operator environment (`wrangler`, `bunx`, or `npx`) for the Cloudflare Worker.
 
-For full write/modify MCP, OpenAI's current guidance requires **ChatGPT Business or Enterprise/Edu on ChatGPT web**. **Pro custom MCP remains read/fetch-only.** Availability can change; check [OpenAI's current developer-mode/custom-app guide](https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt) before setup.
+Most OpenAI paid plans support custom MCP servers.
 
 ## 1. Install the operator and Sprite CLI
 

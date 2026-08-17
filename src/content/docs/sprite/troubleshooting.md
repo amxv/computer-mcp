@@ -107,7 +107,7 @@ If ChatGPT sees no tools, check:
 - current plan/workspace policy supports the required MCP behavior;
 - tools were rescanned after endpoint changes.
 
-Current OpenAI guidance supports full write/modify custom MCP on Business and Enterprise/Edu on ChatGPT web; Pro custom MCP is read/fetch-only. See [OpenAI's current guide](https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt).
+Most OpenAI paid plans support custom MCP servers.
 
 ## 5. Reader GitHub failures
 
