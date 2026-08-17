@@ -15,6 +15,9 @@ pub const DEFAULT_PUBLISHER_MAX_BUNDLE_BYTES: usize = 128 * 1024 * 1024;
 #[serde(default)]
 pub struct Config {
     pub bind_host: String,
+    pub service_port: u16,
+    // Legacy generic-server fields retained temporarily for hidden root migration aliases.
+    // The Sprite daemon ignores them and serves plain HTTP on `service_port`.
     pub bind_port: u16,
     pub http_bind_port: Option<u16>,
     pub api_key: String,
@@ -89,6 +92,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             bind_host: "0.0.0.0".to_string(),
+            service_port: 8080,
             bind_port: 443,
             http_bind_port: None,
             api_key: "change-me".to_string(),
@@ -187,6 +191,7 @@ mod tests {
     fn config_defaults_include_publisher_settings() {
         let cfg = Config::default();
 
+        assert_eq!(cfg.service_port, 8080);
         assert_eq!(cfg.http_bind_port, None);
         assert_eq!(cfg.reader_app_id, None);
         assert_eq!(cfg.reader_installation_id, None);
@@ -234,6 +239,7 @@ max_output_chars = 200000
 
         assert_eq!(parsed.reader_app_id, None);
         assert_eq!(parsed.reader_installation_id, None);
+        assert_eq!(parsed.service_port, 8080);
         assert_eq!(parsed.http_bind_port, Some(8080));
         assert_eq!(
             parsed.reader_private_key_path,
@@ -249,6 +255,27 @@ max_output_chars = 200000
         assert_eq!(parsed.publisher_branch_prefix, "agent");
         assert!(parsed.publisher_installations.is_empty());
         assert!(parsed.publisher_targets.is_empty());
+    }
+
+    #[test]
+    fn legacy_tls_dual_listener_config_defaults_sprite_service_port_to_8080() {
+        let parsed: Config = toml::from_str(
+            r#"
+bind_host = "0.0.0.0"
+bind_port = 8443
+http_bind_port = 8080
+api_key = "legacy-key"
+tls_mode = "self_signed"
+tls_cert_path = "/var/lib/zodex/tls/cert.pem"
+tls_key_path = "/var/lib/zodex/tls/key.pem"
+"#,
+        )
+        .expect("legacy TLS config should remain loadable during migration");
+
+        assert_eq!(parsed.service_port, 8080);
+        assert_eq!(parsed.bind_port, 8443);
+        assert_eq!(parsed.http_bind_port, Some(8080));
+        assert_eq!(parsed.tls_mode, "self_signed");
     }
 
     #[test]

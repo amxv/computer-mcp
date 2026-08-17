@@ -13,7 +13,7 @@ ZODEX_INSTALL_DIR="${ZODEX_INSTALL_DIR:-/usr/local/bin}"
 ZODEX_INSTALL_OPERATOR_CLI="${ZODEX_INSTALL_OPERATOR_CLI:-1}"
 ZODEX_CONFIG_PATH="${ZODEX_CONFIG_PATH:-/etc/zodex/config.toml}"
 ZODEX_STATE_DIR="${ZODEX_STATE_DIR:-/var/lib/zodex}"
-ZODEX_TLS_DIR="${ZODEX_TLS_DIR:-${ZODEX_STATE_DIR}/tls}"
+ZODEX_SERVICE_PORT="${ZODEX_SERVICE_PORT:-8080}"
 ZODEX_AGENT_USER="${ZODEX_AGENT_USER:-zodex-agent}"
 ZODEX_AGENT_HOME="${ZODEX_AGENT_HOME:-/home/${ZODEX_AGENT_USER}}"
 ZODEX_AGENT_SHELL="${ZODEX_AGENT_SHELL:-/bin/bash}"
@@ -33,9 +33,7 @@ ZODEX_GIT_USER_NAME="${ZODEX_GIT_USER_NAME:-Zodex Agent}"
 ZODEX_GIT_USER_EMAIL="${ZODEX_GIT_USER_EMAIL:-zodex-agent@local.invalid}"
 ZODEX_READER_KEY_DIR="${ZODEX_READER_KEY_DIR:-/etc/zodex/reader}"
 ZODEX_PUBLISHER_KEY_DIR="${ZODEX_PUBLISHER_KEY_DIR:-/etc/zodex/publisher}"
-ZODEX_HTTP_BIND_PORT="${ZODEX_HTTP_BIND_PORT:-}"
 ZODEX_PUBLIC_HOST="${ZODEX_PUBLIC_HOST:-}"
-ZODEX_ENABLE_CERTBOT="${ZODEX_ENABLE_CERTBOT:-0}"
 
 DISTRO_ID="unknown"
 DISTRO_LIKE=""
@@ -278,9 +276,6 @@ install_operator_binaries_from_dir() {
   install -d -m 0755 "${install_dir}"
   ensure_local_stopped_before_operator_replace "${install_dir}/zodex"
   install_operator_binary_atomically "${src_dir}/zodex" "${install_dir}/zodex"
-  if [[ -x "${src_dir}/zodex-client" ]]; then
-    install_operator_binary_atomically "${src_dir}/zodex-client" "${install_dir}/zodex-client"
-  fi
 
   cat <<EOF
 
@@ -354,16 +349,6 @@ detect_platform() {
   log "detected distro=${DISTRO_ID} arch=${ARCH} target=${TARGET_TRIPLE}"
 }
 
-resolved_http_bind_port() {
-  if [[ -n "${ZODEX_HTTP_BIND_PORT}" ]]; then
-    printf '%s\n' "${ZODEX_HTTP_BIND_PORT}"
-  fi
-}
-
-should_use_http_proxy_path() {
-  [[ -n "$(resolved_http_bind_port)" ]]
-}
-
 resolved_public_host() {
   if [[ -n "${ZODEX_PUBLIC_HOST}" ]]; then
     printf '%s\n' "${ZODEX_PUBLIC_HOST}"
@@ -380,25 +365,16 @@ install_runtime_prerequisites() {
     apt-get install -y --no-install-recommends \
       curl ca-certificates systemd tar gzip git ccache ninja-build
 
-    if [[ "${ZODEX_ENABLE_CERTBOT}" == "1" ]]; then
-      apt-get install -y --no-install-recommends certbot || warn "certbot install failed"
-    fi
     return
   fi
 
   if command_exists dnf; then
     dnf install -y curl ca-certificates systemd tar gzip git ccache ninja-build
-    if [[ "${ZODEX_ENABLE_CERTBOT}" == "1" ]]; then
-      dnf install -y certbot || warn "certbot install failed"
-    fi
     return
   fi
 
   if command_exists yum; then
     yum install -y curl ca-certificates systemd tar gzip git ccache ninja-build
-    if [[ "${ZODEX_ENABLE_CERTBOT}" == "1" ]]; then
-      yum install -y certbot || warn "certbot install failed"
-    fi
     return
   fi
 
@@ -559,7 +535,6 @@ ensure_dirs_and_config() {
   install -d -m 0750 -o "${ZODEX_PUBLISHER_USER}" -g "${ZODEX_SERVICE_GROUP}" "${ZODEX_STATE_DIR}/publisher/run"
   install -d -m 0750 -o "${ZODEX_PUBLISHER_USER}" -g "${ZODEX_SERVICE_GROUP}" "${ZODEX_STATE_DIR}/publisher/logs"
   install -d -m 0750 -o "${ZODEX_AGENT_USER}" -g "${ZODEX_SERVICE_GROUP}" "${ZODEX_STATE_DIR}/push-grants"
-  install -d -m 0750 -o root -g "${ZODEX_SERVICE_GROUP}" "${ZODEX_TLS_DIR}"
   install -d -m 0750 -o root -g "${ZODEX_SERVICE_GROUP}" "${ZODEX_READER_KEY_DIR}"
   install -d -m 0750 -o root -g "${ZODEX_SERVICE_GROUP}" "${ZODEX_PUBLISHER_KEY_DIR}"
   install -d -m 0750 -o "${ZODEX_AGENT_USER}" -g "${ZODEX_SERVICE_GROUP}" "${ZODEX_AGENT_HOME}"
@@ -567,24 +542,16 @@ ensure_dirs_and_config() {
 
   if [[ ! -f "${ZODEX_CONFIG_PATH}" ]]; then
     local api_key
-    local bind_port_line=""
-    local http_bind_port_line=""
     if command_exists openssl; then
       api_key="$(openssl rand -hex 24)"
     else
       api_key="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 48)"
     fi
 
-    if [[ -n "$(resolved_http_bind_port)" ]]; then
-      bind_port_line="bind_port = 8443"
-      http_bind_port_line="http_bind_port = $(resolved_http_bind_port)"
-    fi
-
     umask 077
     cat >"${ZODEX_CONFIG_PATH}" <<EOF
 api_key = "${api_key}"
-${bind_port_line}
-${http_bind_port_line}
+service_port = ${ZODEX_SERVICE_PORT}
 agent_user = "${ZODEX_AGENT_USER}"
 agent_home = "${ZODEX_AGENT_HOME}"
 default_workdir = "${ZODEX_DEFAULT_WORKDIR}"
@@ -616,12 +583,6 @@ run_cli_install() {
   local cli="${ZODEX_INSTALL_DIR}/zodex"
   [[ -x "${cli}" ]] || die "zodex not installed at ${cli}"
   "${cli}" --config "${ZODEX_CONFIG_PATH}" install
-}
-
-ensure_runtime_tls() {
-  local daemon="${ZODEX_INSTALL_DIR}/zodexd"
-  [[ -x "${daemon}" ]] || die "zodexd not installed at ${daemon}"
-  "${daemon}" --config "${ZODEX_CONFIG_PATH}" ensure-tls
 }
 
 run_as_agent_user() {
@@ -735,42 +696,6 @@ print_next_steps() {
   local public_host
   public_host="$(resolved_public_host)"
 
-  if should_use_http_proxy_path; then
-    local http_port
-    http_port="$(resolved_http_bind_port)"
-    cat <<EOF
-
-Install complete.
-
-Config file:
-  ${ZODEX_CONFIG_PATH}
-
-The commands below assume the default config path. If you changed it, add:
-  --config "${ZODEX_CONFIG_PATH}"
-
-Next steps:
-  1. expose HTTP port ${http_port} on your container platform
-  2. review "${ZODEX_CONFIG_PATH}" and add reader_app_id / reader_installation_id / publisher_client_id
-  3. enable Device Flow on the push-grant GitHub App
-  4. place the reader GitHub App key at "${ZODEX_READER_KEY_DIR}/private-key.pem"
-  5. if you want the internal publish daemon, also add publisher_app_id / publisher_targets and place the publisher GitHub App key at "${ZODEX_PUBLISHER_KEY_DIR}/private-key.pem" with owner ${ZODEX_PUBLISHER_USER}
-  6. zodex start
-  7. zodex-agent show-url --host "${public_host}"
-
-Verify:
-  - zodex status
-  - curl "https://${public_host}/health"
-  - MCP URL shape: https://${public_host}/mcp?key=<redacted>
-
-Optional:
-  - rotate the installer-generated API key with: zodex set-key "<strong-random-key>"
-  - private GitHub HTTPS clones by ${ZODEX_AGENT_USER} will use the built-in reader credential helper once reader_app_id, reader_installation_id, and the reader PEM are in place
-  - agent-facing GitHub auth is restricted to zodex-agent: request push with 'zodex-agent github request-push --repo <owner/repo>' and revoke with 'zodex-agent github revoke-push --repo <owner/repo>'
-  - agent commits default to ${ZODEX_GIT_USER_NAME} <${ZODEX_GIT_USER_EMAIL}> unless you override ZODEX_GIT_USER_NAME / ZODEX_GIT_USER_EMAIL during install
-EOF
-    return
-  fi
-
   cat <<EOF
 
 Install complete.
@@ -786,12 +711,12 @@ Next steps:
   2. enable Device Flow on the push-grant GitHub App
   3. place the reader GitHub App key at "${ZODEX_READER_KEY_DIR}/private-key.pem"
   4. if you want the internal publish daemon, also add publisher_app_id / publisher_targets and place the publisher GitHub App key at "${ZODEX_PUBLISHER_KEY_DIR}/private-key.pem" with owner ${ZODEX_PUBLISHER_USER}
-  5. zodex start
+  5. ensure your Sprite Service exposes zodexd HTTP port ${ZODEX_SERVICE_PORT}
   6. zodex-agent show-url --host "${public_host}"
 
 Verify:
   - zodex status
-  - curl -k "https://${public_host}/health"
+  - curl "https://${public_host}/health"
   - MCP URL shape: https://${public_host}/mcp?key=<redacted>
 
 Optional:
@@ -822,8 +747,6 @@ run_runtime_install() {
   ensure_dirs_and_config
   if [[ "${ZODEX_INSTALL_OPERATOR_CLI}" == "1" ]]; then
     run_cli_install
-  else
-    ensure_runtime_tls
   fi
   configure_agent_git_identity
   configure_agent_git_reader_helper

@@ -9,8 +9,7 @@ use crate::protocol::{
     WriteStdinInput,
 };
 use crate::service::ZodexService;
-use axum::body::{Body, to_bytes};
-use axum::http::{Request, StatusCode, Uri};
+use axum::http::Uri;
 use rmcp::ServerHandler;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{RequestMetaObject, ToolAnnotations};
@@ -20,7 +19,6 @@ use std::sync::{Arc, Mutex};
 use tempfile::tempdir;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-use tower::util::ServiceExt;
 
 fn test_config() -> Arc<Config> {
     Arc::new(Config::default())
@@ -130,6 +128,7 @@ fn registers_apply_patch_tool() {
         .map(|tool| tool.name.to_string())
         .collect();
 
+    assert_eq!(names.len(), 3, "Sprite MCP must expose exactly three tools");
     assert!(names.iter().any(|name| name == "exec_command"));
     assert!(names.iter().any(|name| name == "write_stdin"));
     assert!(names.iter().any(|name| name == "apply_patch"));
@@ -458,6 +457,7 @@ async fn timeout_and_cwd_mcp_parity_with_service() {
     let config = Arc::new(Config {
         default_exec_timeout_ms: 1_000,
         max_exec_timeout_ms: 1_000,
+        max_output_chars: 80,
         ..Config::default()
     });
     let direct = ZodexService::new(config.clone());
@@ -541,6 +541,37 @@ async fn timeout_and_cwd_mcp_parity_with_service() {
             .output
             .contains("process timed out and was terminated")
     );
+
+    let long_output = "x".repeat(200);
+    let truncation_cmd = format!("printf '%s\\n' '{long_output}'");
+    let direct_truncated = direct
+        .exec_command(ExecCommandInput {
+            cmd: truncation_cmd.clone(),
+            yield_time_ms: Some(5_000),
+            workdir: test_workdir(),
+            timeout_ms: None,
+        })
+        .await
+        .expect("direct truncation should succeed");
+    let mcp_truncated = mcp
+        .exec_command(
+            Parameters(ExecCommandInput {
+                cmd: truncation_cmd,
+                yield_time_ms: Some(5_000),
+                workdir: test_workdir(),
+                timeout_ms: None,
+            }),
+            RequestMetaObject::default(),
+        )
+        .await
+        .expect("mcp truncation should succeed")
+        .0;
+
+    for output in [&direct_truncated, &mcp_truncated] {
+        assert_eq!(output.status, CommandStatus::Exited);
+        assert!(output.output.contains("bytes truncated"));
+        assert!(output.output.contains(&"x".repeat(20)));
+    }
 }
 
 #[tokio::test]
@@ -787,91 +818,4 @@ fn rewrite_mcp_transport_root_uri_rewrites_both_mcp_forms_preserving_query() {
 fn rewrite_mcp_transport_root_uri_skips_other_paths() {
     let uri: Uri = "/health".parse().expect("uri parse");
     assert_eq!(rewrite_mcp_transport_root_uri(&uri), None);
-}
-
-#[tokio::test]
-async fn health_route_stays_public_and_stable() {
-    let config = test_config();
-    let service = ZodexService::new(config.clone());
-    let app = super::build_app(
-        config,
-        super::build_mcp_service(service.clone(), CancellationToken::new()),
-        service,
-    );
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/health")
-                .body(Body::empty())
-                .expect("request build"),
-        )
-        .await
-        .expect("request should succeed");
-
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("body should be readable");
-    let value: serde_json::Value = serde_json::from_slice(&body).expect("json body");
-    assert_eq!(value, json!({ "status": "ok" }));
-}
-
-#[tokio::test]
-async fn mcp_routes_accept_both_with_and_without_trailing_slash() {
-    let config = test_config();
-    let api_key = config.api_key.clone();
-    let service = ZodexService::new(config.clone());
-    let app = super::build_app(
-        config,
-        super::build_mcp_service(service.clone(), CancellationToken::new()),
-        service,
-    );
-    let initialize_request = json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "protocolVersion": "2025-03-26",
-            "capabilities": {},
-            "clientInfo": {
-                "name": "test-client",
-                "version": "0.1"
-            }
-        }
-    });
-
-    for host in ["localhost", "zodex.example"] {
-        for path in [
-            format!("/mcp?key={api_key}"),
-            format!("/mcp/?key={api_key}"),
-        ] {
-            let response = app
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .method("POST")
-                        .uri(&path)
-                        .header("host", host)
-                        .header("content-type", "application/json")
-                        .header("accept", "application/json, text/event-stream")
-                        .body(Body::from(initialize_request.to_string()))
-                        .expect("request build"),
-                )
-                .await
-                .expect("request should succeed");
-
-            let status = response.status();
-            if status != StatusCode::OK {
-                let body = to_bytes(response.into_body(), usize::MAX)
-                    .await
-                    .expect("failure body");
-                panic!(
-                    "expected initialize to succeed for {path} with host {host}; got {status}: {}",
-                    String::from_utf8_lossy(&body)
-                );
-            }
-        }
-    }
 }

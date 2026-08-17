@@ -11,9 +11,36 @@ use zodex::publisher::{
 };
 
 use super::github::{load_matching_push_grant, normalize_github_repo};
-use super::tls::ensure_reader_ready_for_start;
 
 const PUSH_GRANTS_DIR: &str = "/var/lib/zodex/push-grants";
+
+fn ensure_reader_ready_for_start(config: &Config) -> Result<()> {
+    let Some(app_id) = config.reader_app_id else {
+        bail!("reader_app_id must be configured before start");
+    };
+    if app_id == 0 {
+        bail!("reader_app_id must be non-zero");
+    }
+
+    let Some(installation_id) = config.reader_installation_id else {
+        bail!("reader_installation_id must be configured before start");
+    };
+    if installation_id == 0 {
+        bail!("reader_installation_id must be non-zero");
+    }
+
+    if config.reader_private_key_path.trim().is_empty() {
+        bail!("reader_private_key_path must be configured");
+    }
+    if !Path::new(&config.reader_private_key_path).exists() {
+        bail!(
+            "reader private key file not found: {}",
+            config.reader_private_key_path
+        );
+    }
+
+    Ok(())
+}
 
 #[derive(Debug)]
 pub(super) struct DirectPushBundle {

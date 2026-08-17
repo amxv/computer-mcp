@@ -1,17 +1,13 @@
 use std::convert::Infallible;
-use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use axum::extract::{Request, State};
 use axum::http::{StatusCode, Uri};
 use axum::middleware::{self, Next};
 use axum::response::Response;
 use axum::routing::get;
 use axum::{Json, Router};
-use axum_server::Handle;
-use axum_server::tls_rustls::RustlsConfig;
 use rmcp::handler::server::{router::tool::ToolRouter, wrapper::Parameters};
 use rmcp::model::{RequestMetaObject, ServerCapabilities, ServerInfo};
 use rmcp::transport::streamable_http_server::{
@@ -25,7 +21,6 @@ use tower::{ServiceExt, service_fn};
 use tracing::{error, info};
 
 use crate::config::Config;
-use crate::http_api;
 use crate::invocation::{
     InvocationContext, InvocationEvidenceRecorder, InvocationOutcome, InvocationStart,
     ProviderCallMetadata,
@@ -345,13 +340,7 @@ fn build_mcp_service_with_policy(
     )
 }
 
-fn build_app(
-    config: Arc<Config>,
-    mcp_service: McpHttpService,
-    zodex_service: ZodexService,
-) -> Router {
-    let mcp_auth_config = config.clone();
-    let http_auth_config = config;
+fn build_app(config: Arc<Config>, mcp_service: McpHttpService) -> Router {
     let mcp_root_service = |mcp_service: McpHttpService| {
         service_fn(move |mut request: Request| {
             let mcp_service = mcp_service.clone();
@@ -371,103 +360,46 @@ fn build_app(
     let protected_mcp_router = Router::new()
         .route_service("/mcp", mcp_root_service(mcp_service.clone()))
         .route_service("/mcp/", mcp_root_service(mcp_service))
-        .layer(middleware::from_fn_with_state(
-            mcp_auth_config,
-            query_key_auth,
-        ));
-    let http_api_router = http_api::build_http_api_router(http_auth_config, zodex_service);
+        .route_layer(middleware::from_fn_with_state(config, query_key_auth));
 
     Router::new()
         .route("/health", get(health))
         .merge(protected_mcp_router)
-        .merge(http_api_router)
 }
 
 pub async fn run_server(config: Config) -> Result<()> {
-    let bind = format!("{}:{}", config.bind_host, config.bind_port);
-    let http_bind = config
-        .http_bind_port
-        .map(|port| format!("{}:{port}", config.bind_host));
-    let cert_path = Path::new(&config.tls_cert_path);
-    let key_path = Path::new(&config.tls_key_path);
-    if !cert_path.exists() || !key_path.exists() {
-        bail!(
-            "TLS cert/key not found (cert: {}, key: {}). Run `zodex start` or `zodex tls setup` first.",
-            config.tls_cert_path,
-            config.tls_key_path
-        );
-    }
-
-    let rustls = RustlsConfig::from_pem_file(cert_path, key_path)
-        .await
-        .with_context(|| {
-            format!(
-                "failed to load TLS cert/key from {} and {}",
-                config.tls_cert_path, config.tls_key_path
-            )
-        })?;
+    let bind = format!("{}:{}", config.bind_host, config.service_port);
     let addr: std::net::SocketAddr = bind
         .parse()
         .with_context(|| format!("invalid bind address {bind}"))?;
-    let http_addr: Option<std::net::SocketAddr> = http_bind
-        .as_deref()
-        .map(|value| {
-            value
-                .parse()
-                .with_context(|| format!("invalid HTTP bind address {value}"))
-        })
-        .transpose()?;
 
     let config = Arc::new(config);
     let zodex_service = ZodexService::new(config.clone());
 
     let cancellation = CancellationToken::new();
     let mcp_service = build_mcp_service(zodex_service.clone(), cancellation.child_token());
-    let app = build_app(config, mcp_service, zodex_service);
+    let app = build_app(config, mcp_service);
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .with_context(|| format!("failed to bind Sprite HTTP listener on {addr}"))?;
+    let shutdown = cancellation.clone();
 
-    let handle = Handle::new();
-    let shutdown_handle = handle.clone();
-    let http_shutdown = cancellation.child_token();
-    tokio::spawn(async move {
-        let _ = tokio::signal::ctrl_c().await;
-        cancellation.cancel();
-        shutdown_handle.graceful_shutdown(Some(Duration::from_secs(5)));
-    });
-
-    info!("zodexd listening on https://{bind}");
-    let tls_app = app.clone();
-    let tls_server = async move {
-        axum_server::bind_rustls(addr, rustls)
-            .handle(handle)
-            .serve(tls_app.into_make_service())
-            .await
-            .context("axum TLS server terminated unexpectedly")
-    };
-
-    if let Some(http_addr) = http_addr {
-        info!("zodexd also listening on http://{http_addr}");
-        let listener = tokio::net::TcpListener::bind(http_addr)
-            .await
-            .with_context(|| format!("failed to bind HTTP listener on {http_addr}"))?;
-
-        let http_server = async move {
-            axum::serve(listener, app.into_make_service())
-                .with_graceful_shutdown(async move {
-                    http_shutdown.cancelled().await;
-                })
-                .await
-                .context("axum HTTP server terminated unexpectedly")
-        };
-
-        let (_tls, _http) = tokio::try_join!(tls_server, http_server)?;
-        Ok(())
-    } else {
-        tls_server.await
-    }
+    info!("zodexd listening on http://{bind}");
+    axum::serve(listener, app.into_make_service())
+        .with_graceful_shutdown(async move {
+            let _ = tokio::signal::ctrl_c().await;
+            shutdown.cancel();
+        })
+        .await
+        .context("Sprite HTTP server terminated unexpectedly")
 }
 
 async fn health() -> Json<Value> {
-    Json(json!({ "status": "ok" }))
+    Json(json!({
+        "status": "ok",
+        "component": "zodexd",
+        "version": env!("CARGO_PKG_VERSION")
+    }))
 }
 
 fn rewrite_mcp_transport_root_uri(uri: &Uri) -> Option<Uri> {
@@ -511,6 +443,8 @@ fn key_from_query(query: Option<&str>) -> Option<String> {
     None
 }
 
+#[cfg(test)]
+mod http_surface_tests;
 #[cfg(test)]
 mod local_history_tests;
 #[cfg(test)]

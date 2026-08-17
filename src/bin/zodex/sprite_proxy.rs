@@ -682,7 +682,7 @@ sudo env \
   ZODEX_INSTALL_MODE=runtime \
   ZODEX_INSTALL_OPERATOR_CLI=0 \
   ZODEX_CONFIG_PATH="$CFG" \
-  ZODEX_HTTP_BIND_PORT=8080 \
+  ZODEX_SERVICE_PORT=8080 \
   ZODEX_AGENT_HOME=/home/zodex-agent \
   ZODEX_DEFAULT_WORKDIR=/workspace \
   bash "$TMP_INSTALLER"
@@ -693,25 +693,11 @@ sudo install -m 0640 -o root -g zodex /tmp/zodex-reader.pem /etc/zodex/reader/pr
 sudo install -m 0600 -o zodex-publisher -g zodex /tmp/zodex-publisher.pem /etc/zodex/publisher/private-key.pem
 
 sudo awk '
-  BEGIN {{seen_bind=0; inserted_http=0}}
-  /^bind_port = / {{
-    print "bind_port = 8443"
-    if (!inserted_http) {{
-      print "http_bind_port = 8080"
-      inserted_http=1
-    }}
-    seen_bind=1
-    next
-  }}
-  /^http_bind_port = / {{next}}
+  BEGIN {{ seen_service_port=0 }}
+  /^service_port = / {{ print "service_port = 8080"; seen_service_port=1; next }}
   {{print}}
   END {{
-    if (!seen_bind) {{
-      print "bind_port = 8443"
-      if (!inserted_http) {{
-        print "http_bind_port = 8080"
-      }}
-    }}
+    if (!seen_service_port) print "service_port = 8080"
   }}
 ' "$CFG" | sudo tee "$CFG" >/dev/null
 
@@ -833,7 +819,6 @@ if ! command -v git >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1; then
   sudo apt-get install -y --no-install-recommends git curl ca-certificates
 fi
 
-HTTP_BIND_PORT="$(sudo awk -F'= ' '/^http_bind_port = / {{ print $2; exit }}' "$CFG" 2>/dev/null || true)"
 REPO_FOR_INSTALL="amxv/zodex"
 if [[ -n "$TARGET_REPO" ]]; then
   REPO_FOR_INSTALL="$TARGET_REPO"
@@ -848,7 +833,6 @@ sudo env \
   ZODEX_SOURCE_REF="$VERSION" \
   ZODEX_INSTALL_OPERATOR_CLI=0 \
   ZODEX_CONFIG_PATH="$CFG" \
-  ZODEX_HTTP_BIND_PORT="$HTTP_BIND_PORT" \
   bash "$TMP_INSTALLER"
 rm -f "$TMP_INSTALLER"
 

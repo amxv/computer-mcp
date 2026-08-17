@@ -13,15 +13,12 @@ use zodex::server::run_server;
 mod git_remote;
 #[path = "zodexd/github.rs"]
 mod github;
-#[path = "zodexd/tls.rs"]
-mod tls;
 
 use git_remote::{handle_git_credential_helper, handle_git_remote_zodex};
 use github::{
     DEFAULT_PUSH_GRANT_TTL_SECONDS, list_push_grants, parse_push_grant_ttl, publish_pr,
     request_push_access, revoke_push_access,
 };
-use tls::ensure_tls_artifacts;
 
 #[cfg(test)]
 use git_remote::{
@@ -58,8 +55,6 @@ enum Commands {
         #[command(subcommand)]
         command: GithubCommand,
     },
-    #[command(hide = true)]
-    EnsureTls,
 }
 
 #[derive(Debug, Subcommand)]
@@ -184,9 +179,6 @@ async fn run_hidden_command(config_path: &Path, command: Commands) -> Result<()>
                     publish_pr(&config, &repo, &title, base.as_deref(), &body, draft).await?;
                 }
             }
-        }
-        Commands::EnsureTls => {
-            ensure_tls_artifacts(config_path)?;
         }
     }
 

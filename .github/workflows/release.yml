@@ -48,7 +48,6 @@ jobs:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.linker }}
         run: |
           cargo build --locked --release --target "${{ matrix.target }}" \
-            --bin zodex-client \
             --bin zodex \
             --bin zodex-agent \
             --bin git-remote-zodex \
@@ -58,7 +57,6 @@ jobs:
       - name: Package release archive
         run: |
           mkdir -p "dist/${{ matrix.archive_name }}"
-          cp "target/${{ matrix.target }}/release/zodex-client" "dist/${{ matrix.archive_name }}/"
           cp "target/${{ matrix.target }}/release/zodex" "dist/${{ matrix.archive_name }}/"
           cp "target/${{ matrix.target }}/release/zodex-agent" "dist/${{ matrix.archive_name }}/"
           cp "target/${{ matrix.target }}/release/git-remote-zodex" "dist/${{ matrix.archive_name }}/"
