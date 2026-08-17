@@ -1,69 +1,66 @@
+#[cfg(target_os = "macos")]
 use std::process::Command;
 
-use anyhow::{Context, Result, bail};
+#[cfg(target_os = "macos")]
+use anyhow::Context;
+use anyhow::{Result, bail};
 
 use super::super::LocalPaths;
+#[cfg(target_os = "macos")]
 use super::server::start_liveboard_host;
 
+#[cfg(target_os = "macos")]
 pub(crate) trait BrowserLauncher: Send + Sync {
     fn open(&self, url: &str) -> Result<()>;
 }
 
+#[cfg(target_os = "macos")]
 struct SystemBrowserLauncher;
 
+#[cfg(target_os = "macos")]
 impl BrowserLauncher for SystemBrowserLauncher {
     fn open(&self, url: &str) -> Result<()> {
-        #[cfg(target_os = "macos")]
-        {
-            let status = Command::new("/usr/bin/open")
-                .arg(url)
-                .status()
-                .context("failed to launch the default browser with /usr/bin/open")?;
-            if !status.success() {
-                bail!("/usr/bin/open exited with status {status}");
-            }
-            Ok(())
+        let status = Command::new("/usr/bin/open")
+            .arg(url)
+            .status()
+            .context("failed to launch the default browser with /usr/bin/open")?;
+        if !status.success() {
+            bail!("/usr/bin/open exited with status {status}");
         }
-        #[cfg(not(target_os = "macos"))]
-        {
-            let _ = url;
-            bail!("Liveboard browser launch is only supported on macOS")
-        }
+        Ok(())
     }
 }
 
+#[cfg(target_os = "macos")]
 pub async fn run_local_liveboard(paths: &LocalPaths) -> Result<()> {
     run_local_liveboard_with_launcher(paths, &SystemBrowserLauncher).await
 }
 
+#[cfg(not(target_os = "macos"))]
+pub async fn run_local_liveboard(_paths: &LocalPaths) -> Result<()> {
+    bail!("Zodex Local Liveboard is only available on macOS")
+}
+
+#[cfg(target_os = "macos")]
 pub(crate) async fn run_local_liveboard_with_launcher(
     paths: &LocalPaths,
     launcher: &dyn BrowserLauncher,
 ) -> Result<()> {
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = (paths, launcher);
-        bail!("Zodex Local Liveboard is only available on macOS")
+    let host = start_liveboard_host(paths).await?;
+    println!("Liveboard: {}", host.url());
+    if let Err(error) = launcher.open(host.url()) {
+        eprintln!(
+            "warning: could not open the default browser automatically: {error:#}\nOpen {} manually.",
+            host.url()
+        );
     }
-
-    #[cfg(target_os = "macos")]
-    {
-        let host = start_liveboard_host(paths).await?;
-        println!("Liveboard: {}", host.url());
-        if let Err(error) = launcher.open(host.url()) {
-            eprintln!(
-                "warning: could not open the default browser automatically: {error:#}\nOpen {} manually.",
-                host.url()
-            );
-        }
-        tokio::signal::ctrl_c()
-            .await
-            .context("failed to wait for Liveboard Ctrl-C")?;
-        host.shutdown().await
-    }
+    tokio::signal::ctrl_c()
+        .await
+        .context("failed to wait for Liveboard Ctrl-C")?;
+    host.shutdown().await
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 mod tests {
     use std::sync::Mutex;
 
