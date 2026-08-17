@@ -183,9 +183,12 @@ describe('Liveboard board shell', () => {
     await vi.waitFor(() => expect(document.body.textContent).toContain('zodex'))
 
     const visibleColumns = () =>
-      Array.from(document.querySelectorAll<HTMLElement>('[data-agent-column]')).map(
-        (column) => column.dataset.agentId,
-      )
+      Array.from(document.querySelectorAll<HTMLElement>('[data-agent-column]'))
+        .sort(
+          (left, right) =>
+            left.getBoundingClientRect().left - right.getBoundingClientRect().left,
+        )
+        .map((column) => column.dataset.agentId)
     expect(visibleColumns()).toEqual(['a111', 'b222', 'c333', 'd444'])
     expect(visibleColumns()).not.toContain('e555')
     expect(
@@ -275,20 +278,41 @@ describe('Liveboard board shell', () => {
     const reorderHandle = element<HTMLButtonElement>(
       'button[aria-label="Drag Agent c333 to reorder"]',
     )
+    const reorderColumn = element<HTMLElement>('[data-agent-id="c333"]')
+    const firstColumn = element<HTMLElement>('[data-agent-id="a111"]')
+    const timelineBefore = element<HTMLElement>('[data-agent-timeline="c333"]')
+    const reorderBox = reorderColumn.getBoundingClientRect()
+    const firstBox = firstColumn.getBoundingClientRect()
+    const startX = reorderBox.left + reorderBox.width / 2
+    const targetX = firstBox.left + firstBox.width / 2
     reorderHandle.setPointerCapture = () => undefined
     reorderHandle.dispatchEvent(
-      new PointerEvent('pointerdown', { bubbles: true, pointerId: 5, clientX: 800 }),
+      new PointerEvent('pointerdown', { bubbles: true, pointerId: 5, clientX: startX }),
     )
     reorderHandle.dispatchEvent(
-      new PointerEvent('pointermove', { bubbles: true, pointerId: 5, clientX: -100 }),
+      new PointerEvent('pointermove', { bubbles: true, pointerId: 5, clientX: targetX }),
     )
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
     expect(patches).toHaveLength(patchCountBeforeReorderDrag)
+    const dragOverlay = element<HTMLElement>('.agent-column-drag-overlay')
+    expect(reorderColumn.classList.contains('agent-column-drag-source')).toBe(true)
+    expect(Number.parseInt(getComputedStyle(dragOverlay).zIndex, 10)).toBeGreaterThan(20)
+    expect(
+      [firstColumn, element<HTMLElement>('[data-agent-id="b222"]')].some(
+        (column) => column.style.transform.includes('translate3d'),
+      ),
+    ).toBe(true)
     reorderHandle.dispatchEvent(
-      new PointerEvent('pointerup', { bubbles: true, pointerId: 5, clientX: -100 }),
+      new PointerEvent('pointerup', { bubbles: true, pointerId: 5, clientX: targetX }),
     )
-    expect(visibleColumns()[0]).toBe('c333')
+    await vi.waitFor(() => expect(visibleColumns()[0]).toBe('c333'))
     await vi.waitFor(() =>
       expect(patches.length).toBe(patchCountBeforeReorderDrag + 1),
+    )
+    expect(element<HTMLElement>('[data-agent-timeline="c333"]')).toBe(timelineBefore)
+    expect(timelineBefore.isConnected).toBe(true)
+    await vi.waitFor(() =>
+      expect(document.querySelector('.agent-column-drag-overlay')).toBeNull(),
     )
     expect(document.querySelector('[aria-label^="Move Agent "]')).toBeNull()
 

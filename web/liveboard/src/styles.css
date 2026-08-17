@@ -352,6 +352,7 @@ select:focus-visible {
   min-height: 0;
   flex: var(--column-weight, 1) 1 0%;
   flex-direction: column;
+  order: var(--column-order, 0);
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -359,11 +360,41 @@ select:focus-visible {
   transition:
     border-color 120ms ease,
     box-shadow 120ms ease;
-  will-change: transform;
 }
 
 .agent-column:hover {
   border-color: var(--border-strong);
+}
+
+.agent-column-reorder-shift {
+  z-index: 1;
+  transition:
+    transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    border-color 120ms ease,
+    box-shadow 120ms ease;
+  will-change: transform;
+}
+
+.agent-column-drag-source {
+  opacity: 0;
+}
+
+.agent-column-drag-overlay {
+  position: fixed;
+  z-index: 70;
+  min-width: 0;
+  max-width: none;
+  flex: none;
+  margin: 0;
+  pointer-events: none;
+  opacity: 0.98;
+  box-shadow: var(--shadow);
+  transform-origin: center center;
+  will-change: transform;
+}
+
+.agent-column-drag-overlay-settling {
+  transition: transform 150ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .agent-header {
@@ -918,8 +949,8 @@ select:focus-visible {
 }
 
 .drawer-agent-selected {
-  border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
-  background: var(--accent-soft);
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
 }
 
 .drawer-agent:disabled {

@@ -27,6 +27,7 @@ interface AgentColumnProps {
   alias?: string
   nowMs: number
   weight: number
+  order: number
   onHide: () => void
   onAliasSave: (alias: string) => void
   onReorderPointerDown: (event: PointerEvent) => void
@@ -86,7 +87,10 @@ export function AgentColumn(props: AgentColumnProps) {
       class="agent-column"
       data-agent-column
       data-agent-id={props.agent.id}
-      style={{ '--column-weight': String(props.weight) }}
+      style={{
+        '--column-weight': String(props.weight),
+        '--column-order': String(props.order),
+      }}
       aria-label={`Agent ${props.agent.id}${props.alias ? `, ${props.alias}` : ''}`}
     >
       <header class="agent-header">

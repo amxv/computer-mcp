@@ -112,8 +112,10 @@ const browserRuntimeApi: RuntimeApi = {
   openEventSource: (url) => new EventSource(url),
 }
 
-function sameIds(left: readonly string[], right: readonly string[]) {
-  return left.length === right.length && left.every((value, index) => value === right[index])
+function sameIdMembership(left: readonly string[], right: readonly string[]) {
+  if (left.length !== right.length) return false
+  const rightIds = new Set(right)
+  return left.every((value) => rightIds.has(value))
 }
 
 function messageFrom(error: unknown) {
@@ -653,7 +655,7 @@ export function createRuntimeConnection(
 
   const setVisibleAgentIds = (ids: readonly string[]) => {
     const unique = [...new Set(ids)]
-    if (sameIds(unique, visibleAgentIds())) return
+    if (sameIdMembership(unique, visibleAgentIds())) return
     const removed = visibleAgentIds().filter((id) => !unique.includes(id))
     setVisibleIds(unique)
     for (const agentId of removed) {

@@ -79,7 +79,10 @@ export function ExpandedCommandOutput(props: {
   }
 
   return (
-    <div class="command-output-region">
+    <div
+      class="command-output-region"
+      classList={{ 'command-output-region-dropped': hasDroppedPrefix() }}
+    >
       <button
         type="button"
         class="command-output-copy-button"
@@ -91,7 +94,9 @@ export function ExpandedCommandOutput(props: {
         {copied() ? <CheckIcon /> : <CopyIcon />}
       </button>
       <Show when={hasDroppedPrefix()}>
-        <div class="output-notice">Recent output tail · earlier buffered output dropped</div>
+        <div class="output-notice output-notice-dropped">
+          Recent output tail · earlier buffered output dropped
+        </div>
       </Show>
       <Show when={displayUnavailable()}>
         <div class="output-notice output-notice-warning">

@@ -193,6 +193,11 @@ describe('command card', () => {
     await vi.waitFor(() =>
       expect(container.querySelector('[aria-label="Command output"]')).not.toBeNull(),
     )
+    expect(
+      getComputedStyle(
+        container.querySelector<HTMLButtonElement>('.command-output-copy-button')!,
+      ).top,
+    ).toBe('6px')
 
     button('Copy command').click()
     await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith('cargo test --workspace'))
@@ -437,6 +442,13 @@ describe('command card', () => {
         'durable tail B',
       ),
     )
+    expect(container.querySelector('.command-output-region-dropped')).not.toBeNull()
+    expect(container.querySelector('.output-notice-dropped')).not.toBeNull()
+    expect(
+      getComputedStyle(
+        container.querySelector<HTMLButtonElement>('.command-output-copy-button')!,
+      ).top,
+    ).toBe('30px')
     expect(metadata).toHaveBeenCalledTimes(1)
     expect(page).toHaveBeenCalledWith(10, 437, 64)
 

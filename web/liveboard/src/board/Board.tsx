@@ -5,6 +5,7 @@ import {
   createMemo,
   createSignal,
   on,
+  onCleanup,
   type JSX,
 } from 'solid-js'
 
@@ -44,6 +45,31 @@ interface BoardProps {
   renderTimeline?: (agentId: string) => JSX.Element
 }
 
+function sameOrder(left: readonly string[], right: readonly string[]) {
+  return left.length === right.length && left.every((id, index) => id === right[index])
+}
+
+function reconcileMountedIds(current: string[], visible: readonly string[]): string[] {
+  const visibleSet = new Set(visible)
+  const next = current.filter((id) => visibleSet.has(id))
+  for (const id of visible) {
+    if (!next.includes(id)) next.push(id)
+  }
+  return sameOrder(current, next) ? current : next
+}
+
+function copyScrollPositions(source: HTMLElement, clone: HTMLElement) {
+  const sourceElements = [source, ...source.querySelectorAll<HTMLElement>('*')]
+  const cloneElements = [clone, ...clone.querySelectorAll<HTMLElement>('*')]
+  for (let index = 0; index < sourceElements.length; index += 1) {
+    const sourceElement = sourceElements[index]
+    const cloneElement = cloneElements[index]
+    if (!sourceElement || !cloneElement) continue
+    cloneElement.scrollTop = sourceElement.scrollTop
+    cloneElement.scrollLeft = sourceElement.scrollLeft
+  }
+}
+
 export function Board(props: BoardProps) {
   const [drawerOpen, setDrawerOpen] = createSignal(false)
   const [settingsOpen, setSettingsOpen] = createSignal(false)
@@ -57,10 +83,14 @@ export function Board(props: BoardProps) {
   const [visibleIds, setVisibleIds] = createSignal(
     initialVisibleAgentIds(props.agents, props.preferences),
   )
+  // Keep mounted column identity independent from visual board order. Reordering
+  // must never reparent a virtualized timeline subtree just to move a column.
+  const [mountedIds, setMountedIds] = createSignal([...visibleIds()])
   const [weights, setWeights] = createSignal(
     columnWeights(visibleIds(), props.preferences),
   )
   let boardElement: HTMLDivElement | undefined
+  let cancelActiveReorder: (() => void) | undefined
 
   const agents = createMemo(() => currentRuntimeAgents(props.agents))
   const agentById = createMemo(
@@ -93,6 +123,7 @@ export function Board(props: BoardProps) {
 
   createEffect(
     on(visibleIds, (ids) => {
+      setMountedIds((current) => reconcileMountedIds(current, ids))
       setWeights((current) => {
         const next: Record<string, number> = {}
         for (const id of ids) {
@@ -104,6 +135,8 @@ export function Board(props: BoardProps) {
       props.onVisibleAgentsChange?.(ids)
     }),
   )
+
+  onCleanup(() => cancelActiveReorder?.())
 
   const persistOrder = (next: string[]) => {
     setVisibleIds(next)
@@ -167,53 +200,152 @@ export function Board(props: BoardProps) {
 
   const beginReorder = (agentId: string, event: PointerEvent) => {
     if (!boardElement) return
+    cancelActiveReorder?.()
     const handle = event.currentTarget as HTMLElement
     const column = handle.closest<HTMLElement>('[data-agent-column]')
     if (!column) return
+    const initialIds = [...visibleIds()]
+    const startIndex = initialIds.indexOf(agentId)
+    if (startIndex < 0) return
+    const columns = new Map(
+      initialIds.flatMap((id) => {
+        const element = boardElement?.querySelector<HTMLElement>(`[data-agent-id="${id}"]`)
+        return element ? [[id, element] as const] : []
+      }),
+    )
+    if (columns.size !== initialIds.length) return
+
     event.preventDefault()
     const startX = event.clientX
     let latestX = startX
     let frame: number | undefined
+    let targetIndex = startIndex
+    let settled = false
+    let finishTimer: ReturnType<typeof setTimeout> | undefined
+    const startRect = column.getBoundingClientRect()
+    const slotRects = initialIds.map((id) => columns.get(id)!.getBoundingClientRect())
+    const overlay = column.cloneNode(true) as HTMLElement
+    overlay.classList.add('agent-column-drag-overlay')
+    overlay.classList.remove('agent-column-drag-source', 'agent-column-reorder-shift')
+    overlay.removeAttribute('data-agent-column')
+    overlay.removeAttribute('data-agent-id')
+    overlay.setAttribute('aria-hidden', 'true')
+    overlay.setAttribute('inert', '')
+    overlay.style.left = `${startRect.left}px`
+    overlay.style.top = `${startRect.top}px`
+    overlay.style.width = `${startRect.width}px`
+    overlay.style.height = `${startRect.height}px`
+    document.body.append(overlay)
+    copyScrollPositions(column, overlay)
+    column.classList.add('agent-column-drag-source')
+    for (const [id, candidate] of columns) {
+      if (id !== agentId) candidate.classList.add('agent-column-reorder-shift')
+    }
+
+    const targetFor = (clientX: number) => {
+      const draggedCenter = startRect.left + startRect.width / 2 + (clientX - startX)
+      return slotRects.reduce(
+        (best, rect, index) => {
+          const distance = Math.abs(draggedCenter - (rect.left + rect.width / 2))
+          return distance < best.distance ? { index, distance } : best
+        },
+        { index: startIndex, distance: Number.POSITIVE_INFINITY },
+      ).index
+    }
+
+    const applySiblingPreview = (nextTargetIndex: number) => {
+      const preview = moveAgent(initialIds, agentId, nextTargetIndex)
+      for (const [id, candidate] of columns) {
+        if (id === agentId) continue
+        const fromIndex = initialIds.indexOf(id)
+        const toIndex = preview.indexOf(id)
+        const delta = slotRects[toIndex]!.left - slotRects[fromIndex]!.left
+        candidate.style.transform = Math.abs(delta) < 0.5
+          ? ''
+          : `translate3d(${delta}px, 0, 0)`
+      }
+    }
 
     const render = () => {
       frame = undefined
-      column.style.transform = `translate3d(${latestX - startX}px, 0, 0)`
+      const delta = latestX - startX
+      overlay.style.transform = `translate3d(${delta}px, 0, 0) scale(1.01)`
+      const nextTargetIndex = targetFor(latestX)
+      if (nextTargetIndex !== targetIndex) {
+        targetIndex = nextTargetIndex
+        applySiblingPreview(targetIndex)
+      }
     }
     const move = (pointerEvent: PointerEvent) => {
       latestX = pointerEvent.clientX
       if (frame === undefined) frame = requestAnimationFrame(render)
     }
-    const cleanup = () => {
+    const removeListeners = () => {
       if (frame !== undefined) cancelAnimationFrame(frame)
-      column.style.transform = ''
       handle.removeEventListener('pointermove', move)
       handle.removeEventListener('pointerup', end)
       handle.removeEventListener('pointercancel', cancel)
     }
-    const cancel = () => cleanup()
+
+    const finishVisual = () => {
+      if (settled) return
+      settled = true
+      if (finishTimer !== undefined) clearTimeout(finishTimer)
+      overlay.remove()
+      column.classList.remove('agent-column-drag-source')
+      for (const [id, candidate] of columns) {
+        if (id === agentId) continue
+        candidate.classList.remove('agent-column-reorder-shift')
+        candidate.style.transform = ''
+      }
+      if (cancelActiveReorder === cancel) cancelActiveReorder = undefined
+    }
+
+    const animateOverlayTo = (left: number) => {
+      overlay.classList.add('agent-column-drag-overlay-settling')
+      requestAnimationFrame(() => {
+        overlay.style.transform = `translate3d(${left - startRect.left}px, 0, 0) scale(1)`
+      })
+      overlay.addEventListener('transitionend', finishVisual, { once: true })
+      finishTimer = setTimeout(finishVisual, 220)
+    }
+
+    const cancel = () => {
+      removeListeners()
+      for (const [id, candidate] of columns) {
+        if (id !== agentId) candidate.style.transform = ''
+      }
+      animateOverlayTo(startRect.left)
+    }
     const end = (pointerEvent: PointerEvent) => {
       latestX = pointerEvent.clientX
-      cleanup()
-      const columns = Array.from(
-        boardElement?.querySelectorAll<HTMLElement>('[data-agent-column]') ?? [],
-      )
-      if (columns.length === 0) return
-      const targetIndex = columns.reduce(
-        (best, candidate, index) => {
-          const rect = candidate.getBoundingClientRect()
-          const distance = Math.abs(latestX - (rect.left + rect.width / 2))
-          return distance < best.distance ? { index, distance } : best
-        },
-        { index: 0, distance: Number.POSITIVE_INFINITY },
-      ).index
-      const next = moveAgent(visibleIds(), agentId, targetIndex)
-      if (next.join('\0') !== visibleIds().join('\0')) persistOrder(next)
+      if (frame !== undefined) {
+        cancelAnimationFrame(frame)
+        frame = undefined
+        render()
+      }
+      removeListeners()
+      const next = moveAgent(initialIds, agentId, targetIndex)
+      if (!sameOrder(next, initialIds)) persistOrder(next)
+
+      // The columns now lay out in their final CSS-order slots. Remove preview
+      // transforms before the browser paints so the virtualized DOM never moves.
+      for (const [id, candidate] of columns) {
+        if (id === agentId) continue
+        candidate.classList.remove('agent-column-reorder-shift')
+        candidate.style.transform = ''
+      }
+      requestAnimationFrame(() => {
+        const finalRect = column.getBoundingClientRect()
+        animateOverlayTo(finalRect.left)
+      })
     }
 
     handle.setPointerCapture(event.pointerId)
     handle.addEventListener('pointermove', move)
     handle.addEventListener('pointerup', end, { once: true })
     handle.addEventListener('pointercancel', cancel, { once: true })
+    cancelActiveReorder = cancel
   }
 
   const beginResize = (
@@ -320,10 +452,11 @@ export function Board(props: BoardProps) {
               </section>
             }
           >
-            <For each={visibleIds()}>
-              {(agentId, index) => {
+            <For each={mountedIds()}>
+              {(agentId) => {
                 const agent = () => agentById().get(agentId)
-                const nextId = () => visibleIds()[index() + 1]
+                const visualIndex = () => visibleIds().indexOf(agentId)
+                const nextId = () => visibleIds()[visualIndex() + 1]
                 return (
                   <Show when={agent()}>
                     {(value) => (
@@ -332,6 +465,7 @@ export function Board(props: BoardProps) {
                         alias={props.preferences.agents[agentId]?.alias}
                         nowMs={props.nowMs}
                         weight={weights()[agentId] ?? 1}
+                        order={Math.max(0, visualIndex())}
                         onHide={() => hideAgent(agentId)}
                         onAliasSave={(alias) =>
                           props.onPatch({ agents: { [agentId]: { alias } } })

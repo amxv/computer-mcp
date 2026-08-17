@@ -11,6 +11,7 @@ import { ArrowDownIcon } from '../ui/icons'
 
 const END_THRESHOLD_PX = 40
 const HISTORY_TRIGGER_PX = 72
+const FOLLOW_SETTLE_MAX_FRAMES = 6
 
 export function AgentTimeline(props: {
   controller: AgentStreamController
@@ -68,6 +69,34 @@ export function AgentTimeline(props: {
 
   const hasUserScrollIntent = () => performance.now() <= userScrollIntentUntil
 
+  const settleFollowToEnd = (
+    framesRemaining = FOLLOW_SETTLE_MAX_FRAMES,
+    previousScrollHeight?: number,
+  ) => {
+    if (followSettleFrame !== undefined) cancelAnimationFrame(followSettleFrame)
+    followSettleFrame = requestAnimationFrame(() => {
+      followSettleFrame = undefined
+      if (
+        !scrollElement?.isConnected ||
+        !props.controller.following() ||
+        hasUserScrollIntent()
+      ) {
+        return
+      }
+
+      const scrollHeight = scrollElement.scrollHeight
+      scrollElement.scrollTop = scrollHeight
+      syncLiveEndState()
+      const stable =
+        previousScrollHeight !== undefined &&
+        Math.abs(scrollHeight - previousScrollHeight) <= 0.5 &&
+        distanceFromLiveEnd() <= 1
+      if (!stable && framesRemaining > 1) {
+        settleFollowToEnd(framesRemaining - 1, scrollHeight)
+      }
+    })
+  }
+
   const virtualizer = createVirtualizer<HTMLDivElement, HTMLDivElement>({
     get count() {
       return props.controller.orderedIds().length
@@ -96,18 +125,7 @@ export function AgentTimeline(props: {
         if (!scrollElement?.isConnected) return
         if (grew && props.controller.following() && !hasUserScrollIntent()) {
           scrollElement.scrollTop = scrollElement.scrollHeight
-          if (followSettleFrame !== undefined) cancelAnimationFrame(followSettleFrame)
-          followSettleFrame = requestAnimationFrame(() => {
-            followSettleFrame = undefined
-            if (
-              scrollElement?.isConnected &&
-              props.controller.following() &&
-              !hasUserScrollIntent()
-            ) {
-              scrollElement.scrollTop = scrollElement.scrollHeight
-              syncLiveEndState()
-            }
-          })
+          settleFollowToEnd()
         }
         syncLiveEndState()
       })
@@ -203,6 +221,7 @@ export function AgentTimeline(props: {
         returnToLiveFrame = undefined
         scrollElement.scrollTop = scrollElement.scrollHeight
         syncLiveEndState()
+        settleFollowToEnd()
       }
     }
     returnToLiveFrame = requestAnimationFrame(tick)

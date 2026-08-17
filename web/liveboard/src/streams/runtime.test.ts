@@ -272,6 +272,12 @@ describe('runtime connection', () => {
     expect(sources[0]?.closed).toBe(true)
     expect(sources[1]?.closed).toBe(false)
 
+    const sourceCountBeforeUiReorder = sources.length
+    runtime.setVisibleAgentIds(['b222', 'a111'])
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(sources).toHaveLength(sourceCountBeforeUiReorder)
+    expect(runtime.visibleAgentIds()).toEqual(['a111', 'b222'])
+
     const oldA = runtime.controllerFor('a111')
     runtime.setVisibleAgentIds(['b222'])
     expect(oldA.orderedIds()).toEqual([])
