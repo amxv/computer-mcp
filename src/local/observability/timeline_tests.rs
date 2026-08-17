@@ -365,6 +365,31 @@ async fn output_display_view_is_stateful_keeps_raw_default_and_exposes_tail_anch
     assert_eq!(detail["output"]["first_cursor"], 0);
     assert_eq!(detail["output"]["last_cursor"], 3);
 
+    let metadata_response = request(
+        &app,
+        &format!("/v1/invocations/{invocation_id}/output-metadata"),
+        Some(TOKEN),
+    )
+    .await;
+    assert_eq!(metadata_response.status(), StatusCode::OK);
+    assert_eq!(
+        metadata_response
+            .headers()
+            .get(header::CACHE_CONTROL)
+            .unwrap(),
+        "no-store"
+    );
+    let metadata_bytes = to_bytes(metadata_response.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let metadata: Value = serde_json::from_slice(&metadata_bytes).unwrap();
+    assert_eq!(metadata["invocation_id"], invocation_id);
+    assert_eq!(metadata["output"]["first_cursor"], 0);
+    assert_eq!(metadata["output"]["last_cursor"], 3);
+    assert!(metadata.get("invocation").is_none());
+    assert!(!String::from_utf8_lossy(&metadata_bytes).contains("terminal-output"));
+    assert!(!String::from_utf8_lossy(&metadata_bytes).contains("hello"));
+
     let raw = body_json(
         request(
             &app,

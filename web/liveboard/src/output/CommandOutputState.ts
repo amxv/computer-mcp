@@ -1,0 +1,177 @@
+import type {
+  ApiOutputMetadataDocument,
+  ApiOutputPage,
+} from '../api/client'
+import { LiveOutputBuffer } from './LiveOutputBuffer'
+
+const RECENT_OUTPUT_CHUNK_LIMIT = 64
+
+export interface CommandOutputLoader {
+  loadMetadata: (invocationId: number) => Promise<ApiOutputMetadataDocument>
+  loadDisplayPage: (
+    invocationId: number,
+    cursor: number,
+    limit: number,
+  ) => Promise<ApiOutputPage>
+}
+
+export class CommandOutputState {
+  readonly buffer: LiveOutputBuffer
+  private readonly subscribers = new Set<() => void>()
+  private hydration: Promise<void> | undefined
+  private recoveryNeeded = true
+  private hydrated = false
+  private final = false
+  private complete = false
+  private displayState: string | undefined
+  private displayReason: string | undefined
+  private recoveryError: string | undefined
+
+  constructor(
+    readonly presentationId: string,
+    readonly invocationId: number,
+    private readonly loader: CommandOutputLoader,
+    private readonly onUnusedFinal: () => void,
+    maximumBytes = 96 * 1024,
+  ) {
+    this.buffer = new LiveOutputBuffer(maximumBytes)
+  }
+
+  subscribe(callback: () => void) {
+    this.subscribers.add(callback)
+    return () => {
+      this.subscribers.delete(callback)
+      if (this.final && this.subscribers.size === 0) this.onUnusedFinal()
+    }
+  }
+
+  appendLive(
+    sequence: number,
+    text: string,
+    displayState?: string,
+    displayReason?: string,
+  ) {
+    const result = this.buffer.append(sequence, text)
+    if (result.sequenceGap) this.recoveryNeeded = true
+    this.updateDisplayState(displayState, displayReason)
+    if (result.added || displayState === 'unavailable') this.notify()
+    if (this.recoveryNeeded && this.subscribers.size > 0) {
+      this.requestRecentTail()
+    }
+    return result
+  }
+
+  markComplete(displayState?: string, displayReason?: string) {
+    this.complete = true
+    this.updateDisplayState(displayState, displayReason)
+    this.notify()
+  }
+
+  markRecoveryNeeded() {
+    this.recoveryNeeded = true
+    if (this.subscribers.size > 0) this.requestRecentTail()
+  }
+
+  markFinal() {
+    this.final = true
+    if (this.subscribers.size === 0) this.onUnusedFinal()
+  }
+
+  isFinal() {
+    return this.final
+  }
+
+  isComplete() {
+    return this.complete
+  }
+
+  needsRecovery() {
+    return this.recoveryNeeded || !this.hydrated
+  }
+
+  isDisplayUnavailable() {
+    return this.displayState === 'unavailable'
+  }
+
+  displayUnavailableReason() {
+    return this.displayReason
+  }
+
+  recoveryErrorMessage() {
+    return this.recoveryError
+  }
+
+  hasDroppedPrefix() {
+    return this.buffer.hasDroppedPrefix()
+  }
+
+  materialize() {
+    return this.buffer.materialize()
+  }
+
+  subscriberCount() {
+    return this.subscribers.size
+  }
+
+  async ensureRecentTail() {
+    if (!this.needsRecovery()) return
+    if (this.hydration) return this.hydration
+    this.recoveryError = undefined
+    this.hydration = this.hydrateRecentTail().finally(() => {
+      this.hydration = undefined
+    })
+    return this.hydration
+  }
+
+  requestRecentTail() {
+    void this.ensureRecentTail().catch((error: unknown) => {
+      this.recoveryError = error instanceof Error ? error.message : String(error)
+      this.notify()
+    })
+  }
+
+  private async hydrateRecentTail() {
+    const metadataDocument = await this.loader.loadMetadata(this.invocationId)
+    const metadata = metadataDocument.output
+    if (!metadata.available || metadata.last_cursor === null) {
+      this.hydrated = true
+      this.recoveryNeeded = false
+      this.notify()
+      return
+    }
+    const startCursor = Math.max(
+      metadata.first_cursor ?? 0,
+      metadata.last_cursor - (RECENT_OUTPUT_CHUNK_LIMIT - 1),
+    )
+    if (metadata.first_cursor !== null && startCursor > metadata.first_cursor) {
+      this.buffer.markDroppedPrefix()
+    }
+    const page = await this.loader.loadDisplayPage(
+      this.invocationId,
+      startCursor,
+      RECENT_OUTPUT_CHUNK_LIMIT,
+    )
+    this.updateDisplayState(page.display_state, page.display_reason)
+    if (page.display_state === 'unavailable') {
+      this.hydrated = true
+      this.recoveryNeeded = false
+      this.notify()
+      return
+    }
+    this.buffer.mergeDurable(page.chunks, {
+      dropBeforeSequence: startCursor,
+    })
+    this.hydrated = true
+    this.recoveryNeeded = this.buffer.hasInternalSequenceGap()
+    this.notify()
+  }
+
+  private updateDisplayState(state?: string, reason?: string) {
+    if (state !== undefined) this.displayState = state
+    if (reason !== undefined) this.displayReason = reason
+  }
+
+  private notify() {
+    for (const subscriber of this.subscribers) subscriber()
+  }
+}

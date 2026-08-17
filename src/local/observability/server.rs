@@ -30,9 +30,9 @@ use crate::local::{HistoryQuery, LocalHistoryRuntime};
 
 use super::model::{
     ApiAgent, ApiAgentDetail, ApiAgentList, ApiError, ApiInvocationDetail, ApiInvocationList,
-    ApiLogicalInvocation, ApiOutputPage, ApiStatusDocument, ApiTimelineCheckpointPage,
-    ApiTimelineDetail, ApiTimelinePage, LOCAL_OBSERVABILITY_API_VERSION, presentation_version,
-    schema_version,
+    ApiLogicalInvocation, ApiOutputMetadataDocument, ApiOutputPage, ApiStatusDocument,
+    ApiTimelineCheckpointPage, ApiTimelineDetail, ApiTimelinePage, LOCAL_OBSERVABILITY_API_VERSION,
+    presentation_version, schema_version,
 };
 
 const DEFAULT_INVOCATION_LIMIT: usize = 50;
@@ -123,6 +123,10 @@ pub(super) fn build_router(history: Arc<LocalHistoryRuntime>, token: HeaderValue
         .route("/v1/agents/{id}", get(agent_detail))
         .route("/v1/invocations", get(invocations))
         .route("/v1/invocations/{id}", get(invocation_detail))
+        .route(
+            "/v1/invocations/{id}/output-metadata",
+            get(invocation_output_metadata),
+        )
         .route("/v1/invocations/{id}/output", get(invocation_output))
         .route("/v1/timeline", get(timeline))
         .route("/v1/timeline/{presentation_id}", get(timeline_detail))
@@ -319,6 +323,25 @@ async fn invocation_detail(
         runtime_id: state.history.runtime_id().to_string(),
         invocation: ApiLogicalInvocation::from(record),
         presentation,
+        output,
+    }))
+}
+
+async fn invocation_output_metadata(
+    State(state): State<Arc<ApiState>>,
+    AxumPath(id): AxumPath<i64>,
+) -> Result<Json<ApiOutputMetadataDocument>, ApiFailure> {
+    if id <= 0 {
+        return Err(not_found("invocation was not found"));
+    }
+    let path = state.history.database_path().to_path_buf();
+    let output = run_blocking(move || LocalHistoryReader::output_metadata(&path, id))
+        .await?
+        .ok_or_else(|| not_found(format!("invocation {id} was not found")))?;
+    Ok(Json(ApiOutputMetadataDocument {
+        schema_version: schema_version(),
+        runtime_id: state.history.runtime_id().to_string(),
+        invocation_id: id,
         output,
     }))
 }

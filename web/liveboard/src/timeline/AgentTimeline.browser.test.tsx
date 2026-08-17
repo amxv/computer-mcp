@@ -47,6 +47,15 @@ function page(records: PresentationRecord[]): ApiTimelinePage {
   }
 }
 
+const outputLoaders = {
+  loadOutputMetadata: async () => {
+    throw new Error('output metadata not expected in timeline geometry test')
+  },
+  loadDisplayOutputPage: async () => {
+    throw new Error('output page not expected in timeline geometry test')
+  },
+}
+
 function distanceFromEnd(element: HTMLElement) {
   return element.scrollHeight - element.clientHeight - element.scrollTop
 }
@@ -83,6 +92,7 @@ describe('independent virtualized Agent timeline', () => {
       agentId: 'a111',
       attachWatermarkMs: 10_000,
       loadHistoryPage: async () => page(historyRecords),
+      ...outputLoaders,
     })
     const container = document.createElement('div')
     container.style.width = '340px'
@@ -170,11 +180,13 @@ describe('independent virtualized Agent timeline', () => {
       agentId: 'a111',
       attachWatermarkMs: 10_000,
       loadHistoryPage: async () => page([]),
+      ...outputLoaders,
     })
     const controllerB = createAgentStreamController({
       agentId: 'b222',
       attachWatermarkMs: 10_000,
       loadHistoryPage: async () => page([]),
+      ...outputLoaders,
     })
     const container = document.createElement('div')
     container.style.display = 'flex'

@@ -133,6 +133,29 @@ async fn host_serves_embedded_assets_and_only_allowlisted_same_origin_resources(
     assert_eq!(status["runtime_id"], "runtime-liveboard-host");
     assert!(!status.to_string().contains(BEARER));
 
+    let invocation = observer
+        .history
+        .begin(
+            InvocationContext::default(),
+            InvocationStart::new("host-output-metadata-proof", json!({})),
+        )
+        .unwrap();
+    let invocation_id = invocation.invocation_id.unwrap();
+    let output_metadata = client
+        .get(capability_url(
+            host.url(),
+            &format!("api/invocations/{invocation_id}/output-metadata"),
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(output_metadata.status(), StatusCode::OK);
+    assert_eq!(output_metadata.headers()["cache-control"], "no-store");
+    let output_metadata: Value = output_metadata.json().await.unwrap();
+    assert_eq!(output_metadata["invocation_id"], invocation_id);
+    assert!(output_metadata.get("invocation").is_none());
+    assert!(!output_metadata.to_string().contains(BEARER));
+
     let prefs = client
         .get(capability_url(host.url(), "preferences"))
         .send()

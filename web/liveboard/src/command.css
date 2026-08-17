@@ -1,0 +1,224 @@
+.command-card {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-raised);
+  color: var(--text);
+}
+
+.command-card-header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 9px 7px;
+}
+
+.command-status {
+  display: inline-grid;
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+  place-items: center;
+}
+
+.command-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--idle);
+}
+
+.command-status-success .command-status-dot { background: var(--success); }
+.command-status-error .command-status-dot { background: var(--danger); }
+.command-status-incomplete .command-status-dot { background: var(--recent); }
+
+.command-spinner {
+  width: 11px;
+  height: 11px;
+  border: 1.5px solid color-mix(in srgb, var(--muted) 36%, transparent);
+  border-top-color: var(--muted);
+  border-radius: 999px;
+  animation: command-spin 700ms linear infinite;
+}
+
+@keyframes command-spin { to { transform: rotate(360deg); } }
+
+.command-line {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-prompt { color: var(--faint); }
+
+.command-chevron,
+.command-audit-button {
+  flex: 0 0 auto;
+  cursor: pointer;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.command-chevron {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  font-size: 15px;
+}
+
+.command-chevron[aria-expanded='true'] span { transform: rotate(180deg); }
+
+.command-audit-button {
+  padding: 4px 6px;
+  font-size: 9px;
+  opacity: 0;
+}
+
+.command-card:hover .command-audit-button,
+.command-audit-button:focus-visible,
+.command-audit-button[aria-expanded='true'] { opacity: 1; }
+
+.command-chevron:hover,
+.command-audit-button:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.command-meta {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  padding: 0 9px 8px 29px;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.command-cwd {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-output-region {
+  border-top: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 65%, var(--surface-raised));
+}
+
+.command-output-text {
+  width: 100%;
+  max-height: 360px;
+  margin: 0;
+  overflow: auto;
+  padding: 9px 10px 11px;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 9.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.output-notice {
+  padding: 5px 9px;
+  border-bottom: 1px solid var(--border);
+  color: var(--faint);
+  font-size: 8.5px;
+}
+
+.output-notice-warning { color: var(--recent); }
+
+.command-audit {
+  border-top: 1px solid var(--border);
+  padding: 8px 9px 10px;
+  background: var(--surface);
+}
+
+.audit-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 8.5px;
+}
+
+.audit-heading strong {
+  color: var(--text);
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.checkpoint-strip {
+  display: flex;
+  gap: 4px;
+  margin-top: 7px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.checkpoint-button {
+  flex: 0 0 auto;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 3px 6px;
+  background: var(--surface-raised);
+  color: var(--muted);
+  font-size: 8.5px;
+}
+
+.checkpoint-button:hover,
+.checkpoint-selected {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.checkpoint-selected {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+.audit-evidence {
+  max-height: 280px;
+  margin: 8px 0 0;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  background: var(--surface-raised);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 8.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.audit-empty,
+.audit-error {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 8.5px;
+}
+
+.audit-error { color: var(--danger); }
+
+@media (prefers-reduced-motion: reduce) {
+  .command-spinner {
+    animation: none;
+    border-color: var(--muted);
+    border-right-color: transparent;
+  }
+}

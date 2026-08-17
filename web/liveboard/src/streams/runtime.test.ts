@@ -165,6 +165,12 @@ describe('runtime connection', () => {
           record: details.get(presentationId)!,
         }
       },
+      fetchOutputMetadata: async () => {
+        throw new Error('output metadata not expected')
+      },
+      fetchOutputPage: async () => {
+        throw new Error('output page not expected')
+      },
       openEventSource: (url) => {
         const source = new FakeEventSource(url)
         sources.push(source)
@@ -253,6 +259,12 @@ describe('runtime connection', () => {
         runtime_id: runtimeId,
         record: record(Number(presentationId.slice(4)), 'a111'),
       }),
+      fetchOutputMetadata: async () => {
+        throw new Error('output metadata not expected')
+      },
+      fetchOutputPage: async () => {
+        throw new Error('output page not expected')
+      },
       openEventSource: (url) => {
         const source = new FakeEventSource(url)
         sources.push(source)

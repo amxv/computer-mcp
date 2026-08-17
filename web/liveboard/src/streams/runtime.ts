@@ -3,6 +3,8 @@ import { createSignal, type Accessor } from 'solid-js'
 import {
   eventStreamUrl,
   fetchCurrentAgents,
+  fetchOutputMetadata,
+  fetchOutputPage,
   fetchStatus,
   fetchTimeline,
   fetchTimelineDetail,
@@ -57,6 +59,15 @@ export interface RuntimeApi {
     presentationId: string,
     runtimeId: string,
   ) => ReturnType<typeof fetchTimelineDetail>
+  fetchOutputMetadata: (
+    invocationId: number,
+    runtimeId: string,
+  ) => ReturnType<typeof fetchOutputMetadata>
+  fetchOutputPage: (
+    invocationId: number,
+    input: { cursor: number; limit?: number; view: 'raw' | 'display' },
+    runtimeId: string,
+  ) => ReturnType<typeof fetchOutputPage>
   openEventSource: (url: string) => EventSourceLike
 }
 
@@ -85,6 +96,8 @@ const browserRuntimeApi: RuntimeApi = {
   fetchCurrentAgents,
   fetchTimeline,
   fetchTimelineDetail,
+  fetchOutputMetadata,
+  fetchOutputPage,
   openEventSource: (url) => new EventSource(url),
 }
 
@@ -199,6 +212,14 @@ export function createRuntimeConnection(
       agentId,
       attachWatermarkMs: runtimeAttachWatermarkMs,
       loadHistoryPage,
+      loadOutputMetadata: (invocationId) =>
+        api.fetchOutputMetadata(invocationId, runtimeId()),
+      loadDisplayOutputPage: (invocationId, cursor, limit) =>
+        api.fetchOutputPage(
+          invocationId,
+          { cursor, limit, view: 'display' },
+          runtimeId(),
+        ),
     })
     controllers.set(agentId, controller)
     if (initialRecoveryComplete && !hydratedAgents.has(agentId)) {
@@ -323,6 +344,11 @@ export function createRuntimeConnection(
     setConnectionState(firstOpen ? 'connecting' : 'recovering')
     setConnectionError(undefined)
     try {
+      if (!firstOpen) {
+        for (const controller of controllers.values()) {
+          controller.markOutputRecoveryNeeded()
+        }
+      }
       const status = await api.fetchStatus()
       const runtimeChanged = status.runtime_id !== runtimeId()
       if (runtimeChanged) {
@@ -353,6 +379,9 @@ export function createRuntimeConnection(
       if (disposed) return
       setConnectionState('recovering')
       try {
+        for (const controller of controllers.values()) {
+          controller.markOutputRecoveryNeeded()
+        }
         await refreshAgents()
         await recoverVisible(boundary)
         candidateWatermarkMs = Math.max(candidateWatermarkMs, event.emitted_at_ms)
@@ -406,11 +435,33 @@ export function createRuntimeConnection(
 
       if (event.event_type === 'output' || event.event_type === 'output_complete') {
         if (event.agent_id && event.presentation_id && visibleAgentIds().includes(event.agent_id)) {
-          const sequence = event.payload.output_sequence
-          ensureController(event.agent_id).noteLiveOutput(
-            event.presentation_id,
-            typeof sequence === 'number' ? sequence : undefined,
-          )
+          const controller = ensureController(event.agent_id)
+          if (event.event_type === 'output' && event.invocation_id !== null) {
+            const sequence = event.payload.output_sequence
+            const text = event.payload.text
+            const displayState = event.payload.display_state
+            const displayReason = event.payload.display_reason
+            if (typeof sequence === 'number' && typeof text === 'string') {
+              controller.appendLiveOutput({
+                presentationId: event.presentation_id,
+                invocationId: event.invocation_id,
+                sequence,
+                text,
+                displayState:
+                  typeof displayState === 'string' ? displayState : undefined,
+                displayReason:
+                  typeof displayReason === 'string' ? displayReason : undefined,
+              })
+            }
+          } else {
+            const displayState = event.payload.display_state
+            const displayReason = event.payload.display_reason
+            controller.completeLiveOutput(
+              event.presentation_id,
+              typeof displayState === 'string' ? displayState : undefined,
+              typeof displayReason === 'string' ? displayReason : undefined,
+            )
+          }
         }
         return
       }

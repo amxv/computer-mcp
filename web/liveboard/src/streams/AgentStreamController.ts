@@ -5,13 +5,24 @@ import {
 } from 'solid-js'
 
 import type {
+  ApiOutputMetadataDocument,
+  ApiOutputPage,
   ApiTimelinePage,
   PresentationRecord,
 } from '../api/client'
+import {
+  CommandOutputState,
+  type CommandOutputLoader,
+} from '../output/CommandOutputState'
 
 interface CardSlot {
   record: Accessor<PresentationRecord>
   setRecord: Setter<PresentationRecord>
+}
+
+interface CommandExpansionSlot {
+  override: Accessor<boolean | undefined>
+  setOverride: Setter<boolean | undefined>
 }
 
 interface AgentStreamControllerOptions {
@@ -22,6 +33,12 @@ interface AgentStreamControllerOptions {
     beforeMs: number
     cursor?: string
   }) => Promise<ApiTimelinePage>
+  loadOutputMetadata: (invocationId: number) => Promise<ApiOutputMetadataDocument>
+  loadDisplayOutputPage: (
+    invocationId: number,
+    cursor: number,
+    limit: number,
+  ) => Promise<ApiOutputPage>
 }
 
 export interface AgentStreamController {
@@ -37,8 +54,25 @@ export interface AgentStreamController {
   historyError: Accessor<string | undefined>
   upsert: (record: PresentationRecord, activity?: boolean) => boolean
   mergeRecovery: (records: readonly PresentationRecord[]) => number
-  noteLiveOutput: (presentationId: string, sequence?: number) => void
+  appendLiveOutput: (input: {
+    presentationId: string
+    invocationId: number
+    sequence: number
+    text: string
+    displayState?: string
+    displayReason?: string
+  }) => void
+  completeLiveOutput: (
+    presentationId: string,
+    displayState?: string,
+    displayReason?: string,
+  ) => void
+  outputState: (presentationId: string, invocationId: number) => CommandOutputState
+  markOutputRecoveryNeeded: () => void
   lastLiveOutputSequence: (presentationId: string) => number | undefined
+  commandExpanded: (presentationId: string) => Accessor<boolean>
+  toggleCommandExpansion: (presentationId: string) => void
+  setCommandExpansionDefault: (expanded: boolean) => void
   setFollowing: (following: boolean) => void
   returnToLive: () => void
   loadEarlier: () => Promise<number>
@@ -59,7 +93,8 @@ export function createAgentStreamController(
   options: AgentStreamControllerOptions,
 ): AgentStreamController {
   const cards = new Map<string, CardSlot>()
-  const outputSequences = new Map<string, number>()
+  const outputStates = new Map<string, CommandOutputState>()
+  const commandExpansion = new Map<string, CommandExpansionSlot>()
   const unseenIds = new Set<string>()
   const [orderedIds, setOrderedIds] = createSignal<string[]>([])
   const [following, setFollowingSignal] = createSignal(true)
@@ -68,6 +103,7 @@ export function createAgentStreamController(
   const [historyLoading, setHistoryLoading] = createSignal(false)
   const [historyExhausted, setHistoryExhausted] = createSignal(false)
   const [historyError, setHistoryError] = createSignal<string>()
+  const [commandExpansionDefault, setCommandExpansionDefaultSignal] = createSignal(false)
   let historyCursor: string | undefined
   let disposed = false
 
@@ -87,6 +123,9 @@ export function createAgentStreamController(
     const existing = cards.get(record.presentation_id)
     if (existing) {
       existing.setRecord(record)
+      if (record.kind === 'command' && record.status !== 'running') {
+        outputStates.get(record.presentation_id)?.markFinal()
+      }
       if (activity) markActivity(record.presentation_id)
       return false
     }
@@ -96,6 +135,9 @@ export function createAgentStreamController(
       record: recordSignal,
       setRecord,
     })
+    if (record.kind === 'command' && record.status !== 'running') {
+      outputStates.get(record.presentation_id)?.markFinal()
+    }
     setOrderedIds((ids) => {
       const next = [...ids, record.presentation_id]
       next.sort((leftId, rightId) => {
@@ -121,6 +163,38 @@ export function createAgentStreamController(
   const setFollowing = (value: boolean) => {
     setFollowingSignal(value)
     if (value) clearUnseen()
+  }
+
+  const outputLoader: CommandOutputLoader = {
+    loadMetadata: options.loadOutputMetadata,
+    loadDisplayPage: options.loadDisplayOutputPage,
+  }
+
+  const outputState = (presentationId: string, invocationId: number) => {
+    const existing = outputStates.get(presentationId)
+    if (existing) return existing
+    let state: CommandOutputState
+    state = new CommandOutputState(
+      presentationId,
+      invocationId,
+      outputLoader,
+      () => {
+        if (outputStates.get(presentationId) === state && state.subscriberCount() === 0) {
+          outputStates.delete(presentationId)
+        }
+      },
+    )
+    outputStates.set(presentationId, state)
+    return state
+  }
+
+  const expansionSlot = (presentationId: string) => {
+    const existing = commandExpansion.get(presentationId)
+    if (existing) return existing
+    const [override, setOverride] = createSignal<boolean | undefined>()
+    const slot = { override, setOverride }
+    commandExpansion.set(presentationId, slot)
+    return slot
   }
 
   const loadEarlier = async () => {
@@ -159,24 +233,68 @@ export function createAgentStreamController(
     historyError,
     upsert,
     mergeRecovery,
-    noteLiveOutput: (presentationId, sequence) => {
+    appendLiveOutput: ({
+      presentationId,
+      invocationId,
+      sequence,
+      text,
+      displayState,
+      displayReason,
+    }) => {
       if (disposed) return
-      if (sequence !== undefined) {
-        const previous = outputSequences.get(presentationId)
-        if (previous === undefined || sequence > previous) {
-          outputSequences.set(presentationId, sequence)
-        }
+      const record = cards.get(presentationId)?.record()
+      const existingOutputState = outputStates.get(presentationId)
+      if (
+        record?.kind === 'command' &&
+        record.status !== 'running' &&
+        existingOutputState === undefined
+      ) {
+        // Process lifecycle can become final before the PTY reader drains its
+        // last chunks. Do not recreate a released buffer for a collapsed final
+        // card, but keep feeding an already-mounted/expanded buffer so those
+        // trailing bytes remain visible until the subscriber detaches.
+        markActivity(presentationId)
+        return
       }
+      const state = existingOutputState ?? outputState(presentationId, invocationId)
+      state.appendLive(
+        sequence,
+        text,
+        displayState,
+        displayReason,
+      )
       markActivity(presentationId)
     },
-    lastLiveOutputSequence: (presentationId) => outputSequences.get(presentationId),
+    completeLiveOutput: (presentationId, displayState, displayReason) => {
+      outputStates.get(presentationId)?.markComplete(displayState, displayReason)
+    },
+    outputState,
+    markOutputRecoveryNeeded: () => {
+      for (const state of outputStates.values()) state.markRecoveryNeeded()
+    },
+    lastLiveOutputSequence: (presentationId) =>
+      outputStates.get(presentationId)?.buffer.lastRetainedSequence(),
+    commandExpanded: (presentationId) => {
+      const slot = expansionSlot(presentationId)
+      return () => slot.override() ?? commandExpansionDefault()
+    },
+    toggleCommandExpansion: (presentationId) => {
+      const slot = expansionSlot(presentationId)
+      slot.setOverride(!(slot.override() ?? commandExpansionDefault()))
+    },
+    setCommandExpansionDefault: (expanded) => {
+      if (commandExpansionDefault() === expanded) return
+      setCommandExpansionDefaultSignal(expanded)
+      for (const slot of commandExpansion.values()) slot.setOverride(undefined)
+    },
     setFollowing,
     returnToLive: () => setFollowing(true),
     loadEarlier,
     dispose: () => {
       disposed = true
       cards.clear()
-      outputSequences.clear()
+      outputStates.clear()
+      commandExpansion.clear()
       unseenIds.clear()
       setOrderedIds([])
       setUnseenCount(0)

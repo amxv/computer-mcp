@@ -127,6 +127,10 @@ fn build_router(capability: &str, state: Arc<LiveboardState>, security: Security
             get(proxy_timeline_checkpoints),
         )
         .route("/api/invocations/{id}", get(proxy_invocation))
+        .route(
+            "/api/invocations/{id}/output-metadata",
+            get(proxy_output_metadata),
+        )
         .route("/api/invocations/{id}/output", get(proxy_output))
         .route("/api/events", get(proxy_events))
         .with_state(state)
@@ -256,6 +260,19 @@ async fn proxy_output(
     proxy_observer(
         &state,
         &format!("v1/invocations/{id}/output"),
+        query.as_deref(),
+    )
+    .await
+}
+
+async fn proxy_output_metadata(
+    State(state): State<Arc<LiveboardState>>,
+    AxumPath(id): AxumPath<i64>,
+    RawQuery(query): RawQuery,
+) -> Response {
+    proxy_observer(
+        &state,
+        &format!("v1/invocations/{id}/output-metadata"),
         query.as_deref(),
     )
     .await

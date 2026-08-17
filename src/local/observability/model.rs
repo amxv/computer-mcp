@@ -82,6 +82,14 @@ pub(crate) struct ApiInvocationDetail {
     pub output: HistoryOutputMetadata,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct ApiOutputMetadataDocument {
+    pub schema_version: u32,
+    pub runtime_id: String,
+    pub invocation_id: i64,
+    pub output: HistoryOutputMetadata,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) struct ApiLogicalInvocation {
     pub id: i64,

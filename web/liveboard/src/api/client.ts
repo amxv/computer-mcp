@@ -146,6 +146,95 @@ export interface ApiTimelineDetail {
   record: PresentationRecord
 }
 
+export interface OutputMetadata {
+  available: boolean
+  chunk_count: number
+  size_bytes: number
+  capture_state: string
+  capture_reason: string | null
+  first_cursor: number | null
+  last_cursor: number | null
+}
+
+export interface ApiOutputMetadataDocument {
+  schema_version: number
+  runtime_id: string
+  invocation_id: number
+  output: OutputMetadata
+}
+
+export interface OutputChunk {
+  sequence: number
+  observed_at_ms: number
+  text: string
+}
+
+export interface ApiOutputPage {
+  schema_version: number
+  runtime_id: string
+  invocation_id: number
+  view: 'raw' | 'display'
+  chunks: OutputChunk[]
+  next_cursor: number | null
+  display_state?: string
+  display_reason?: string
+}
+
+export interface TimelineCheckpoint {
+  invocation_id: number
+  checkpoint_kind: string
+  agent_id: string | null
+  started_at_ms: number
+  completed_at_ms: number | null
+  status: string
+  cross_agent: boolean | null
+  evidence_state: string
+  capture_state: string
+}
+
+export interface ApiTimelineCheckpointPage {
+  schema_version: number
+  presentation_version: number
+  runtime_id: string
+  presentation_id: string
+  checkpoints: TimelineCheckpoint[]
+  has_more: boolean
+  next_cursor: string | null
+}
+
+export interface ApiLogicalInvocation {
+  id: number
+  correlation_id: string
+  agent_id: string | null
+  provider_kind: string | null
+  tool_name: string
+  arguments: unknown
+  declared_workdir_exact: string | null
+  declared_workdir_normalized: string | null
+  is_new_workdir: boolean
+  started_at_ms: number
+  completed_at_ms: number | null
+  duration_ms: number | null
+  outcome_kind: string | null
+  result: unknown | null
+  error: string | null
+  evidence_state: string
+  evidence_reason: string | null
+  capture_state: string
+  capture_reason: string | null
+  target_session_handle: string | null
+  target_created_by_agent_id: string | null
+  cross_agent: boolean | null
+}
+
+export interface ApiInvocationDetail {
+  schema_version: number
+  presentation_version: number
+  runtime_id: string
+  invocation: ApiLogicalInvocation
+  output: OutputMetadata
+}
+
 export interface HistoryLiveEvent {
   schema_version: number
   runtime_id: string
@@ -284,6 +373,86 @@ export async function fetchTimelineDetail(
     `api/timeline/${encodeURIComponent(presentationId)}`,
   )
   validateTimelineDetail(detail, runtimeId)
+  return detail
+}
+
+export async function fetchOutputMetadata(
+  invocationId: number,
+  runtimeId: string,
+): Promise<ApiOutputMetadataDocument> {
+  const document = await fetchJson<ApiOutputMetadataDocument>(
+    `api/invocations/${invocationId}/output-metadata`,
+  )
+  if (
+    document.schema_version !== OBSERVER_API_VERSION ||
+    document.runtime_id !== runtimeId ||
+    document.invocation_id !== invocationId
+  ) {
+    throw new Error('Local output metadata belongs to an incompatible or changed runtime')
+  }
+  return document
+}
+
+export async function fetchOutputPage(
+  invocationId: number,
+  input: { cursor: number; limit?: number; view: 'raw' | 'display' },
+  runtimeId: string,
+): Promise<ApiOutputPage> {
+  const params = new URLSearchParams({
+    cursor: String(input.cursor),
+    view: input.view,
+  })
+  if (input.limit !== undefined) params.set('limit', String(input.limit))
+  const page = await fetchJson<ApiOutputPage>(
+    `api/invocations/${invocationId}/output?${params.toString()}`,
+  )
+  if (
+    page.schema_version !== OBSERVER_API_VERSION ||
+    page.runtime_id !== runtimeId ||
+    page.invocation_id !== invocationId ||
+    page.view !== input.view
+  ) {
+    throw new Error('Local output page belongs to an incompatible or changed runtime')
+  }
+  return page
+}
+
+export async function fetchTimelineCheckpoints(
+  presentationId: string,
+  input: { cursor?: string; limit?: number },
+  runtimeId: string,
+): Promise<ApiTimelineCheckpointPage> {
+  const params = new URLSearchParams()
+  if (input.cursor) params.set('cursor', input.cursor)
+  if (input.limit !== undefined) params.set('limit', String(input.limit))
+  const suffix = params.size > 0 ? `?${params.toString()}` : ''
+  const page = await fetchJson<ApiTimelineCheckpointPage>(
+    `api/timeline/${encodeURIComponent(presentationId)}/checkpoints${suffix}`,
+  )
+  if (
+    page.schema_version !== OBSERVER_API_VERSION ||
+    page.presentation_version !== PRESENTATION_VERSION ||
+    page.runtime_id !== runtimeId ||
+    page.presentation_id !== presentationId
+  ) {
+    throw new Error('Local checkpoint page belongs to an incompatible or changed runtime')
+  }
+  return page
+}
+
+export async function fetchInvocationDetail(
+  invocationId: number,
+  runtimeId: string,
+): Promise<ApiInvocationDetail> {
+  const detail = await fetchJson<ApiInvocationDetail>(`api/invocations/${invocationId}`)
+  if (
+    detail.schema_version !== OBSERVER_API_VERSION ||
+    detail.presentation_version !== PRESENTATION_VERSION ||
+    detail.runtime_id !== runtimeId ||
+    detail.invocation.id !== invocationId
+  ) {
+    throw new Error('Local invocation detail belongs to an incompatible or changed runtime')
+  }
   return detail
 }
 

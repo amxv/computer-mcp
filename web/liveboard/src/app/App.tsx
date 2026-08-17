@@ -72,7 +72,12 @@ function LiveboardWorkspace(props: {
         onPatch={persistPreferences}
         onVisibleAgentsChange={runtime.setVisibleAgentIds}
         renderTimeline={(agentId) => (
-          <AgentTimeline controller={runtime.controllerFor(agentId)} />
+          <AgentTimeline
+            controller={runtime.controllerFor(agentId)}
+            runtimeId={runtime.runtimeId()}
+            nowMs={now()}
+            commandOutputsExpanded={preferences().command_outputs_expanded}
+          />
         )}
       />
     </div>

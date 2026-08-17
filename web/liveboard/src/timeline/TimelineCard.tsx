@@ -1,8 +1,25 @@
 import { For, Match, Show, Switch } from 'solid-js'
 
 import type { PresentationRecord } from '../api/client'
+import { CommandCard } from '../command/CommandCard'
+import type { AgentStreamController } from '../streams/AgentStreamController'
 
-export function TimelineCard(props: { record: PresentationRecord }) {
+export function TimelineCard(props: {
+  record: PresentationRecord
+  controller: AgentStreamController
+  runtimeId: string
+  nowMs: number
+}) {
+  if (props.record.kind === 'command') {
+    return (
+      <CommandCard
+        record={props.record}
+        controller={props.controller}
+        runtimeId={props.runtimeId}
+        nowMs={props.nowMs}
+      />
+    )
+  }
   return (
     <article
       class="timeline-card"
@@ -10,29 +27,6 @@ export function TimelineCard(props: { record: PresentationRecord }) {
       data-presentation-id={props.record.presentation_id}
     >
       <Switch>
-        <Match when={props.record.kind === 'command'}>
-          {(() => {
-            const record = props.record.kind === 'command' ? props.record : undefined
-            if (!record) return null
-            return (
-              <>
-                <div class="timeline-card-heading">
-                  <span class={`card-status card-status-${record.status}`} aria-hidden="true" />
-                  <code class="command-preview">$ {record.command}</code>
-                </div>
-                <div class="timeline-card-meta">
-                  <span>{record.status}</span>
-                  <Show when={record.duration_ms !== null}>
-                    <span>{Math.max(0, Math.round((record.duration_ms ?? 0) / 1000))}s</span>
-                  </Show>
-                  <Show when={record.polls && record.polls.count > 0}>
-                    <span>Polled {record.polls?.count}×</span>
-                  </Show>
-                </div>
-              </>
-            )
-          })()}
-        </Match>
         <Match when={props.record.kind === 'file_changes'}>
           {(() => {
             const record = props.record.kind === 'file_changes' ? props.record : undefined
@@ -62,18 +56,40 @@ export function TimelineCard(props: { record: PresentationRecord }) {
             const record = props.record.kind === 'stdin' ? props.record : undefined
             if (!record) return null
             return (
-              <div class="timeline-card-heading">
-                <span class="card-kind">stdin</span>
-                <code class="interaction-preview">{record.chars || '(empty input)'}</code>
-              </div>
+              <>
+                <div class="timeline-card-heading">
+                  <span class="card-kind">stdin</span>
+                  <code class="interaction-preview">{record.chars || '(empty input)'}</code>
+                </div>
+                <div class="timeline-card-meta">
+                  <span>{record.result_status ?? 'sent'}</span>
+                  <Show when={record.cross_agent && record.creator_agent_id}>
+                    <span>targets Agent {record.creator_agent_id}</span>
+                  </Show>
+                </div>
+              </>
             )
           })()}
         </Match>
         <Match when={props.record.kind === 'kill'}>
-          <div class="timeline-card-heading">
-            <span class="card-kind card-kind-danger">kill</span>
-            <span>Process termination requested</span>
-          </div>
+          {(() => {
+            const record = props.record.kind === 'kill' ? props.record : undefined
+            if (!record) return null
+            return (
+              <>
+                <div class="timeline-card-heading">
+                  <span class="card-kind card-kind-danger">kill</span>
+                  <span>Process termination requested</span>
+                </div>
+                <div class="timeline-card-meta">
+                  <span>{record.result_status ?? 'requested'}</span>
+                  <Show when={record.cross_agent && record.creator_agent_id}>
+                    <span>targets Agent {record.creator_agent_id}</span>
+                  </Show>
+                </div>
+              </>
+            )
+          })()}
         </Match>
         <Match when={props.record.kind === 'poll_aggregate'}>
           {(() => {

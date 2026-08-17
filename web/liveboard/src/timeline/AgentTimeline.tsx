@@ -7,7 +7,12 @@ import { TimelineCard } from './TimelineCard'
 const END_THRESHOLD_PX = 40
 const HISTORY_TRIGGER_PX = 72
 
-export function AgentTimeline(props: { controller: AgentStreamController }) {
+export function AgentTimeline(props: {
+  controller: AgentStreamController
+  runtimeId?: string
+  nowMs?: number
+  commandOutputsExpanded?: boolean
+}) {
   let scrollElement: HTMLDivElement | undefined
   let userScrollIntentUntil = 0
   let lastMeasuredTotalSize = 0
@@ -63,6 +68,10 @@ export function AgentTimeline(props: { controller: AgentStreamController }) {
 
   onCleanup(() => {
     if (followResizeFrame !== undefined) cancelAnimationFrame(followResizeFrame)
+  })
+
+  createEffect(() => {
+    props.controller.setCommandExpansionDefault(props.commandOutputsExpanded ?? false)
   })
 
   const scrollToLiveEnd = () => {
@@ -176,7 +185,12 @@ export function AgentTimeline(props: { controller: AgentStreamController }) {
                       class="virtual-timeline-item"
                       style={{ transform: `translateY(${item.start}px)` }}
                     >
-                      <TimelineCard record={value()} />
+                      <TimelineCard
+                        record={value()}
+                        controller={props.controller}
+                        runtimeId={props.runtimeId ?? 'runtime-test'}
+                        nowMs={props.nowMs ?? Date.now()}
+                      />
                     </div>
                   )}
                 </Show>

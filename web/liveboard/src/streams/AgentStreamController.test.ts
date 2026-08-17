@@ -54,12 +54,22 @@ function page(
   }
 }
 
+const outputLoaders = {
+  loadOutputMetadata: async () => {
+    throw new Error('output metadata not expected in this controller test')
+  },
+  loadDisplayOutputPage: async () => {
+    throw new Error('output page not expected in this controller test')
+  },
+}
+
 describe('AgentStreamController', () => {
   it('orders by stable presentation identity and updates one card without duplicating it', () => {
     const controller = createAgentStreamController({
       agentId: 'a111',
       attachWatermarkMs: 1_000,
       loadHistoryPage: async () => page([], false, null),
+      ...outputLoaders,
     })
 
     controller.upsert(command('inv-3', 300))
@@ -85,13 +95,24 @@ describe('AgentStreamController', () => {
       agentId: 'a111',
       attachWatermarkMs: 1_000,
       loadHistoryPage: async () => page([], false, null),
+      ...outputLoaders,
     })
     controller.upsert(command('inv-1', 100), false)
     controller.setFollowing(false)
 
     controller.upsert(command('inv-1', 100, { duration_ms: 20 }), true)
-    controller.noteLiveOutput('inv-1', 4)
-    controller.noteLiveOutput('inv-1', 5)
+    controller.appendLiveOutput({
+      presentationId: 'inv-1',
+      invocationId: 1,
+      sequence: 4,
+      text: 'a',
+    })
+    controller.appendLiveOutput({
+      presentationId: 'inv-1',
+      invocationId: 1,
+      sequence: 5,
+      text: 'b',
+    })
     expect(controller.unseenCount()).toBe(1)
     expect(controller.lastLiveOutputSequence('inv-1')).toBe(5)
 
@@ -115,6 +136,7 @@ describe('AgentStreamController', () => {
         calls.push({ beforeMs: input.beforeMs, cursor: input.cursor })
         return responses[calls.length - 1]!
       },
+      ...outputLoaders,
     })
     controller.mergeRecovery([command('inv-2', 200), command('inv-3', 300)])
     expect(controller.historyActivated()).toBe(false)
@@ -137,11 +159,113 @@ describe('AgentStreamController', () => {
       agentId: 'a111',
       attachWatermarkMs: 1_000,
       loadHistoryPage: async () => page([], false, null),
+      ...outputLoaders,
     })
     controller.upsert(command('inv-1', 100))
     controller.dispose()
     expect(controller.orderedIds()).toEqual([])
     expect(controller.record('inv-1')).toBeUndefined()
     expect(controller.upsert(command('inv-2', 200))).toBe(false)
+  })
+
+  it('keeps command expansion overrides local until the next global command action', () => {
+    const controller = createAgentStreamController({
+      agentId: 'a111',
+      attachWatermarkMs: 1_000,
+      loadHistoryPage: async () => page([], false, null),
+      ...outputLoaders,
+    })
+    const first = controller.commandExpanded('inv-1')
+    const second = controller.commandExpanded('inv-2')
+    expect(first()).toBe(false)
+    expect(second()).toBe(false)
+
+    controller.toggleCommandExpansion('inv-1')
+    expect(first()).toBe(true)
+    expect(second()).toBe(false)
+
+    controller.setCommandExpansionDefault(true)
+    expect(first()).toBe(true)
+    expect(second()).toBe(true)
+    controller.toggleCommandExpansion('inv-1')
+    expect(first()).toBe(false)
+    expect(second()).toBe(true)
+
+    controller.setCommandExpansionDefault(false)
+    expect(first()).toBe(false)
+    expect(second()).toBe(false)
+  })
+
+  it('releases a finalized command live buffer while retaining canonical card truth', () => {
+    const controller = createAgentStreamController({
+      agentId: 'a111',
+      attachWatermarkMs: 1_000,
+      loadHistoryPage: async () => page([], false, null),
+      ...outputLoaders,
+    })
+    controller.upsert(command('inv-1', 100), false)
+    controller.appendLiveOutput({
+      presentationId: 'inv-1',
+      invocationId: 1,
+      sequence: 9,
+      text: 'tail',
+    })
+    expect(controller.lastLiveOutputSequence('inv-1')).toBe(9)
+
+    controller.upsert(
+      command('inv-1', 100, {
+        kind: 'command',
+        status: 'exited',
+        exit_code: 0,
+      }),
+      false,
+    )
+    expect(controller.lastLiveOutputSequence('inv-1')).toBeUndefined()
+    controller.appendLiveOutput({
+      presentationId: 'inv-1',
+      invocationId: 1,
+      sequence: 10,
+      text: 'late collapsed tail',
+    })
+    expect(controller.lastLiveOutputSequence('inv-1')).toBeUndefined()
+    expect(controller.record('inv-1')?.presentation_id).toBe('inv-1')
+  })
+
+  it('keeps trailing PTY bytes visible when process finalization races an expanded reader tail', () => {
+    const controller = createAgentStreamController({
+      agentId: 'a111',
+      attachWatermarkMs: 1_000,
+      loadHistoryPage: async () => page([], false, null),
+      ...outputLoaders,
+    })
+    controller.upsert(command('inv-1', 100), false)
+    const state = controller.outputState('inv-1', 1)
+    const unsubscribe = state.subscribe(() => undefined)
+    controller.appendLiveOutput({
+      presentationId: 'inv-1',
+      invocationId: 1,
+      sequence: 1,
+      text: 'before exit\n',
+    })
+
+    controller.upsert(
+      command('inv-1', 100, {
+        kind: 'command',
+        status: 'exited',
+        exit_code: 0,
+      }),
+      false,
+    )
+    controller.appendLiveOutput({
+      presentationId: 'inv-1',
+      invocationId: 1,
+      sequence: 2,
+      text: 'after exit\n',
+    })
+    expect(state.materialize()).toBe('before exit\nafter exit\n')
+    expect(controller.lastLiveOutputSequence('inv-1')).toBe(2)
+
+    unsubscribe()
+    expect(controller.lastLiveOutputSequence('inv-1')).toBeUndefined()
   })
 })
