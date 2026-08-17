@@ -8,3 +8,5 @@ node_modules/
 .astro/
 dist/
 .wrangler/
+.vercel
+.env*.local

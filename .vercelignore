@@ -1,0 +1,8 @@
+node_modules/
+target/
+dist/
+.astro/
+.wrangler/
+.vercel/
+.env*.local
+tmp/
