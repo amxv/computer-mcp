@@ -11,13 +11,9 @@ import type {
   PresentationFileChange,
   PresentationRecord,
 } from '../api/client'
+import { openFileInEditor } from '../api/client'
 import type { AgentStreamController } from '../streams/AgentStreamController'
-import {
-  CheckIcon,
-  ChevronDownIcon,
-  ChevronRightIcon,
-  CopyIcon,
-} from '../ui/icons'
+import { CheckIcon, CopyIcon } from '../ui/icons'
 import type { DiffHighlighter } from './HighlightWorkerClient'
 import { resolveDiffSyntaxLanguage } from './language'
 
@@ -41,14 +37,14 @@ function shortPath(path: string) {
   return path.split('/').filter(Boolean).pop() ?? path
 }
 
-function diffPrefix(kind: string) {
+function diffCopyPrefix(kind: string) {
   if (kind === 'add') return '+'
   if (kind === 'remove') return '-'
   return ' '
 }
 
 function copyText(change: PresentationFileChange) {
-  return change.lines.map((line) => `${diffPrefix(line.kind)}${line.text}`).join('\n')
+  return change.lines.map((line) => `${diffCopyPrefix(line.kind)}${line.text}`).join('\n')
 }
 
 function hashPart(hash: number, value: string) {
@@ -155,9 +151,6 @@ function DiffBody(props: {
             <span class="diff-gutter diff-gutter-new" aria-label="New line">
               {line.new_line ?? ''}
             </span>
-            <span class="diff-prefix" aria-hidden="true">
-              {diffPrefix(line.kind)}
-            </span>
             <DiffSource line={line} html={highlighted().get(index())} />
           </div>
         )}
@@ -181,6 +174,7 @@ function FileChangeItem(props: {
   const diffKey = () => `${props.record.presentation_id}:file-change:${props.index}`
   const expanded = props.controller.diffExpanded(diffKey())
   const [copied, setCopied] = createSignal(false)
+  const [openError, setOpenError] = createSignal<string>()
   let copyFeedbackTimeout: ReturnType<typeof setTimeout> | undefined
 
   onCleanup(() => {
@@ -198,6 +192,20 @@ function FileChangeItem(props: {
       copyFeedbackTimeout = undefined
     }, 2_000)
   }
+  const canExpand = () => props.change.lines.length > 0
+  const canOpenFile = () => props.change.operation !== 'deleted'
+  const openFile = async () => {
+    setOpenError(undefined)
+    try {
+      await openFileInEditor(props.change.path)
+    } catch (error) {
+      setOpenError(error instanceof Error ? error.message : String(error))
+    }
+  }
+  const toggleExpanded = () => {
+    if (!canExpand()) return
+    props.controller.toggleDiffExpansion(diffKey())
+  }
 
   return (
     <section
@@ -205,19 +213,15 @@ function FileChangeItem(props: {
       classList={{ 'file-change-card-degraded': props.record.evidence.degraded }}
       data-diff-key={diffKey()}
     >
-      <div class="file-change-header">
-        <button
-          type="button"
-          class="diff-expand-button"
-          aria-expanded={expanded()}
-          aria-label={`${expanded() ? 'Collapse' : 'Expand'} diff for ${props.change.path}`}
-          onClick={() => props.controller.toggleDiffExpansion(diffKey())}
-        >
-          <span class="diff-chevron" aria-hidden="true">
-            {expanded() ? <ChevronDownIcon /> : <ChevronRightIcon />}
-          </span>
-          <span class="diff-operation">{operationLabel(props.change.operation)}</span>
-        </button>
+      <div
+        class="file-change-header"
+        classList={{ 'file-change-header-expandable': canExpand() }}
+        onClick={(event) => {
+          if ((event.target as HTMLElement).closest('button')) return
+          toggleExpanded()
+        }}
+      >
+        <span class="diff-operation">{operationLabel(props.change.operation)}</span>
         <div class="diff-path" title={props.change.old_path ? `${props.change.old_path} → ${props.change.path}` : props.change.path}>
           <Show when={props.change.old_path}>
             {(oldPath) => (
@@ -227,7 +231,20 @@ function FileChangeItem(props: {
               </>
             )}
           </Show>
-          <span class="diff-current-path">{shortPath(props.change.path)}</span>
+          <Show
+            when={canOpenFile()}
+            fallback={<span class="diff-current-path">{shortPath(props.change.path)}</span>}
+          >
+            <button
+              type="button"
+              class="diff-current-path diff-current-path-button"
+              aria-label={`Open ${props.change.path} in configured editor`}
+              title={openError() ?? `Open ${props.change.path} in configured editor`}
+              onClick={() => void openFile()}
+            >
+              {shortPath(props.change.path)}
+            </button>
+          </Show>
         </div>
         <div
           class="diff-counts"
@@ -247,6 +264,9 @@ function FileChangeItem(props: {
           {copied() ? <CheckIcon /> : <CopyIcon />}
         </button>
       </div>
+      <Show when={openError()}>
+        {(message) => <div class="diff-open-error">{message()}</div>}
+      </Show>
       <Show when={props.change.write_mode}>
         {(mode) => <div class="diff-write-mode">{mode()}</div>}
       </Show>

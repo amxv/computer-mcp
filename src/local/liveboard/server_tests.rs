@@ -168,10 +168,12 @@ async fn host_serves_embedded_assets_and_only_allowlisted_same_origin_resources(
     assert_eq!(prefs["max_visible_agents"], 4);
     assert_eq!(prefs["command_outputs_expanded"], false);
     assert_eq!(prefs["diffs_expanded"], true);
+    assert_eq!(prefs["show_raw_button"], false);
+    assert_eq!(prefs["editor_command"], "zed");
 
     let patched = client
         .patch(capability_url(host.url(), "preferences"))
-        .json(&json!({"theme":"dark","max_visible_agents":5}))
+        .json(&json!({"theme":"dark","max_visible_agents":5,"show_raw_button":true,"editor_command":"/usr/bin/true"}))
         .send()
         .await
         .unwrap();
@@ -179,7 +181,26 @@ async fn host_serves_embedded_assets_and_only_allowlisted_same_origin_resources(
     let patched: Value = patched.json().await.unwrap();
     assert_eq!(patched["theme"], "dark");
     assert_eq!(patched["max_visible_agents"], 5);
+    assert_eq!(patched["show_raw_button"], true);
+    assert_eq!(patched["editor_command"], "/usr/bin/true");
     assert!(!patched.to_string().contains(BEARER));
+
+    let open_path = dir.path().join("open-me.txt");
+    std::fs::write(&open_path, "open me").unwrap();
+    let opened = client
+        .post(capability_url(host.url(), "api/open-file"))
+        .json(&json!({"path": open_path}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(opened.status(), StatusCode::NO_CONTENT);
+    let missing = client
+        .post(capability_url(host.url(), "api/open-file"))
+        .json(&json!({"path": dir.path().join("missing.txt")}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
 
     let unknown_post = client
         .post(capability_url(host.url(), "api/status"))

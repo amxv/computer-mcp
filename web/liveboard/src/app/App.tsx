@@ -83,6 +83,7 @@ function LiveboardWorkspace(props: {
             nowMs={now()}
             commandOutputsExpanded={preferences().command_outputs_expanded}
             diffsExpanded={preferences().diffs_expanded}
+            showRawButton={preferences().show_raw_button}
             diffHighlighter={props.diffHighlighter}
           />
         )}

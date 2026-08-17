@@ -10,15 +10,12 @@ import {
 
 import type { ApiAgent } from '../api/client'
 import {
-  ChevronLeftIcon,
-  ChevronRightIcon,
-  ChevronDownIcon,
+  ChevronUpIcon,
   CheckIcon,
   CloseIcon,
   EditIcon,
   FolderIcon,
   GripIcon,
-  HideIcon,
 } from '../ui/icons'
 import {
   agentActivity,
@@ -30,11 +27,8 @@ interface AgentColumnProps {
   alias?: string
   nowMs: number
   weight: number
-  index: number
-  count: number
   onHide: () => void
   onAliasSave: (alias: string) => void
-  onMove: (direction: -1 | 1) => void
   onReorderPointerDown: (event: PointerEvent) => void
   onResizePointerDown?: (event: PointerEvent) => void
   children?: JSX.Element
@@ -160,26 +154,18 @@ export function AgentColumn(props: AgentColumnProps) {
             </Show>
           </div>
           <div class="agent-header-actions">
-            <button
-              type="button"
-              class="icon-button"
-              aria-label={`Move Agent ${props.agent.id} left`}
-              title="Move left"
-              disabled={props.index === 0}
-              onClick={() => props.onMove(-1)}
-            >
-              <ChevronLeftIcon />
-            </button>
-            <button
-              type="button"
-              class="icon-button"
-              aria-label={`Move Agent ${props.agent.id} right`}
-              title="Move right"
-              disabled={props.index === props.count - 1}
-              onClick={() => props.onMove(1)}
-            >
-              <ChevronRightIcon />
-            </button>
+            <Show when={workdirsOverflow()}>
+              <button
+                type="button"
+                class="icon-button agent-header-control agent-workdirs-toggle"
+                aria-label={`${workdirsExpanded() ? 'Collapse' : 'Expand'} workdirs for Agent ${props.agent.id}`}
+                aria-expanded={workdirsExpanded()}
+                title={workdirsExpanded() ? 'Collapse workdirs' : 'Show all workdirs'}
+                onClick={() => setWorkdirsExpanded((expanded) => !expanded)}
+              >
+                {workdirsExpanded() ? <ChevronUpIcon /> : <FolderIcon />}
+              </button>
+            </Show>
             <button
               type="button"
               class="icon-button agent-header-control"
@@ -187,7 +173,7 @@ export function AgentColumn(props: AgentColumnProps) {
               title="Remove from board"
               onClick={props.onHide}
             >
-              <HideIcon />
+              <CloseIcon />
             </button>
           </div>
         </div>
@@ -218,18 +204,6 @@ export function AgentColumn(props: AgentColumnProps) {
                 )}
               </For>
             </span>
-          </Show>
-          <Show when={workdirsOverflow()}>
-            <button
-              type="button"
-              class="agent-workdirs-toggle"
-              aria-label={`${workdirsExpanded() ? 'Collapse' : 'Expand'} workdirs for Agent ${props.agent.id}`}
-              aria-expanded={workdirsExpanded()}
-              title={workdirsExpanded() ? 'Collapse workdirs' : 'Show all workdirs'}
-              onClick={() => setWorkdirsExpanded((expanded) => !expanded)}
-            >
-              {workdirsExpanded() ? <ChevronDownIcon /> : <FolderIcon />}
-            </button>
           </Show>
         </div>
         <Show when={workdirsExpanded() && workdirsOverflow()}>

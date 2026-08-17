@@ -16,6 +16,7 @@ import type {
 import type { RuntimeConnectionState } from '../streams/runtime'
 import { AgentColumn } from '../agents/AgentColumn'
 import { AgentDrawer } from '../agents/AgentDrawer'
+import { SettingsDrawer } from '../ui/SettingsDrawer'
 import { Toolbar } from '../ui/Toolbar'
 import {
   addAgentToBoard,
@@ -45,6 +46,7 @@ interface BoardProps {
 
 export function Board(props: BoardProps) {
   const [drawerOpen, setDrawerOpen] = createSignal(false)
+  const [settingsOpen, setSettingsOpen] = createSignal(false)
   const [locallyHiddenIds, setLocallyHiddenIds] = createSignal(
     new Set(
       Object.entries(props.preferences.agents)
@@ -151,6 +153,16 @@ export function Board(props: BoardProps) {
         result.hidden.map((agentId) => [agentId, { visible: false }]),
       ),
     })
+  }
+
+  const openAgents = () => {
+    setSettingsOpen(false)
+    setDrawerOpen(true)
+  }
+
+  const openSettings = () => {
+    setDrawerOpen(false)
+    setSettingsOpen(true)
   }
 
   const beginReorder = (agentId: string, event: PointerEvent) => {
@@ -286,20 +298,14 @@ export function Board(props: BoardProps) {
   return (
     <>
       <Toolbar
-        preferences={props.preferences}
         currentAgentCount={agents().length}
         activeProcessCount={activeProcessCount()}
         saving={props.saving}
         error={props.error}
         connectionState={props.connectionState}
         connectionError={props.connectionError}
-        onOpenAgents={() => setDrawerOpen(true)}
-        onMaximumChange={setMaximum}
-        onThemeChange={(theme) => props.onPatch({ theme })}
-        onCommandExpansionChange={(command_outputs_expanded) =>
-          props.onPatch({ command_outputs_expanded })
-        }
-        onDiffExpansionChange={(diffs_expanded) => props.onPatch({ diffs_expanded })}
+        onOpenAgents={openAgents}
+        onOpenSettings={openSettings}
       />
       <div class="board-wrap">
         <div ref={boardElement} class="agent-board" aria-label="Agent board">
@@ -308,7 +314,7 @@ export function Board(props: BoardProps) {
             fallback={
               <section class="empty-board">
                 <p>Waiting for the first Agent activity in this Local runtime.</p>
-                <button type="button" class="text-button" onClick={() => setDrawerOpen(true)}>
+                <button type="button" class="text-button" onClick={openAgents}>
                   Open All Agents
                 </button>
               </section>
@@ -326,20 +332,9 @@ export function Board(props: BoardProps) {
                         alias={props.preferences.agents[agentId]?.alias}
                         nowMs={props.nowMs}
                         weight={weights()[agentId] ?? 1}
-                        index={index()}
-                        count={visibleIds().length}
                         onHide={() => hideAgent(agentId)}
                         onAliasSave={(alias) =>
                           props.onPatch({ agents: { [agentId]: { alias } } })
-                        }
-                        onMove={(direction) =>
-                          persistOrder(
-                            moveAgent(
-                              visibleIds(),
-                              agentId,
-                              index() + direction,
-                            ),
-                          )
                         }
                         onReorderPointerDown={(event) => beginReorder(agentId, event)}
                         onResizePointerDown={
@@ -366,6 +361,13 @@ export function Board(props: BoardProps) {
         nowMs={props.nowMs}
         onClose={() => setDrawerOpen(false)}
         onAdd={addAgent}
+      />
+      <SettingsDrawer
+        open={settingsOpen()}
+        preferences={props.preferences}
+        onClose={() => setSettingsOpen(false)}
+        onPatch={props.onPatch}
+        onMaximumChange={setMaximum}
       />
     </>
   )

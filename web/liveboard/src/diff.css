@@ -26,7 +26,10 @@
   padding: 4px 6px;
 }
 
-.diff-expand-button,
+.file-change-header-expandable {
+  cursor: pointer;
+}
+
 .diff-copy-button {
   cursor: pointer;
   border: 0;
@@ -35,44 +38,13 @@
   color: var(--muted);
 }
 
-.diff-expand-button {
-  display: inline-flex;
-  min-width: 0;
-  align-items: center;
-  gap: 6px;
-  padding: 0;
-}
-
 .diff-copy-button:hover:not(:disabled) {
   background: var(--surface-hover);
   color: var(--text);
 }
 
-.diff-chevron {
-  display: inline-grid;
-  width: 26px;
-  height: 26px;
-  flex: 0 0 26px;
-  place-items: center;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--muted);
-}
-
-.diff-chevron svg {
-  display: block;
-  width: 14px;
-  height: 14px;
-}
-
-.diff-expand-button:hover .diff-chevron {
-  border-color: var(--border-strong);
-  background: var(--surface-hover);
-  color: var(--text);
-}
-
 .diff-operation {
+  padding-left: 7px;
   color: var(--text);
   font-size: 10px;
   font-weight: 620;
@@ -108,9 +80,31 @@
   flex: 1 1 auto;
 }
 
+.diff-current-path-button {
+  cursor: pointer;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  text-align: left;
+}
+
+.diff-current-path-button:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .diff-path-arrow {
   flex: 0 0 auto;
   color: var(--faint);
+}
+
+.diff-open-error {
+  padding: 4px 9px 5px;
+  border-top: 1px solid var(--border);
+  color: var(--danger);
+  font-size: 8.5px;
 }
 
 .diff-counts {
@@ -119,9 +113,10 @@
   align-items: center;
   gap: 5px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 9px;
+  font-size: 10.5px;
   font-variant-numeric: tabular-nums;
   font-weight: 650;
+  letter-spacing: 0.035em;
 }
 
 .diff-count-added {
@@ -134,15 +129,21 @@
 
 .diff-copy-button {
   display: inline-grid;
-  width: 26px;
-  height: 26px;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
   padding: 0;
   place-items: center;
 }
 
 .diff-copy-button svg {
-  width: 14px;
-  height: 14px;
+  width: 11px;
+  height: 11px;
+}
+
+.diff-copy-button .lucide-icon {
+  width: 11px;
+  height: 11px;
 }
 
 .diff-copy-button:disabled {
@@ -169,7 +170,7 @@
 
 .diff-row {
   display: grid;
-  grid-template-columns: 34px 34px 16px minmax(0, 1fr);
+  grid-template-columns: 34px 34px minmax(0, 1fr);
   min-width: 100%;
   width: max-content;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 48%, transparent);
@@ -195,8 +196,7 @@
   background: transparent;
 }
 
-.diff-gutter,
-.diff-prefix {
+.diff-gutter {
   min-height: 22px;
   padding: 4px 5px;
   color: var(--faint);
@@ -210,24 +210,10 @@
   font-variant-numeric: tabular-nums;
 }
 
-.diff-prefix {
-  padding-right: 2px;
-  padding-left: 5px;
-  text-align: center;
-}
-
-.diff-row-add .diff-prefix {
-  color: var(--success);
-}
-
-.diff-row-remove .diff-prefix {
-  color: var(--danger);
-}
-
 .diff-source-code {
   display: block;
   min-width: max-content;
-  padding: 4px 10px 4px 3px;
+  padding: 4px 10px 4px 8px;
   color: inherit;
   font: inherit;
   white-space: pre;

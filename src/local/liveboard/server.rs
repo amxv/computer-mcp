@@ -1,4 +1,6 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
@@ -7,12 +9,12 @@ use axum::extract::{DefaultBodyLimit, Path as AxumPath, RawQuery, Request, State
 use axum::http::{HeaderName, HeaderValue, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use futures_util::TryStreamExt as _;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -133,6 +135,7 @@ fn build_router(capability: &str, state: Arc<LiveboardState>, security: Security
         )
         .route("/api/invocations/{id}/output", get(proxy_output))
         .route("/api/events", get(proxy_events))
+        .route("/api/open-file", post(open_file))
         .with_state(state)
         .layer(DefaultBodyLimit::max(PREFERENCE_BODY_LIMIT));
     Router::new()
@@ -192,6 +195,54 @@ async fn patch_preferences(
         Ok(Err(error)) => internal_error(error),
         Err(error) => internal_error(error),
     }
+}
+
+#[derive(Deserialize)]
+struct OpenFileRequest {
+    path: String,
+}
+
+async fn open_file(
+    State(state): State<Arc<LiveboardState>>,
+    Json(request): Json<OpenFileRequest>,
+) -> Response {
+    let path = PathBuf::from(request.path);
+    if !path.is_absolute() {
+        return error_response(StatusCode::BAD_REQUEST, "file path must be absolute");
+    }
+    match std::fs::metadata(&path) {
+        Ok(metadata) if metadata.is_file() => {}
+        Ok(_) => return error_response(StatusCode::BAD_REQUEST, "path is not a file"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return error_response(StatusCode::NOT_FOUND, "file no longer exists");
+        }
+        Err(error) => return internal_error(error),
+    }
+
+    let store = state.preferences.clone();
+    let editor_command = match tokio::task::spawn_blocking(move || store.load()).await {
+        Ok(Ok(preferences)) => preferences.editor_command,
+        Ok(Err(error)) => return internal_error(error),
+        Err(error) => return internal_error(error),
+    };
+    match launch_editor(editor_command, path) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => error_response(StatusCode::BAD_GATEWAY, error.to_string()),
+    }
+}
+
+fn launch_editor(editor_command: String, path: PathBuf) -> Result<()> {
+    let mut child = Command::new(&editor_command)
+        .arg(&path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .with_context(|| format!("failed to launch editor command `{editor_command}`"))?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
 }
 
 macro_rules! fixed_proxy {

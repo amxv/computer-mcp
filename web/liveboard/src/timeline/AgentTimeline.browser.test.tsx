@@ -330,6 +330,80 @@ describe('independent virtualized Agent timeline', () => {
     expect(controller.orderedIds()[0]).toBe('inv-1')
   })
 
+  it('keeps click ownership on the same tall command after history prepend and repeated resize', async () => {
+    const historyRecords = Array.from({ length: 8 }, (_, index) =>
+      generic(index + 1, 'a111', `older ${index + 1}`),
+    )
+    const controller = createAgentStreamController({
+      agentId: 'a111',
+      attachWatermarkMs: 10_000,
+      loadHistoryPage: async () => page(historyRecords),
+      ...outputLoaders,
+    })
+    const recent = Array.from({ length: 6 }, (_, index) => {
+      const id = 20 + index
+      return {
+        ...(command(id, 'a111') as Extract<PresentationRecord, { kind: 'command' }>),
+        command: Array.from(
+          { length: 18 },
+          (_, line) => `fixture command ${id} line ${line} with enough text to wrap across the card`,
+        ).join('\n'),
+      } satisfies PresentationRecord
+    })
+    controller.mergeRecovery(recent)
+    for (const record of recent) {
+      controller.appendLiveOutput({
+        presentationId: record.presentation_id,
+        invocationId: record.primary_invocation_id,
+        sequence: 1,
+        text: Array.from({ length: 20 }, (_, line) => `output ${record.primary_invocation_id}:${line}\n`).join(''),
+        displayState: 'available',
+      })
+    }
+
+    const container = document.createElement('div')
+    container.style.width = '520px'
+    container.style.height = '700px'
+    document.body.append(container)
+    containers.push(container)
+    disposers.push(render(() => <AgentTimeline controller={controller} />, container))
+    const scroll = container.querySelector<HTMLElement>('[data-agent-timeline="a111"]')!
+    await vi.waitFor(() => expect(scroll.scrollHeight).toBeGreaterThan(scroll.clientHeight))
+
+    await controller.loadEarlier()
+    scroll.scrollTop = scroll.scrollHeight
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+
+    const targetId = recent.at(-1)!.presentation_id
+    for (let iteration = 0; iteration < 8; iteration += 1) {
+      const target = scroll.querySelector<HTMLElement>(
+        `[data-presentation-id="${targetId}"]`,
+      )!
+      expect(target).not.toBeNull()
+      const row = target.closest<HTMLElement>('.virtual-timeline-item')!
+      expect(row.dataset.virtualKey).toBe(targetId)
+      const header = target.querySelector<HTMLElement>('.command-card-header')!
+      const headerBox = header.getBoundingClientRect()
+      const scrollBox = scroll.getBoundingClientRect()
+      const x = headerBox.left + Math.min(180, headerBox.width * 0.45)
+      const y = Math.max(
+        scrollBox.top + 24,
+        Math.min(scrollBox.bottom - 24, headerBox.top + 24),
+      )
+      const hit = document.elementFromPoint(x, y)
+      expect(hit?.closest('[data-presentation-id]')?.getAttribute('data-presentation-id')).toBe(
+        targetId,
+      )
+
+      const before = controller.commandExpanded(targetId)()
+      ;(hit as HTMLElement).click()
+      await vi.waitFor(() => expect(controller.commandExpanded(targetId)()).toBe(!before))
+      expect(
+        row.querySelector('[data-presentation-id]')?.getAttribute('data-presentation-id'),
+      ).toBe(targetId)
+    }
+  })
+
   it('keeps auto-follow independent across two visible Agent columns', async () => {
     const controllerA = createAgentStreamController({
       agentId: 'a111',

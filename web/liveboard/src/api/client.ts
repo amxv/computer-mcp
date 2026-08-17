@@ -256,6 +256,8 @@ export interface LiveboardPreferences {
   max_visible_agents: number
   command_outputs_expanded: boolean
   diffs_expanded: boolean
+  show_raw_button: boolean
+  editor_command: string
   agents: Record<string, LiveboardAgentPreference>
 }
 
@@ -272,7 +274,31 @@ export interface LiveboardPreferencesPatch {
   max_visible_agents?: number
   command_outputs_expanded?: boolean
   diffs_expanded?: boolean
+  show_raw_button?: boolean
+  editor_command?: string
   agents?: Record<string, LiveboardAgentPreference>
+}
+
+export async function openFileInEditor(path: string): Promise<void> {
+  const response = await fetch('api/open-file', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ path }),
+  })
+  if (!response.ok) {
+    let message = `Could not open file (${response.status})`
+    try {
+      const body = (await response.json()) as { error?: string }
+      if (body.error) message = body.error
+    } catch {
+      // Keep the status-only fallback when the response is not JSON.
+    }
+    throw new Error(message)
+  }
 }
 
 export async function fetchJson<T>(path: string): Promise<T> {

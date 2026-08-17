@@ -1,155 +1,80 @@
-import type { JSX } from 'solid-js'
+import agentsSvg from 'lucide-static/icons/users.svg?raw'
+import checkSvg from 'lucide-static/icons/check.svg?raw'
+import chevronDownSvg from 'lucide-static/icons/chevron-down.svg?raw'
+import chevronUpSvg from 'lucide-static/icons/chevron-up.svg?raw'
+import closeSvg from 'lucide-static/icons/x.svg?raw'
+import copySvg from 'lucide-static/icons/copy.svg?raw'
+import editSvg from 'lucide-static/icons/pencil.svg?raw'
+import folderSvg from 'lucide-static/icons/folder.svg?raw'
+import gripSvg from 'lucide-static/icons/grip-vertical.svg?raw'
+import hideSvg from 'lucide-static/icons/minus.svg?raw'
+import cogSvg from 'lucide-static/icons/settings.svg?raw'
+import terminalSvg from 'lucide-static/icons/terminal.svg?raw'
+import userSvg from 'lucide-static/icons/user.svg?raw'
 
-type IconProps = JSX.SvgSVGAttributes<SVGSVGElement>
+function normalizedLucideSvg(svg: string) {
+  return svg.replace('width="24"', 'width="16"').replace('height="24"', 'height="16"')
+}
 
-function IconFrame(props: IconProps & { children: JSX.Element }) {
-  const { children, ...rest } = props
+function RawLucideIcon(props: { svg: string }) {
   return (
-    <svg
-      viewBox="0 0 20 20"
-      width="16"
-      height="16"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="1.5"
-      stroke-linecap="round"
-      stroke-linejoin="round"
+    <span
+      class="lucide-icon"
       aria-hidden="true"
-      {...rest}
-    >
-      {children}
-    </svg>
+      innerHTML={normalizedLucideSvg(props.svg)}
+    />
   )
 }
 
-export function AgentsIcon(props: IconProps) {
-  return (
-    <IconFrame {...props}>
-      <circle cx="7" cy="7" r="2.5" />
-      <path d="M2.8 15c.7-2.5 2.1-3.7 4.2-3.7s3.5 1.2 4.2 3.7" />
-      <path d="M12.2 5.1a2.5 2.5 0 0 1 0 4.8M13.2 11.5c1.9.2 3.1 1.4 3.7 3.5" />
-    </IconFrame>
-  )
+export function AgentsIcon() {
+  return <RawLucideIcon svg={agentsSvg} />
 }
 
-export function CloseIcon(props: IconProps) {
-  return (
-    <IconFrame {...props}>
-      <path d="m5 5 10 10M15 5 5 15" />
-    </IconFrame>
-  )
+
+export function UserIcon() {
+  return <RawLucideIcon svg={userSvg} />
 }
 
-export function EditIcon(props: IconProps) {
-  return (
-    <IconFrame {...props}>
-      <path d="M4 14.8 5 11l7.8-7.8 4 4L9 15l-3.8 1Z" />
-      <path d="m11.5 4.5 4 4" />
-    </IconFrame>
-  )
+export function CloseIcon() {
+  return <RawLucideIcon svg={closeSvg} />
 }
 
-export function GripIcon(props: IconProps) {
-  return (
-    <IconFrame {...props}>
-      <circle cx="7" cy="5" r=".8" fill="currentColor" stroke="none" />
-      <circle cx="13" cy="5" r=".8" fill="currentColor" stroke="none" />
-      <circle cx="7" cy="10" r=".8" fill="currentColor" stroke="none" />
-      <circle cx="13" cy="10" r=".8" fill="currentColor" stroke="none" />
-      <circle cx="7" cy="15" r=".8" fill="currentColor" stroke="none" />
-      <circle cx="13" cy="15" r=".8" fill="currentColor" stroke="none" />
-    </IconFrame>
-  )
+export function EditIcon() {
+  return <RawLucideIcon svg={editSvg} />
 }
 
-export function HideIcon(props: IconProps) {
-  return (
-    <IconFrame {...props}>
-      <path d="M4 10h12" />
-    </IconFrame>
-  )
+export function GripIcon() {
+  return <RawLucideIcon svg={gripSvg} />
 }
 
-export function ChevronLeftIcon(props: IconProps) {
-  return (
-    <IconFrame {...props}>
-      <path d="m12.5 4.5-5 5.5 5 5.5" />
-    </IconFrame>
-  )
+export function HideIcon() {
+  return <RawLucideIcon svg={hideSvg} />
 }
 
-export function ChevronRightIcon(props: IconProps) {
-  return (
-    <IconFrame {...props}>
-      <path d="m7.5 4.5 5 5.5-5 5.5" />
-    </IconFrame>
-  )
+export function ChevronDownIcon() {
+  return <RawLucideIcon svg={chevronDownSvg} />
 }
 
-export function ChevronDownIcon(props: IconProps) {
-  return (
-    <IconFrame {...props}>
-      <path d="m4.5 7.5 5.5 5 5.5-5" />
-    </IconFrame>
-  )
+export function ChevronUpIcon() {
+  return <RawLucideIcon svg={chevronUpSvg} />
 }
 
-export function FolderIcon(props: IconProps) {
-  return (
-    <IconFrame {...props}>
-      <path d="M3 6.5A1.5 1.5 0 0 1 4.5 5H8l1.5 2H15.5A1.5 1.5 0 0 1 17 8.5v6A1.5 1.5 0 0 1 15.5 16h-11A1.5 1.5 0 0 1 3 14.5Z" />
-    </IconFrame>
-  )
+export function FolderIcon() {
+  return <RawLucideIcon svg={folderSvg} />
 }
 
-export function TerminalIcon(props: IconProps) {
-  return (
-    <IconFrame {...props}>
-      <path d="m4 6 4 4-4 4" />
-      <path d="M10 14h6" />
-    </IconFrame>
-  )
+export function TerminalIcon() {
+  return <RawLucideIcon svg={terminalSvg} />
 }
 
-export function CheckIcon(props: IconProps) {
-  return (
-    <IconFrame {...props}>
-      <path d="m4 10 4 4 8-9" />
-    </IconFrame>
-  )
+export function CheckIcon() {
+  return <RawLucideIcon svg={checkSvg} />
 }
 
-export function CopyIcon(props: IconProps) {
-  return (
-    <IconFrame {...props}>
-      <rect x="7" y="7" width="9" height="9" rx="1.5" />
-      <path d="M13 7V5.5A1.5 1.5 0 0 0 11.5 4h-7A1.5 1.5 0 0 0 3 5.5v7A1.5 1.5 0 0 0 4.5 14H7" />
-    </IconFrame>
-  )
+export function CopyIcon() {
+  return <RawLucideIcon svg={copySvg} />
 }
 
-export function SunIcon(props: IconProps) {
-  return (
-    <IconFrame {...props}>
-      <circle cx="10" cy="10" r="3" />
-      <path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.3 4.3l1.4 1.4M14.3 14.3l1.4 1.4M15.7 4.3l-1.4 1.4M5.7 14.3l-1.4 1.4" />
-    </IconFrame>
-  )
-}
-
-export function SystemThemeIcon(props: IconProps) {
-  return (
-    <IconFrame {...props}>
-      <rect x="3" y="4" width="14" height="10" rx="1.5" />
-      <path d="M7 17h6M10 14v3" />
-    </IconFrame>
-  )
-}
-
-export function MoonIcon(props: IconProps) {
-  return (
-    <IconFrame {...props}>
-      <path d="M15.5 12.8A6.2 6.2 0 0 1 7.2 4.5 6.5 6.5 0 1 0 15.5 12.8Z" />
-    </IconFrame>
-  )
+export function CogIcon() {
+  return <RawLucideIcon svg={cogSvg} />
 }

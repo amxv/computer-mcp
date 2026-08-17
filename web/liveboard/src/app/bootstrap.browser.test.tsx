@@ -38,6 +38,8 @@ describe('Liveboard browser bootstrap', () => {
         max_visible_agents: 4,
         command_outputs_expanded: false,
         diffs_expanded: true,
+        show_raw_button: false,
+        editor_command: 'zed',
       },
     }
 

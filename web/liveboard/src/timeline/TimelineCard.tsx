@@ -14,6 +14,7 @@ export function TimelineCard(props: {
   controller: AgentStreamController
   runtimeId: string
   nowMs: number
+  showRawButton?: boolean
   diffHighlighter?: DiffHighlighter
 }) {
   return (
@@ -25,6 +26,7 @@ export function TimelineCard(props: {
             controller={props.controller}
             runtimeId={props.runtimeId}
             nowMs={props.nowMs}
+            showRawButton={props.showRawButton ?? false}
           />
         )}
       </Match>

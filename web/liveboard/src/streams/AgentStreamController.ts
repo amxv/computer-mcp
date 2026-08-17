@@ -180,6 +180,10 @@ export function createAgentStreamController(
   }
 
   const setFollowing = (value: boolean) => {
+    if (following() === value) {
+      if (value && unseenCount() > 0) clearUnseen()
+      return
+    }
     setFollowingSignal(value)
     if (value) clearUnseen()
   }

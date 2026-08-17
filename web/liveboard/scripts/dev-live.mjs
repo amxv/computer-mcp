@@ -93,7 +93,7 @@ function startViewer() {
 
 function startVite(upstream) {
   console.log('[liveboard] attaching Vite to the currently running Local observer')
-  vite = spawn(process.execPath, ['x', 'vite', '--open'], {
+  vite = spawn(process.execPath, ['x', 'vite'], {
     cwd: liveboardDir,
     env: {
       ...process.env,

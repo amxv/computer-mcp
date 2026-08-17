@@ -12,23 +12,46 @@ import { App } from './App'
 import { applyTheme } from './bootstrap'
 
 function agent(id: string, index: number): ApiAgent {
+  const workdirs = [
+    {
+      normalized_workdir: `/workspace/repos/project-${index + 1}`,
+      ordinal: 0,
+      first_seen_at_ms: 1_000,
+      last_seen_at_ms: 2_000 + index,
+      first_invocation_id: index + 1,
+      last_invocation_id: index + 1,
+      retained_invocation_count: 1,
+    },
+  ]
+  if (index === 0) {
+    workdirs.push(
+      {
+        normalized_workdir: '/workspace/repos/project-1/packages/a-very-long-workdir-one',
+        ordinal: 1,
+        first_seen_at_ms: 1_100,
+        last_seen_at_ms: 2_100,
+        first_invocation_id: 10,
+        last_invocation_id: 10,
+        retained_invocation_count: 1,
+      },
+      {
+        normalized_workdir: '/workspace/repos/project-1/packages/a-very-long-workdir-two',
+        ordinal: 2,
+        first_seen_at_ms: 1_200,
+        last_seen_at_ms: 2_200,
+        first_invocation_id: 11,
+        last_invocation_id: 11,
+        retained_invocation_count: 1,
+      },
+    )
+  }
   return {
     id,
     first_seen_at_ms: 1_000 + index * 100,
     last_seen_at_ms: Date.now() - index * 10_000,
     seen_in_current_runtime: true,
     active_process_count: index === 0 ? 1 : 0,
-    workdirs: [
-      {
-        normalized_workdir: `/workspace/repos/project-${index + 1}`,
-        ordinal: 0,
-        first_seen_at_ms: 1_000,
-        last_seen_at_ms: 2_000 + index,
-        first_invocation_id: index + 1,
-        last_invocation_id: index + 1,
-        retained_invocation_count: 1,
-      },
-    ],
+    workdirs,
   }
 }
 
@@ -52,6 +75,12 @@ function mergePreferences(
     ...(patch.diffs_expanded === undefined
       ? {}
       : { diffs_expanded: patch.diffs_expanded }),
+    ...(patch.show_raw_button === undefined
+      ? {}
+      : { show_raw_button: patch.show_raw_button }),
+    ...(patch.editor_command === undefined
+      ? {}
+      : { editor_command: patch.editor_command }),
     agents,
   }
 }
@@ -102,6 +131,8 @@ describe('Liveboard board shell', () => {
       max_visible_agents: 4,
       command_outputs_expanded: false,
       diffs_expanded: true,
+      show_raw_button: false,
+      editor_command: 'zed',
       agents: {} satisfies Record<string, LiveboardAgentPreference>,
     }
     const patches: LiveboardPreferencesPatch[] = []
@@ -160,13 +191,31 @@ describe('Liveboard board shell', () => {
     expect(
       element<HTMLElement>('[data-agent-id="a111"] .workdir-badge').textContent,
     ).toContain('/workspace/repos/project-1')
-
     buttonWithText('All Agents').click()
     await vi.waitFor(() => expect(document.body.textContent).toContain('All Agents'))
     expect(document.body.textContent).not.toContain('Current Local runtime')
     expect(document.body.textContent).toContain('1 active process')
     const firstDrawerRow = element<HTMLElement>('.drawer-agent-main')
     expect(firstDrawerRow.firstElementChild?.classList.contains('activity-dot')).toBe(true)
+    const firstDrawerButton = element<HTMLButtonElement>('.drawer-agent-selected')
+    await vi.waitFor(() => expect(firstDrawerButton.disabled).toBe(false))
+    const firstWorkdirToggle = element<HTMLButtonElement>(
+      '.agent-drawer button[aria-label="Expand workdirs for Agent a111"]',
+    )
+    expect(
+      firstWorkdirToggle.getBoundingClientRect().top -
+        firstDrawerButton.getBoundingClientRect().top,
+    ).toBeLessThan(16)
+    firstDrawerButton.click()
+    await vi.waitFor(() =>
+      expect(document.querySelector('[aria-label="Expanded Agent workdirs"]')).not.toBeNull(),
+    )
+    const expandedWorkdirs = element<HTMLElement>('[aria-label="Expanded Agent workdirs"]')
+    expect(parseFloat(getComputedStyle(expandedWorkdirs).borderTopWidth)).toBeGreaterThan(0)
+    firstDrawerButton.click()
+    await vi.waitFor(() =>
+      expect(document.querySelector('[aria-label="Expanded Agent workdirs"]')).toBeNull(),
+    )
     const fifthRow = Array.from(
       document.querySelectorAll<HTMLButtonElement>('.drawer-agent'),
     ).find((button) => button.textContent?.includes('e555'))
@@ -195,6 +244,7 @@ describe('Liveboard board shell', () => {
 
     element<HTMLButtonElement>('button[aria-label="Edit alias for Agent e555"]').click()
     const aliasInput = element<HTMLInputElement>('input[aria-label="Alias for Agent e555"]')
+    expect(getComputedStyle(aliasInput).outlineStyle).toBe('none')
     aliasInput.value = 'release checks'
     aliasInput.dispatchEvent(new InputEvent('input', { bubbles: true, data: 'release checks' }))
     aliasInput.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }))
@@ -227,12 +277,7 @@ describe('Liveboard board shell', () => {
     await vi.waitFor(() =>
       expect(patches.length).toBe(patchCountBeforeReorderDrag + 1),
     )
-
-    element<HTMLButtonElement>('button[aria-label="Move Agent c333 right"]').click()
-    expect(visibleColumns().slice(0, 2)).toEqual(['a111', 'c333'])
-    await vi.waitFor(() =>
-      expect(patches.some((patch) => patch.agents?.a111?.order === 0)).toBe(true),
-    )
+    expect(document.querySelector('[aria-label^="Move Agent "]')).toBeNull()
 
     const patchCountBeforeResize = patches.length
     const resizeHandle = element<HTMLButtonElement>(
@@ -252,6 +297,15 @@ describe('Liveboard board shell', () => {
     await vi.waitFor(() => expect(patches.length).toBe(patchCountBeforeResize + 1))
     expect(patches.at(-1)?.agents?.a111?.width_weight).toBeTypeOf('number')
 
+    buttonWithText('Settings').click()
+    await vi.waitFor(() => expect(document.body.textContent).toContain('Timeline defaults'))
+    expect(document.body.textContent).toContain('Command output')
+    expect(document.body.textContent).toContain('File diffs')
+    expect(document.body.textContent).toContain('Raw tool button')
+    expect(document.body.textContent).toContain('Editor command')
+    expect(document.body.textContent).not.toContain('Cmd closed')
+    expect(document.body.textContent).not.toContain('Diff open')
+
     dispatchChange(element<HTMLSelectElement>('select[aria-label="Maximum visible Agents"]'), '2')
     expect(visibleColumns()).toHaveLength(2)
     await vi.waitFor(() =>
@@ -264,19 +318,40 @@ describe('Liveboard board shell', () => {
       ),
     ).toHaveLength(2)
 
-    buttonWithText('Cmd closed').click()
+    dispatchChange(
+      element<HTMLSelectElement>('select[aria-label="Default command output state"]'),
+      'expanded',
+    )
     await vi.waitFor(() =>
       expect(
         patches.some((patch) => patch.command_outputs_expanded === true),
       ).toBe(true),
     )
-    buttonWithText('Diff open').click()
+    dispatchChange(
+      element<HTMLSelectElement>('select[aria-label="Default file diff state"]'),
+      'collapsed',
+    )
     await vi.waitFor(() =>
       expect(patches.some((patch) => patch.diffs_expanded === false)).toBe(true),
     )
 
-    element<HTMLButtonElement>('button[aria-label^="Theme: System"]').click()
+    const rawVisibility = element<HTMLSelectElement>(
+      'select[aria-label="Raw tool button visibility"]',
+    )
+    expect(rawVisibility.value).toBe('hidden')
+    dispatchChange(rawVisibility, 'shown')
+    await vi.waitFor(() =>
+      expect(patches.some((patch) => patch.show_raw_button === true)).toBe(true),
+    )
+
+    dispatchChange(element<HTMLSelectElement>('select[aria-label="Liveboard theme"]'), 'dark')
     await vi.waitFor(() => expect(document.documentElement.dataset.theme).toBe('dark'))
     expect(getComputedStyle(document.documentElement).colorScheme).toBe('dark')
+
+    buttonWithText('Cursor').click()
+    await vi.waitFor(() =>
+      expect(patches.some((patch) => patch.editor_command === 'cursor')).toBe(true),
+    )
+    expect(element<HTMLInputElement>('input[aria-label="Editor command"]').value).toBe('cursor')
   })
 })

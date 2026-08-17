@@ -12,6 +12,7 @@ pub(crate) const LIVEBOARD_PREFERENCES_SCHEMA_VERSION: u32 = 1;
 const MIN_VISIBLE_AGENTS: u8 = 1;
 const MAX_VISIBLE_AGENTS: u8 = 8;
 const MAX_ALIAS_CHARS: usize = 80;
+const MAX_EDITOR_COMMAND_CHARS: usize = 256;
 const MIN_WIDTH_WEIGHT: f64 = 0.1;
 const MAX_WIDTH_WEIGHT: f64 = 10.0;
 const MAX_ORDER: u32 = 1_024;
@@ -31,6 +32,10 @@ pub(crate) struct LiveboardPreferences {
     pub(crate) max_visible_agents: u8,
     pub(crate) command_outputs_expanded: bool,
     pub(crate) diffs_expanded: bool,
+    #[serde(default)]
+    pub(crate) show_raw_button: bool,
+    #[serde(default = "default_editor_command")]
+    pub(crate) editor_command: String,
     pub(crate) agents: BTreeMap<String, LiveboardAgentPreference>,
 }
 
@@ -54,6 +59,8 @@ impl Default for LiveboardPreferences {
             max_visible_agents: 4,
             command_outputs_expanded: false,
             diffs_expanded: true,
+            show_raw_button: false,
+            editor_command: default_editor_command(),
             agents: BTreeMap::new(),
         }
     }
@@ -66,6 +73,8 @@ pub(crate) struct LiveboardPreferencesPatch {
     pub(crate) max_visible_agents: Option<u8>,
     pub(crate) command_outputs_expanded: Option<bool>,
     pub(crate) diffs_expanded: Option<bool>,
+    pub(crate) show_raw_button: Option<bool>,
+    pub(crate) editor_command: Option<String>,
     #[serde(default)]
     pub(crate) agents: BTreeMap<String, LiveboardAgentPreferencePatch>,
 }
@@ -95,6 +104,9 @@ impl LiveboardPreferencesPatch {
             bail!(
                 "max_visible_agents must be between {MIN_VISIBLE_AGENTS} and {MAX_VISIBLE_AGENTS}"
             );
+        }
+        if let Some(editor_command) = self.editor_command.as_deref() {
+            validate_editor_command(editor_command)?;
         }
         for (agent_id, preference) in &self.agents {
             validate_agent_id(agent_id)?;
@@ -188,6 +200,12 @@ fn merge_preferences(current: &mut LiveboardPreferences, patch: &LiveboardPrefer
     if let Some(expanded) = patch.diffs_expanded {
         current.diffs_expanded = expanded;
     }
+    if let Some(show_raw_button) = patch.show_raw_button {
+        current.show_raw_button = show_raw_button;
+    }
+    if let Some(editor_command) = patch.editor_command.as_deref() {
+        current.editor_command = editor_command.trim().to_owned();
+    }
     for (agent_id, patch) in &patch.agents {
         let preference = current.agents.entry(agent_id.clone()).or_default();
         if let Some(alias) = patch.alias.as_deref() {
@@ -210,6 +228,7 @@ fn validate_preferences(preferences: &LiveboardPreferences) -> Result<()> {
     if !(MIN_VISIBLE_AGENTS..=MAX_VISIBLE_AGENTS).contains(&preferences.max_visible_agents) {
         bail!("stored Liveboard max_visible_agents is outside supported bounds");
     }
+    validate_editor_command(&preferences.editor_command)?;
     for (agent_id, preference) in &preferences.agents {
         validate_agent_id(agent_id)?;
         if let Some(alias) = preference.alias.as_deref() {
@@ -245,6 +264,27 @@ fn validate_alias(value: &str) -> Result<()> {
     }
     if value.chars().any(|character| character.is_control()) {
         bail!("Liveboard Agent alias cannot contain control characters");
+    }
+    Ok(())
+}
+
+fn default_editor_command() -> String {
+    "zed".to_string()
+}
+
+fn validate_editor_command(value: &str) -> Result<()> {
+    let value = value.trim();
+    if value.is_empty() {
+        bail!("Liveboard editor command must not be empty");
+    }
+    if value.chars().count() > MAX_EDITOR_COMMAND_CHARS {
+        bail!("Liveboard editor command must be at most {MAX_EDITOR_COMMAND_CHARS} characters");
+    }
+    if value
+        .chars()
+        .any(|character| character == '\0' || character == '\n' || character == '\r')
+    {
+        bail!("Liveboard editor command must be one executable path or name");
     }
     Ok(())
 }
@@ -340,11 +380,15 @@ mod tests {
         assert_eq!(defaults.max_visible_agents, 4);
         assert!(!defaults.command_outputs_expanded);
         assert!(defaults.diffs_expanded);
+        assert!(!defaults.show_raw_button);
+        assert_eq!(defaults.editor_command, "zed");
 
         let updated = store
             .mutate(&LiveboardPreferencesPatch {
                 theme: Some(LiveboardTheme::Dark),
                 max_visible_agents: Some(5),
+                show_raw_button: Some(true),
+                editor_command: Some("cursor".to_string()),
                 agents: [(
                     "k7m2".to_string(),
                     LiveboardAgentPreferencePatch {
@@ -361,6 +405,8 @@ mod tests {
             .unwrap();
         assert_eq!(updated.theme, LiveboardTheme::Dark);
         assert_eq!(updated.max_visible_agents, 5);
+        assert!(updated.show_raw_button);
+        assert_eq!(updated.editor_command, "cursor");
         assert_eq!(
             updated.agents["k7m2"].alias.as_deref(),
             Some("docs redesign")
@@ -389,6 +435,14 @@ mod tests {
             store
                 .mutate(&LiveboardPreferencesPatch {
                     max_visible_agents: Some(0),
+                    ..LiveboardPreferencesPatch::default()
+                })
+                .is_err()
+        );
+        assert!(
+            store
+                .mutate(&LiveboardPreferencesPatch {
+                    editor_command: Some("  ".to_string()),
                     ..LiveboardPreferencesPatch::default()
                 })
                 .is_err()

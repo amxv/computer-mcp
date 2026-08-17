@@ -1,4 +1,4 @@
-import { For, Show, createSignal, onMount } from 'solid-js'
+import { For, Show, createSignal, onCleanup, onMount } from 'solid-js'
 
 import {
   fetchInvocationDetail,
@@ -6,26 +6,55 @@ import {
   type ApiInvocationDetail,
   type TimelineCheckpoint,
 } from '../api/client'
+import { CheckIcon, CopyIcon } from '../ui/icons'
 
 function checkpointLabel(checkpoint: TimelineCheckpoint, index: number) {
   if (checkpoint.checkpoint_kind === 'initial') return 'Initial response'
   return `Poll ${index}`
 }
 
-function renderEvidence(detail: ApiInvocationDetail) {
-  return JSON.stringify(
-    {
-      invocation_id: detail.invocation.id,
-      tool: detail.invocation.tool_name,
-      arguments: detail.invocation.arguments,
-      result: detail.invocation.result,
-      error: detail.invocation.error,
-      outcome: detail.invocation.outcome_kind,
-      evidence_state: detail.invocation.evidence_state,
-      capture_state: detail.invocation.capture_state,
-    },
-    null,
-    2,
+function renderRawValue(value: unknown) {
+  if (typeof value === 'string') return value
+  if (value === undefined) return ''
+  return JSON.stringify(value, null, 2)
+}
+
+function RawEvidenceBlock(props: { label: string; value: unknown }) {
+  const [copied, setCopied] = createSignal(false)
+  let copyFeedbackTimeout: ReturnType<typeof setTimeout> | undefined
+  const text = () => renderRawValue(props.value)
+
+  onCleanup(() => {
+    if (copyFeedbackTimeout !== undefined) clearTimeout(copyFeedbackTimeout)
+  })
+
+  const copy = async () => {
+    if (!navigator.clipboard) return
+    await navigator.clipboard.writeText(text())
+    setCopied(true)
+    if (copyFeedbackTimeout !== undefined) clearTimeout(copyFeedbackTimeout)
+    copyFeedbackTimeout = setTimeout(() => {
+      setCopied(false)
+      copyFeedbackTimeout = undefined
+    }, 2_000)
+  }
+
+  return (
+    <div class="raw-evidence-block">
+      <div class="raw-evidence-heading">
+        <strong>{props.label}</strong>
+        <button
+          type="button"
+          class="raw-copy-button"
+          aria-label={copied() ? `${props.label} copied` : `Copy ${props.label.toLowerCase()}`}
+          title={copied() ? 'Copied' : 'Copy'}
+          onClick={() => void copy()}
+        >
+          {copied() ? <CheckIcon /> : <CopyIcon />}
+        </button>
+      </div>
+      <pre class="audit-evidence">{text()}</pre>
+    </div>
   )
 }
 
@@ -77,10 +106,9 @@ export function CommandAudit(props: {
   onMount(() => void loadCheckpointPage())
 
   return (
-    <section class="command-audit" aria-label="What ChatGPT received">
+    <section class="command-audit" aria-label="Raw tool exchange">
       <div class="audit-heading">
-        <strong>What ChatGPT received</strong>
-        <span>Exact logical tool evidence</span>
+        <strong>Raw tool exchange</strong>
       </div>
       <div class="checkpoint-strip" role="list" aria-label="Command response checkpoints">
         <For each={checkpoints()}>
@@ -116,7 +144,15 @@ export function CommandAudit(props: {
         <p class="audit-empty">No retained checkpoints.</p>
       </Show>
       <Show when={selectedDetail()}>
-        {(detail) => <pre class="audit-evidence">{renderEvidence(detail())}</pre>}
+        {(detail) => (
+          <div class="raw-evidence-grid">
+            <RawEvidenceBlock label="Tool input" value={detail().invocation.arguments} />
+            <RawEvidenceBlock
+              label="Tool output"
+              value={detail().invocation.error ?? detail().invocation.result}
+            />
+          </div>
+        )}
       </Show>
       <Show when={error()}>
         {(message) => <p class="audit-error">{message()}</p>}

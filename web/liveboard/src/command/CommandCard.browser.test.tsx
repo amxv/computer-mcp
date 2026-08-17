@@ -118,7 +118,7 @@ function button(label: string) {
 }
 
 describe('command card', () => {
-  it('hides the output control for a viewer-observed command until output actually arrives', async () => {
+  it('makes the header expandable only after viewer-observed output actually arrives', async () => {
     const stream = controller()
     const current = command({ started_at_ms: 3_000 })
     stream.upsert(current, false)
@@ -137,10 +137,13 @@ describe('command card', () => {
       container,
     )
 
-    const outputToggle = container.querySelector<HTMLButtonElement>(
-      '[aria-label="Expand command output"]',
-    )!
-    expect(getComputedStyle(outputToggle).display).toBe('none')
+    const header = container.querySelector<HTMLElement>('.command-card-header')!
+    expect(header.classList.contains('command-card-header-expandable')).toBe(false)
+    expect(
+      Array.from(container.querySelectorAll<HTMLButtonElement>('button')).some(
+        (candidate) => candidate.textContent === 'Raw',
+      ),
+    ).toBe(false)
     stream.appendLiveOutput({
       presentationId: 'inv-10',
       invocationId: 10,
@@ -148,7 +151,94 @@ describe('command card', () => {
       text: 'hello\n',
       displayState: 'available',
     })
-    await vi.waitFor(() => expect(getComputedStyle(outputToggle).display).not.toBe('none'))
+    await vi.waitFor(() =>
+      expect(header.classList.contains('command-card-header-expandable')).toBe(true),
+    )
+  })
+
+  it('toggles output from the header while command/output copy controls stay independent', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    })
+    const stream = controller()
+    const current = command({ started_at_ms: 3_000 })
+    stream.upsert(current, false)
+    const container = document.createElement('div')
+    document.body.append(container)
+    containerCurrent = container
+    disposeCurrent = render(
+      () => (
+        <CommandCard
+          record={current}
+          controller={stream}
+          runtimeId="runtime-one"
+          nowMs={4_000}
+        />
+      ),
+      container,
+    )
+    stream.appendLiveOutput({
+      presentationId: 'inv-10',
+      invocationId: 10,
+      sequence: 1,
+      text: 'hello output\n',
+      displayState: 'available',
+    })
+    const header = container.querySelector<HTMLElement>('.command-card-header')!
+    await vi.waitFor(() => expect(header.classList.contains('command-card-header-expandable')).toBe(true))
+
+    header.click()
+    await vi.waitFor(() =>
+      expect(container.querySelector('[aria-label="Command output"]')).not.toBeNull(),
+    )
+
+    button('Copy command').click()
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith('cargo test --workspace'))
+    expect(container.querySelector('[aria-label="Command output"]')).not.toBeNull()
+
+    button('Copy command output').click()
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith('hello output\n'))
+    expect(container.querySelector('[aria-label="Command output"]')).not.toBeNull()
+
+    header.click()
+    await vi.waitFor(() =>
+      expect(container.querySelector('[aria-label="Command output"]')).toBeNull(),
+    )
+  })
+
+  it('keeps Raw and command copy visible beside a long command at narrow widths', () => {
+    const stream = controller()
+    const current = command({
+      command:
+        "node --input-type=module - <<'JS' import { chromium } from 'playwright'; console.log('a very long command that must wrap without pushing actions away'); JS",
+    })
+    const container = document.createElement('div')
+    container.style.width = '280px'
+    document.body.append(container)
+    containerCurrent = container
+    disposeCurrent = render(
+      () => (
+        <CommandCard
+          record={current}
+          controller={stream}
+          runtimeId="runtime-one"
+          nowMs={5_000}
+          showRawButton
+        />
+      ),
+      container,
+    )
+
+    const copy = container.querySelector<HTMLButtonElement>('[aria-label="Copy command"]')!
+    const raw = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find(
+      (candidate) => candidate.textContent === 'Raw',
+    )!
+    const bounds = container.getBoundingClientRect()
+    expect(copy.getBoundingClientRect().right).toBeLessThanOrEqual(bounds.right + 1)
+    expect(raw.getBoundingClientRect().right).toBeLessThanOrEqual(bounds.right + 1)
+    expect(getComputedStyle(copy).display).not.toBe('none')
   })
 
   it('stays collapsed by default, coalesces 1000 live chunks, and transitions status accessibly', async () => {
@@ -186,7 +276,7 @@ describe('command card', () => {
     }
     expect(container.querySelector('[aria-label="Command output"]')).toBeNull()
 
-    button('Expand command output').click()
+    container.querySelector<HTMLElement>('.command-card-header')!.click()
     await vi.waitFor(() =>
       expect(container.querySelector('[aria-label="Command output"]')).not.toBeNull(),
     )
@@ -232,7 +322,8 @@ describe('command card', () => {
       expect(container.querySelector('[aria-label="Command exited successfully"]')).not.toBeNull(),
     )
     expect(container.textContent).not.toContain('Completed')
-    expect(container.textContent).toContain('exit 0')
+    expect(container.textContent).not.toContain('exit 0')
+    expect(container.textContent).toContain('duration 45s')
 
     const failed = command({
       status: 'exited',
@@ -339,7 +430,8 @@ describe('command card', () => {
     expect(metadata).not.toHaveBeenCalled()
     expect(page).not.toHaveBeenCalled()
 
-    button('Expand command output').click()
+    const header = container.querySelector<HTMLElement>('.command-card-header')!
+    header.click()
     await vi.waitFor(() =>
       expect(container.querySelector('[aria-label="Command output"]')?.textContent).toContain(
         'durable tail B',
@@ -348,11 +440,11 @@ describe('command card', () => {
     expect(metadata).toHaveBeenCalledTimes(1)
     expect(page).toHaveBeenCalledWith(10, 437, 64)
 
-    button('Collapse command output').click()
+    header.click()
     await vi.waitFor(() =>
       expect(container.querySelector('[aria-label="Command output"]')).toBeNull(),
     )
-    button('Expand command output').click()
+    header.click()
     await vi.waitFor(() => expect(metadata).toHaveBeenCalledTimes(2))
     expect(page).toHaveBeenCalledTimes(2)
   })
@@ -471,7 +563,7 @@ describe('command card', () => {
     expect(container.textContent).toContain('failed')
   })
 
-  it('loads checkpoint metadata only after Audit opens, then exact evidence only after selection', async () => {
+  it('loads checkpoint metadata only after Raw opens, then exact input/output only after selection', async () => {
     const requests: string[] = []
     vi.stubGlobal(
       'fetch',
@@ -552,6 +644,7 @@ describe('command card', () => {
           controller={stream}
           runtimeId="runtime-one"
           nowMs={5_000}
+          showRawButton
         />
       ),
       container,
@@ -559,9 +652,10 @@ describe('command card', () => {
     expect(requests).toHaveLength(0)
 
     const auditButton = Array.from(container.querySelectorAll('button')).find(
-      (candidate) => candidate.textContent === 'Audit',
+      (candidate) => candidate.textContent === 'Raw',
     )!
     auditButton.click()
+    expect(auditButton.textContent).toBe('Hide Raw')
     await vi.waitFor(() => expect(requests).toHaveLength(1))
     expect(requests[0]).toContain('/checkpoints')
     expect(requests.some((request) => request === 'api/invocations/10')).toBe(false)
@@ -574,11 +668,17 @@ describe('command card', () => {
     await vi.waitFor(() =>
       expect(requests.some((request) => request === 'api/invocations/10')).toBe(true),
     )
-    await vi.waitFor(() =>
-      expect(container.querySelector('.audit-evidence')).not.toBeNull(),
-    )
-    const evidence = container.querySelector<HTMLPreElement>('.audit-evidence')!
-    expect(evidence.textContent).toContain('<script>alert(1)</script>')
+    await vi.waitFor(() => expect(container.querySelectorAll('.audit-evidence')).toHaveLength(2))
+    const evidence = Array.from(container.querySelectorAll<HTMLPreElement>('.audit-evidence'))
+    expect(evidence[0]!.textContent).toContain('<script>argument()</script>')
+    expect(evidence[1]!.textContent).toContain('<script>alert(1)</script>')
+    expect(
+      container.querySelector('button[aria-label="Copy tool input"]'),
+    ).not.toBeNull()
+    expect(
+      container.querySelector('button[aria-label="Copy tool output"]'),
+    ).not.toBeNull()
+    expect(container.textContent).not.toContain('Exact logical evidence')
     expect(container.querySelector('script')).toBeNull()
   })
 })

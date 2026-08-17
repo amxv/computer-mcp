@@ -7,14 +7,17 @@ import {
 } from 'solid-js'
 
 import type { CommandOutputState } from '../output/CommandOutputState'
+import { CheckIcon, CopyIcon } from '../ui/icons'
 
 export function ExpandedCommandOutput(props: {
   state: CommandOutputState
   final: boolean
 }) {
   const [revision, setRevision] = createSignal(0)
+  const [copied, setCopied] = createSignal(false)
   let outputElement: HTMLPreElement | undefined
   let frame: number | undefined
+  let copyFeedbackTimeout: ReturnType<typeof setTimeout> | undefined
 
   const flush = () => {
     frame = undefined
@@ -32,6 +35,7 @@ export function ExpandedCommandOutput(props: {
   })
   onCleanup(() => {
     if (frame !== undefined) cancelAnimationFrame(frame)
+    if (copyFeedbackTimeout !== undefined) clearTimeout(copyFeedbackTimeout)
   })
 
   createEffect(() => {
@@ -59,9 +63,33 @@ export function ExpandedCommandOutput(props: {
     revision()
     return props.state.recoveryErrorMessage()
   }
+  const outputText = () => {
+    revision()
+    return props.state.materialize()
+  }
+  const copyOutput = async () => {
+    if (!navigator.clipboard) return
+    await navigator.clipboard.writeText(outputText())
+    setCopied(true)
+    if (copyFeedbackTimeout !== undefined) clearTimeout(copyFeedbackTimeout)
+    copyFeedbackTimeout = setTimeout(() => {
+      setCopied(false)
+      copyFeedbackTimeout = undefined
+    }, 2_000)
+  }
 
   return (
     <div class="command-output-region">
+      <button
+        type="button"
+        class="command-output-copy-button"
+        disabled={outputText().length === 0}
+        aria-label={copied() ? 'Command output copied' : 'Copy command output'}
+        title={copied() ? 'Copied' : 'Copy command output'}
+        onClick={() => void copyOutput()}
+      >
+        {copied() ? <CheckIcon /> : <CopyIcon />}
+      </button>
       <Show when={hasDroppedPrefix()}>
         <div class="output-notice">Recent output tail · earlier buffered output dropped</div>
       </Show>

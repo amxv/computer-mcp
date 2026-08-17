@@ -166,6 +166,7 @@ afterEach(() => {
   disposeCurrent = undefined
   containerCurrent = undefined
   vi.useRealTimers()
+  vi.unstubAllGlobals()
   Reflect.deleteProperty(navigator, 'clipboard')
   applyTheme('system')
 })
@@ -189,6 +190,35 @@ function mount(
 }
 
 describe('file change cards', () => {
+  it('opens the exact changed path through the configured local editor endpoint without toggling the diff', async () => {
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response(null, { status: 204 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const stream = controller()
+    const value = record([
+      change('edited', '/Users/example/repo/src/main.rs', {
+        lines: [{ kind: 'add', old_line: null, new_line: 1, text: 'fn main() {}' }],
+      }),
+    ])
+    const container = mount(() => value, stream, new ImmediateHighlighter())
+    expect(container.querySelector('[aria-label="Unified diff for /Users/example/repo/src/main.rs"]')).not.toBeNull()
+
+    container
+      .querySelector<HTMLButtonElement>(
+        'button[aria-label="Open /Users/example/repo/src/main.rs in configured editor"]',
+      )!
+      .click()
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('api/open-file')
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: 'POST' })
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+      path: '/Users/example/repo/src/main.rs',
+    })
+    expect(container.querySelector('[aria-label="Unified diff for /Users/example/repo/src/main.rs"]')).not.toBeNull()
+  })
+
   it('shows copy success as a check icon for two seconds without changing button width', async () => {
     vi.useFakeTimers()
     const writeText = vi.fn().mockResolvedValue(undefined)
@@ -276,10 +306,11 @@ describe('file change cards', () => {
       )?.textContent,
     ).toBe('source')
 
-    const editedToggle = container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Collapse diff for /repo/src/main.rs"]',
+    const editedHeader = container.querySelector<HTMLElement>(
+      '[data-diff-key="inv-40:file-change:0"] .file-change-header',
     )!
-    editedToggle.click()
+    expect(editedHeader.querySelector('.diff-expand-button')).toBeNull()
+    editedHeader.click()
     await vi.waitFor(() =>
       expect(container.querySelector('[aria-label="Unified diff for /repo/src/main.rs"]')).toBeNull(),
     )
@@ -322,8 +353,8 @@ describe('file change cards', () => {
     expect(container.querySelector('.diff-body')).toBeNull()
     expect(highlighter.calls).toHaveLength(0)
 
-    container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Expand diff for /repo/src/large.rs"]',
+    container.querySelector<HTMLElement>(
+      '[data-diff-key="inv-40:file-change:0"] .file-change-header',
     )!.click()
     await vi.waitFor(() => expect(highlighter.calls).toHaveLength(1))
     expect(highlighter.calls[0]?.rows).toHaveLength(500)

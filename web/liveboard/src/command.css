@@ -14,6 +14,10 @@
   padding: 9px 9px 7px;
 }
 
+.command-card-header-expandable {
+  cursor: pointer;
+}
+
 .command-status {
   display: inline-grid;
   width: 13px;
@@ -70,10 +74,17 @@
 
 .command-prompt { color: var(--faint); }
 
-.command-chevron,
-.command-audit-button {
+.command-header-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+}
+
+.command-audit-button,
+.command-output-copy-button {
   display: inline-grid;
-  height: 24px;
+  height: 26px;
   flex: 0 0 auto;
   cursor: pointer;
   place-items: center;
@@ -83,37 +94,66 @@
   color: var(--muted);
 }
 
-.command-chevron {
-  width: 24px;
-  padding: 0;
-}
-
-.command-chevron-hidden {
-  display: none;
-}
-
-.command-chevron svg {
-  display: block;
-  width: 14px;
-  height: 14px;
-  transition: transform 120ms ease;
-}
-
-.command-chevron[aria-expanded='true'] svg { transform: rotate(180deg); }
-
 .command-audit-button {
   min-width: 42px;
   padding: 0 7px;
   font-size: 9px;
 }
 
-.command-chevron:hover,
+.command-output-copy-button {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+}
+
+.command-output-copy-button svg {
+  width: 11px;
+  height: 11px;
+}
+
+.command-output-copy-button .lucide-icon,
+.command-copy-button .lucide-icon,
+.raw-copy-button .lucide-icon {
+  width: 11px;
+  height: 11px;
+}
+
+.command-copy-button {
+  display: inline-grid;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  cursor: pointer;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  padding: 0;
+  background: transparent;
+  color: var(--muted);
+}
+
+.command-copy-button svg {
+  width: 11px;
+  height: 11px;
+}
+
 .command-audit-button:hover,
-.command-chevron[aria-expanded='true'],
+.command-copy-button:hover:not(:disabled),
+.command-output-copy-button:hover:not(:disabled),
 .command-audit-button[aria-expanded='true'] {
-  border-color: var(--border-strong);
   background: var(--surface-hover);
   color: var(--text);
+}
+
+.command-audit-button:hover,
+.command-output-copy-button:hover:not(:disabled),
+.command-audit-button[aria-expanded='true'] {
+  border-color: var(--border-strong);
+}
+
+.command-output-copy-button:disabled {
+  cursor: default;
+  opacity: 0.4;
 }
 
 .command-meta {
@@ -121,7 +161,7 @@
   min-width: 0;
   flex-wrap: wrap;
   gap: 4px 8px;
-  padding: 0 9px 8px 29px;
+  padding: 0 9px 8px 51px;
   color: var(--muted);
   font-size: 9px;
 }
@@ -134,8 +174,16 @@
 }
 
 .command-output-region {
+  position: relative;
   border-top: 1px solid var(--border);
   background: color-mix(in srgb, var(--surface) 65%, var(--surface-raised));
+}
+
+.command-output-copy-button {
+  position: absolute;
+  z-index: 1;
+  top: 6px;
+  right: 6px;
 }
 
 .command-output-text {
@@ -143,7 +191,7 @@
   max-height: 360px;
   margin: 0;
   overflow: auto;
-  padding: 9px 10px 11px;
+  padding: 9px 38px 11px 10px;
   color: var(--text);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 9.5px;
@@ -183,6 +231,56 @@
   font-weight: 600;
 }
 
+.raw-evidence-grid {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.raw-evidence-block {
+  min-width: 0;
+}
+
+.raw-evidence-heading {
+  display: flex;
+  min-height: 26px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 8.5px;
+}
+
+.raw-evidence-heading strong {
+  color: var(--text);
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.raw-copy-button {
+  display: inline-grid;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  cursor: pointer;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  padding: 0;
+  background: transparent;
+  color: var(--muted);
+}
+
+.raw-copy-button:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.raw-copy-button svg {
+  width: 11px;
+  height: 11px;
+}
+
 .checkpoint-strip {
   display: flex;
   gap: 4px;
@@ -214,7 +312,7 @@
 
 .audit-evidence {
   max-height: 280px;
-  margin: 8px 0 0;
+  margin: 0;
   overflow: auto;
   border: 1px solid var(--border);
   border-radius: 6px;

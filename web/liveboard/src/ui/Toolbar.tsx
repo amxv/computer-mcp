@@ -1,9 +1,12 @@
-import type { LiveboardPreferences, ThemePreference } from '../api/client'
 import type { RuntimeConnectionState } from '../streams/runtime'
-import { AgentsIcon, MoonIcon, SunIcon, SystemThemeIcon } from './icons'
+import {
+  AgentsIcon,
+  CogIcon,
+  TerminalIcon,
+  UserIcon,
+} from './icons'
 
 interface ToolbarProps {
-  preferences: LiveboardPreferences
   currentAgentCount: number
   activeProcessCount: number
   saving: boolean
@@ -11,29 +14,10 @@ interface ToolbarProps {
   connectionState?: RuntimeConnectionState
   connectionError?: string
   onOpenAgents: () => void
-  onMaximumChange: (maximum: number) => void
-  onThemeChange: (theme: ThemePreference) => void
-  onCommandExpansionChange: (expanded: boolean) => void
-  onDiffExpansionChange: (expanded: boolean) => void
+  onOpenSettings: () => void
 }
 
 export function Toolbar(props: ToolbarProps) {
-  const nextTheme = (): ThemePreference => {
-    switch (props.preferences.theme) {
-      case 'light':
-        return 'system'
-      case 'system':
-        return 'dark'
-      case 'dark':
-        return 'light'
-    }
-  }
-  const themeLabel = () =>
-    props.preferences.theme === 'system'
-      ? 'System'
-      : props.preferences.theme === 'light'
-        ? 'Light'
-        : 'Dark'
   const connectionState = () => props.connectionState ?? 'connected'
   const connectionLabel = () => {
     switch (connectionState()) {
@@ -64,73 +48,53 @@ export function Toolbar(props: ToolbarProps) {
             <span class="preference-spinner" aria-label="Saving preferences" />
           ) : null}
         </span>
-        <span
-          class="connection-detail"
-          aria-label={`Local observer ${connectionLabel().toLowerCase()}`}
-          title={props.connectionError}
-        >
+        {connectionState() === 'connected' ? (
           <span
-            class={`connection-dot connection-${connectionState()}`}
-            aria-hidden="true"
-          />
-          {connectionState() === 'connected'
-            ? `${props.currentAgentCount} ${props.currentAgentCount === 1 ? 'Agent' : 'Agents'} · ${props.activeProcessCount} ${props.activeProcessCount === 1 ? 'process' : 'processes'} running`
-            : connectionLabel()}
-        </span>
-        <button type="button" class="toolbar-button" onClick={props.onOpenAgents}>
-          <AgentsIcon />
-          <span>All Agents</span>
-        </button>
-        <label class="toolbar-field">
-          <span>Columns</span>
-          <select
-            aria-label="Maximum visible Agents"
-            value={props.preferences.max_visible_agents}
-            onChange={(event) =>
-              props.onMaximumChange(Number(event.currentTarget.value))
-            }
+            class="runtime-summary"
+            role="status"
+            aria-label={`${props.currentAgentCount} ${props.currentAgentCount === 1 ? 'Agent' : 'Agents'}, ${props.activeProcessCount} ${props.activeProcessCount === 1 ? 'process' : 'processes'} running`}
           >
-            {[1, 2, 3, 4, 5, 6, 7, 8].map((value) => (
-              <option value={value}>{value}</option>
-            ))}
-          </select>
-        </label>
+            <span class="connection-dot connection-connected" aria-hidden="true" />
+            <span class="runtime-summary-item" title="Agents">
+              <UserIcon />
+              <span>{props.currentAgentCount}</span>
+            </span>
+            <span class="runtime-summary-divider" aria-hidden="true" />
+            <span class="runtime-summary-item" title="Processes running">
+              <TerminalIcon />
+              <span>{props.activeProcessCount}</span>
+            </span>
+          </span>
+        ) : (
+          <span
+            class="connection-detail"
+            aria-label={`Local observer ${connectionLabel().toLowerCase()}`}
+            title={props.connectionError}
+          >
+            <span
+              class={`connection-dot connection-${connectionState()}`}
+              aria-hidden="true"
+            />
+            {connectionLabel()}
+          </span>
+        )}
         <button
           type="button"
-          class="toolbar-button compact-control"
-          aria-pressed={props.preferences.command_outputs_expanded}
-          onClick={() =>
-            props.onCommandExpansionChange(
-              !props.preferences.command_outputs_expanded,
-            )
-          }
-          title="Toggle all command outputs"
+          class="toolbar-button"
+          aria-label="All Agents"
+          onClick={props.onOpenAgents}
         >
-          Cmd {props.preferences.command_outputs_expanded ? 'open' : 'closed'}
+          <AgentsIcon />
+          <span class="toolbar-button-label">All Agents</span>
         </button>
         <button
           type="button"
-          class="toolbar-button compact-control"
-          aria-pressed={props.preferences.diffs_expanded}
-          onClick={() => props.onDiffExpansionChange(!props.preferences.diffs_expanded)}
-          title="Toggle all diffs"
+          class="toolbar-button"
+          aria-label="Open Settings"
+          onClick={props.onOpenSettings}
         >
-          Diff {props.preferences.diffs_expanded ? 'open' : 'closed'}
-        </button>
-        <button
-          type="button"
-          class="toolbar-button theme-toggle"
-          aria-label={`Theme: ${themeLabel()}. Switch to ${nextTheme()}`}
-          title={`Theme: ${themeLabel()}`}
-          onClick={() => props.onThemeChange(nextTheme())}
-        >
-          {props.preferences.theme === 'light' ? (
-            <SunIcon />
-          ) : props.preferences.theme === 'system' ? (
-            <SystemThemeIcon />
-          ) : (
-            <MoonIcon />
-          )}
+          <CogIcon />
+          <span class="toolbar-button-label">Settings</span>
         </button>
       </div>
     </header>

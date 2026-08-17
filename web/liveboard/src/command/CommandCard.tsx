@@ -1,8 +1,8 @@
-import { Show, createSignal } from 'solid-js'
+import { Show, createSignal, onCleanup } from 'solid-js'
 
 import type { PresentationRecord } from '../api/client'
 import type { AgentStreamController } from '../streams/AgentStreamController'
-import { ChevronDownIcon, TerminalIcon } from '../ui/icons'
+import { CheckIcon, CopyIcon, TerminalIcon } from '../ui/icons'
 import { CommandAudit } from './CommandAudit'
 import { ExpandedCommandOutput } from './ExpandedCommandOutput'
 
@@ -58,12 +58,15 @@ export function CommandCard(props: {
   controller: AgentStreamController
   runtimeId: string
   nowMs: number
+  showRawButton?: boolean
 }) {
   const expanded = props.controller.commandExpanded(props.record.presentation_id)
   const streamedOutputAvailability = props.controller.commandOutputAvailability(
     props.record.presentation_id,
   )
   const [auditOpen, setAuditOpen] = createSignal(false)
+  const [commandCopied, setCommandCopied] = createSignal(false)
+  let commandCopyFeedbackTimeout: ReturnType<typeof setTimeout> | undefined
   const outcome = () => commandOutcome(props.record)
   const durationMs = () =>
     props.record.duration_ms ??
@@ -72,12 +75,34 @@ export function CommandCard(props: {
       : 0)
   const final = () => props.record.status !== 'running'
   const showCompactOutcome = () =>
-    outcome().compact !== 'Completed' && outcome().compact !== 'Failed'
+    outcome().compact !== 'Completed' &&
+    outcome().compact !== 'Failed' &&
+    outcome().compact !== 'Running'
   const hasOutput = () => {
     if ((props.record.output?.length ?? 0) > 0) return true
     const streamed = streamedOutputAvailability()
     if (streamed !== undefined) return streamed
     return props.record.started_at_ms < props.controller.attachWatermarkMs
+  }
+
+  onCleanup(() => {
+    if (commandCopyFeedbackTimeout !== undefined) clearTimeout(commandCopyFeedbackTimeout)
+  })
+
+  const copyCommand = async () => {
+    if (!navigator.clipboard) return
+    await navigator.clipboard.writeText(props.record.command)
+    setCommandCopied(true)
+    if (commandCopyFeedbackTimeout !== undefined) clearTimeout(commandCopyFeedbackTimeout)
+    commandCopyFeedbackTimeout = setTimeout(() => {
+      setCommandCopied(false)
+      commandCopyFeedbackTimeout = undefined
+    }, 2_000)
+  }
+
+  const toggleOutput = () => {
+    if (!hasOutput()) return
+    props.controller.toggleCommandExpansion(props.record.presentation_id)
   }
 
   return (
@@ -86,7 +111,11 @@ export function CommandCard(props: {
       classList={{ 'timeline-card-degraded': props.record.evidence.degraded }}
       data-presentation-id={props.record.presentation_id}
     >
-      <div class="command-card-header">
+      <div
+        class="command-card-header"
+        classList={{ 'command-card-header-expandable': hasOutput() }}
+        onClick={toggleOutput}
+      >
         <span
           class={`command-status command-status-${outcome().className}`}
           aria-label={outcome().label}
@@ -106,33 +135,40 @@ export function CommandCard(props: {
           <span class="command-prompt">$ </span>
           {props.record.command}
         </code>
-        <button
-          type="button"
-          class="command-audit-button"
-          aria-expanded={auditOpen()}
-          onClick={() => setAuditOpen((value) => !value)}
-        >
-          Audit
-        </button>
-        <button
-          type="button"
-          class="command-chevron"
-          classList={{ 'command-chevron-hidden': !hasOutput() }}
-          aria-hidden={!hasOutput()}
-          aria-label={expanded() ? 'Collapse command output' : 'Expand command output'}
-          aria-expanded={expanded()}
-          tabIndex={hasOutput() ? 0 : -1}
-          onClick={() => props.controller.toggleCommandExpansion(props.record.presentation_id)}
-        >
-          <ChevronDownIcon />
-        </button>
+        <div class="command-header-actions">
+          <Show when={props.showRawButton}>
+            <button
+              type="button"
+              class="command-audit-button"
+              aria-expanded={auditOpen()}
+              onClick={(event) => {
+                event.stopPropagation()
+                setAuditOpen((value) => !value)
+              }}
+            >
+              {auditOpen() ? 'Hide Raw' : 'Raw'}
+            </button>
+          </Show>
+          <button
+            type="button"
+            class="command-copy-button"
+            aria-label={commandCopied() ? 'Command copied' : 'Copy command'}
+            title={commandCopied() ? 'Copied' : 'Copy command'}
+            onClick={(event) => {
+              event.stopPropagation()
+              void copyCommand()
+            }}
+          >
+            {commandCopied() ? <CheckIcon /> : <CopyIcon />}
+          </button>
+        </div>
       </div>
       <div class="command-meta">
         <Show when={showCompactOutcome()}>
           <span>{outcome().compact}</span>
         </Show>
-        <span>{formatDuration(durationMs())}</span>
-        <Show when={props.record.exit_code !== null && final()}>
+        <span>duration {formatDuration(durationMs())}</span>
+        <Show when={props.record.exit_code !== null && props.record.exit_code !== 0 && final()}>
           <span>exit {props.record.exit_code}</span>
         </Show>
         <Show when={props.record.polls && props.record.polls.count > 0}>
@@ -153,7 +189,7 @@ export function CommandCard(props: {
           final={final()}
         />
       </Show>
-      <Show when={auditOpen()}>
+      <Show when={props.showRawButton && auditOpen()}>
         <CommandAudit
           presentationId={props.record.presentation_id}
           runtimeId={props.runtimeId}

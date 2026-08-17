@@ -1,5 +1,5 @@
 import { createVirtualizer } from '@tanstack/solid-virtual'
-import { For, Show, createEffect, onCleanup } from 'solid-js'
+import { For, Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js'
 
 import type { AgentStreamController } from '../streams/AgentStreamController'
 import {
@@ -17,6 +17,7 @@ export function AgentTimeline(props: {
   nowMs?: number
   commandOutputsExpanded?: boolean
   diffsExpanded?: boolean
+  showRawButton?: boolean
   diffHighlighter?: DiffHighlighter
 }) {
   let scrollElement: HTMLDivElement | undefined
@@ -24,8 +25,28 @@ export function AgentTimeline(props: {
   let lastMeasuredTotalSize = 0
   let followResizeFrame: number | undefined
   let returnToLiveFrame: number | undefined
+  const [atLiveEnd, setAtLiveEnd] = createSignal(true)
 
-  const noteUserScrollIntent = () => {
+  const distanceFromLiveEnd = () => {
+    if (!scrollElement) return 0
+    return Math.max(
+      0,
+      scrollElement.scrollHeight - scrollElement.clientHeight - scrollElement.scrollTop,
+    )
+  }
+
+  const syncLiveEndState = () => {
+    const atEnd = distanceFromLiveEnd() <= END_THRESHOLD_PX
+    setAtLiveEnd(atEnd)
+    if (atEnd) {
+      props.controller.setFollowing(true)
+    } else if (hasUserScrollIntent()) {
+      props.controller.setFollowing(false)
+    }
+    return atEnd
+  }
+
+  const noteUserScrollIntent = (pauseFollowing = false) => {
     if (followResizeFrame !== undefined) {
       cancelAnimationFrame(followResizeFrame)
       followResizeFrame = undefined
@@ -35,15 +56,8 @@ export function AgentTimeline(props: {
       returnToLiveFrame = undefined
     }
     userScrollIntentUntil = performance.now() + 250
-    if (scrollElement) {
-      const distanceFromEnd = Math.max(
-        0,
-        scrollElement.scrollHeight - scrollElement.clientHeight - scrollElement.scrollTop,
-      )
-      if (distanceFromEnd > END_THRESHOLD_PX) {
-        props.controller.setFollowing(false)
-      }
-    }
+    if (pauseFollowing) props.controller.setFollowing(false)
+    if (distanceFromLiveEnd() > END_THRESHOLD_PX) props.controller.setFollowing(false)
   }
 
   const hasUserScrollIntent = () => performance.now() <= userScrollIntentUntil
@@ -63,28 +77,21 @@ export function AgentTimeline(props: {
     anchorTo: 'end',
     followOnAppend: false,
     scrollEndThreshold: END_THRESHOLD_PX,
+    measureElement: (element) => element.offsetHeight,
     useAnimationFrameWithResizeObserver: true,
     onChange: (instance) => {
       const totalSize = instance.getTotalSize()
       const grew = totalSize > lastMeasuredTotalSize + 0.5
+      const changed = Math.abs(totalSize - lastMeasuredTotalSize) > 0.5
       lastMeasuredTotalSize = totalSize
-      if (
-        !grew ||
-        !props.controller.following() ||
-        hasUserScrollIntent() ||
-        followResizeFrame !== undefined
-      ) {
-        return
-      }
+      if (!changed || followResizeFrame !== undefined) return
       followResizeFrame = requestAnimationFrame(() => {
         followResizeFrame = undefined
-        if (
-          scrollElement?.isConnected &&
-          props.controller.following() &&
-          !hasUserScrollIntent()
-        ) {
+        if (!scrollElement?.isConnected) return
+        if (grew && props.controller.following() && !hasUserScrollIntent()) {
           scrollElement.scrollTop = scrollElement.scrollHeight
         }
+        syncLiveEndState()
       })
     },
   })
@@ -94,6 +101,8 @@ export function AgentTimeline(props: {
     if (followResizeFrame !== undefined) cancelAnimationFrame(followResizeFrame)
     if (returnToLiveFrame !== undefined) cancelAnimationFrame(returnToLiveFrame)
   })
+
+  onMount(() => queueMicrotask(syncLiveEndState))
 
   createEffect(() => {
     props.controller.setCommandExpansionDefault(props.commandOutputsExpanded ?? false)
@@ -131,13 +140,8 @@ export function AgentTimeline(props: {
   const loadEarlier = () => void props.controller.loadEarlier()
 
   const onScroll = () => {
-    const atEnd = virtualizer.isAtEnd(END_THRESHOLD_PX)
     const userScroll = hasUserScrollIntent()
-    if (atEnd) {
-      props.controller.setFollowing(true)
-    } else if (userScroll) {
-      props.controller.setFollowing(false)
-    }
+    syncLiveEndState()
     if (
       scrollElement &&
       scrollElement.scrollTop <= HISTORY_TRIGGER_PX &&
@@ -151,7 +155,6 @@ export function AgentTimeline(props: {
   }
 
   const returnToLive = () => {
-    props.controller.returnToLive()
     if (!scrollElement) return
     if (returnToLiveFrame !== undefined) cancelAnimationFrame(returnToLiveFrame)
     const startTop = scrollElement.scrollTop
@@ -162,6 +165,7 @@ export function AgentTimeline(props: {
       window.matchMedia('(prefers-reduced-motion: reduce)').matches
     ) {
       scrollElement.scrollTop = targetTop
+      syncLiveEndState()
       return
     }
     const startedAt = performance.now()
@@ -179,6 +183,7 @@ export function AgentTimeline(props: {
       } else {
         returnToLiveFrame = undefined
         scrollElement.scrollTop = scrollElement.scrollHeight
+        syncLiveEndState()
       }
     }
     returnToLiveFrame = requestAnimationFrame(tick)
@@ -192,9 +197,9 @@ export function AgentTimeline(props: {
         data-agent-timeline={props.controller.agentId}
         aria-label={`Agent ${props.controller.agentId} timeline`}
         tabIndex={0}
-        onWheel={noteUserScrollIntent}
-        onTouchStart={noteUserScrollIntent}
-        onPointerDown={noteUserScrollIntent}
+        onWheel={(event) => noteUserScrollIntent(event.deltaY < 0)}
+        onTouchStart={() => noteUserScrollIntent()}
+        onPointerDown={() => noteUserScrollIntent()}
         onKeyDown={(event) => {
           if (
             event.key === 'ArrowUp' ||
@@ -205,7 +210,9 @@ export function AgentTimeline(props: {
             event.key === 'End' ||
             event.key === ' '
           ) {
-            noteUserScrollIntent()
+            noteUserScrollIntent(
+              event.key === 'ArrowUp' || event.key === 'PageUp' || event.key === 'Home',
+            )
           }
         }}
         onScroll={onScroll}
@@ -231,43 +238,59 @@ export function AgentTimeline(props: {
           </div>
           <For each={virtualizer.getVirtualItems()}>
             {(item) => {
-              const presentationId = () => props.controller.orderedIds()[item.index]
-              const record = () => {
-                const id = presentationId()
-                return id ? props.controller.record(id) : undefined
-              }
+              const presentationId = () => String(item.key)
+              let rowElement: HTMLDivElement | undefined
               return (
-                <Show when={record()}>
-                  {(value) => (
-                    <div
-                      ref={(element) => {
-                        element.setAttribute('data-index', String(item.index))
-                        queueMicrotask(() => {
-                          if (element.isConnected) virtualizer.measureElement(element)
-                        })
-                      }}
-                      data-index={item.index}
-                      class="virtual-timeline-item"
-                      style={{ transform: `translateY(${item.start}px)` }}
-                    >
-                      <TimelineCard
-                        record={value()}
-                        controller={props.controller}
+                <div
+                  ref={(element) => {
+                    rowElement = element
+                    element.setAttribute('data-index', String(item.index))
+                    queueMicrotask(() => {
+                      if (element.isConnected) virtualizer.measureElement(element)
+                    })
+                  }}
+                  data-index={item.index}
+                  data-virtual-key={presentationId()}
+                  class="virtual-timeline-item"
+                  style={{ transform: `translateY(${item.start}px)` }}
+                  onClick={() => {
+                    const element = rowElement
+                    if (!element) return
+                    queueMicrotask(() => {
+                      if (element.isConnected) virtualizer.measureElement(element)
+                    })
+                  }}
+                >
+                  <Show when={presentationId()} keyed>
+                    {(stablePresentationId) => {
+                      const record = () => props.controller.record(stablePresentationId)
+                      return (
+                        <Show when={record()}>
+                          {(value) => (
+                            <TimelineCard
+                              record={value()}
+                              controller={props.controller}
                         runtimeId={props.runtimeId ?? 'runtime-test'}
                         nowMs={props.nowMs ?? Date.now()}
+                        showRawButton={props.showRawButton ?? false}
                         diffHighlighter={props.diffHighlighter ?? PLAIN_DIFF_HIGHLIGHTER}
                       />
-                    </div>
-                  )}
-                </Show>
+                          )}
+                        </Show>
+                      )
+                    }}
+                  </Show>
+                </div>
               )
             }}
           </For>
         </div>
       </div>
-      <Show when={!props.controller.following() && props.controller.unseenCount() > 0}>
+      <Show when={!atLiveEnd() || props.controller.unseenCount() > 0}>
         <button type="button" class="new-activity-button" onClick={returnToLive}>
-          ↓ {props.controller.unseenCount()} new
+          {props.controller.unseenCount() > 0
+            ? `↓ ${props.controller.unseenCount()} new`
+            : 'Scroll to bottom'}
         </button>
       </Show>
       <Show when={props.controller.historyError()}>

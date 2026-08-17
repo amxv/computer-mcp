@@ -94,6 +94,21 @@ select {
   font: inherit;
 }
 
+.lucide-icon {
+  display: inline-grid;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  place-items: center;
+  line-height: 0;
+}
+
+.lucide-icon > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
 button,
 select {
   color: inherit;
@@ -134,7 +149,9 @@ select:focus-visible {
 .toolbar-controls,
 .toolbar-button,
 .toolbar-field,
-.connection-detail {
+.connection-detail,
+.runtime-summary,
+.runtime-summary-item {
   display: flex;
   align-items: center;
 }
@@ -170,6 +187,41 @@ select:focus-visible {
   padding-top: 0;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+.runtime-summary {
+  height: 30px;
+  flex: 0 0 auto;
+  gap: 7px;
+  margin-right: 5px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-raised);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.runtime-summary > .connection-dot {
+  margin-right: 1px;
+}
+
+.runtime-summary-item {
+  gap: 4px;
+}
+
+.runtime-summary-item svg {
+  width: 14px;
+  height: 14px;
+  color: var(--faint);
+}
+
+.runtime-summary-divider {
+  width: 1px;
+  height: 14px;
+  background: var(--border);
 }
 
 .connection-dot {
@@ -383,11 +435,17 @@ select:focus-visible {
   font-size: 11px;
 }
 
+.alias-input:focus,
+.alias-input:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
 .agent-header-actions {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
-  gap: 1px;
+  gap: 5px;
 }
 
 .icon-button {
@@ -442,6 +500,8 @@ select:focus-visible {
   align-items: center;
   gap: 6px;
   margin-top: 5px;
+  padding-left: 10px;
+  padding-left: 10px;
   color: var(--muted);
   font-size: 10px;
   line-height: 1.2;
@@ -518,7 +578,7 @@ select:focus-visible {
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 0;
-  background: var(--surface-raised);
+  background: transparent;
   color: var(--muted);
 }
 
@@ -531,11 +591,6 @@ select:focus-visible {
 .agent-workdirs-toggle svg {
   width: 14px;
   height: 14px;
-  transition: transform 120ms ease;
-}
-
-.agent-workdirs-toggle[aria-expanded='true'] svg {
-  transform: rotate(180deg);
 }
 
 .agent-workdirs-expanded {
@@ -630,6 +685,21 @@ select:focus-visible {
   display: flex;
   justify-content: flex-end;
   background: rgb(0 0 0 / 24%);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity 130ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    visibility 0s linear 130ms;
+}
+
+.drawer-backdrop-open {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transition:
+    opacity 130ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    visibility 0s;
 }
 
 .agent-drawer {
@@ -640,6 +710,13 @@ select:focus-visible {
   border-left: 1px solid var(--border);
   background: var(--surface-raised);
   box-shadow: var(--shadow);
+  transform: translateX(100%);
+  transition: transform 130ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  will-change: transform;
+}
+
+.drawer-backdrop-open .agent-drawer {
+  transform: translateX(0);
 }
 
 .drawer-header {
@@ -683,6 +760,128 @@ select:focus-visible {
   text-align: center;
 }
 
+.settings-drawer {
+  width: min(430px, calc(100vw - 20px));
+}
+
+.settings-list {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding: 10px;
+}
+
+.settings-section {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+}
+
+.settings-section h3 {
+  margin: 0;
+  padding: 9px 11px 7px;
+  border-bottom: 1px solid var(--border);
+  color: var(--faint);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
+
+.settings-row,
+.settings-editor-row {
+  display: flex;
+  min-height: 58px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 9px 11px;
+}
+
+.settings-row + .settings-row {
+  border-top: 1px solid var(--border);
+}
+
+.settings-copy {
+  display: grid;
+  min-width: 0;
+  flex: 1 1 auto;
+  gap: 3px;
+}
+
+.settings-copy strong {
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.settings-copy small {
+  color: var(--muted);
+  font-size: 8.5px;
+  line-height: 1.4;
+}
+
+.settings-row select:focus,
+.settings-row select:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.settings-row select {
+  height: 30px;
+  min-width: 104px;
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 0 25px 0 8px;
+  background: var(--surface-raised);
+  color: var(--text);
+  font-size: 10px;
+}
+
+.settings-editor-row {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-editor-row input {
+  width: 100%;
+  height: 31px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 0 9px;
+  background: var(--surface-raised);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
+}
+
+.settings-editor-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 0 11px 10px;
+}
+
+.settings-preset-button {
+  height: 27px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0 9px;
+  background: var(--surface-raised);
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.settings-preset-button:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
 .drawer-agent {
   display: grid;
   width: 100%;
@@ -694,6 +893,10 @@ select:focus-visible {
   background: transparent;
   color: inherit;
   text-align: left;
+}
+
+.drawer-agent-toggleable {
+  padding-right: 42px;
 }
 
 .drawer-agent-entry {
@@ -763,10 +966,6 @@ select:focus-visible {
   flex: 0 0 auto;
 }
 
-.drawer-agent-meta-toggle {
-  padding-right: 28px;
-}
-
 .drawer-workdirs-inline {
   display: flex;
   min-width: 0;
@@ -783,7 +982,7 @@ select:focus-visible {
 .drawer-workdirs-toggle {
   position: absolute;
   right: 8px;
-  bottom: 6px;
+  top: 8px;
   display: inline-grid;
   width: 24px;
   height: 24px;
@@ -816,10 +1015,9 @@ select:focus-visible {
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
-  margin: -1px 1px 0;
+  margin: 4px 0 0;
   border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
-  border-top: 0;
-  border-radius: 0 0 7px 7px;
+  border-radius: 7px;
   padding: 7px 10px 8px;
   background: color-mix(in srgb, var(--surface-raised) 86%, var(--accent-soft));
 }
@@ -854,8 +1052,14 @@ select:focus-visible {
 @media (max-width: 900px) {
   .connection-detail,
   .toolbar-field > span,
-  .toolbar-button span {
+  .toolbar-button-label {
     display: none;
+  }
+
+  .toolbar-button {
+    width: 30px;
+    padding: 0;
+    justify-content: center;
   }
 
   .toolbar-field {
@@ -1090,8 +1294,9 @@ select:focus-visible {
 .new-activity-button {
   position: absolute;
   z-index: 12;
-  right: 12px;
+  left: 50%;
   bottom: 12px;
+  transform: translateX(-50%);
   cursor: pointer;
   border: 1px solid var(--border-strong);
   border-radius: 999px;
