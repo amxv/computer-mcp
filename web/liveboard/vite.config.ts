@@ -1,7 +1,7 @@
-import { defineConfig } from 'vite'
+import { defineConfig, type ProxyOptions } from 'vite'
 import solid from 'vite-plugin-solid'
 
-function attachedLiveboardProxy() {
+function attachedLiveboardProxy(): Record<string, string | ProxyOptions> | undefined {
   const raw = process.env.LIVEBOARD_DEV_UPSTREAM
   if (!raw) return undefined
 
@@ -9,19 +9,14 @@ function attachedLiveboardProxy() {
   const capabilityPath = upstream.pathname.endsWith('/')
     ? upstream.pathname
     : `${upstream.pathname}/`
-  const proxy = {
+  const proxy: ProxyOptions = {
     target: upstream.origin,
     changeOrigin: true,
     proxyTimeout: 0,
     timeout: 0,
     rewrite: (path: string) =>
       `${capabilityPath}${path.replace(/^\//, '')}`,
-    configure: (server: {
-      on: (
-        event: 'proxyReq',
-        callback: (request: { setHeader: (name: string, value: string) => void }) => void,
-      ) => void
-    }) => {
+    configure: (server) => {
       server.on('proxyReq', (request) => {
         request.setHeader('origin', upstream.origin)
       })
