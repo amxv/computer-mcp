@@ -10,10 +10,11 @@ on:
       - .github/workflows/release.yml
       - Cargo.toml
       - Cargo.lock
-      - gg/zodex-local/zodex-local-implementation-plan-2026-08-15.md
-      - gg/zodex-local/zodex-local-acceptance.md
+      - README.md
+      - AGENTS.md
+      - .agents/**
       - scripts/check.sh
-      - scripts/check-local-contract.sh
+      - scripts/check-product-contract.sh
       - scripts/install.sh
       - src/**
       - tests/**
@@ -25,10 +26,11 @@ on:
       - .github/workflows/release.yml
       - Cargo.toml
       - Cargo.lock
-      - gg/zodex-local/zodex-local-implementation-plan-2026-08-15.md
-      - gg/zodex-local/zodex-local-acceptance.md
+      - README.md
+      - AGENTS.md
+      - .agents/**
       - scripts/check.sh
-      - scripts/check-local-contract.sh
+      - scripts/check-product-contract.sh
       - scripts/install.sh
       - src/**
       - tests/**
@@ -52,8 +54,8 @@ jobs:
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Validate Local and RMCP contract
-        run: bash scripts/check-local-contract.sh
+      - name: Validate product and MCP contract
+        run: bash scripts/check-product-contract.sh
 
       - name: Run repository validation
         shell: bash
@@ -93,8 +95,8 @@ jobs:
         with:
           targets: aarch64-apple-darwin
 
-      - name: Validate Local and RMCP contract
-        run: bash scripts/check-local-contract.sh
+      - name: Validate product and MCP contract
+        run: bash scripts/check-product-contract.sh
 
       - name: Run repository validation
         shell: bash

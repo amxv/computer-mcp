@@ -25,7 +25,7 @@ cargo run --quiet --bin zodex-agent -- --help
 cargo run --quiet --bin zodex-agent -- github publish-pr --help
 ```
 
-The tests cover binary manifests, CLI parity, GitHub App scripts, install script behavior, Sprite scripts, zodex-agent CLI forwarding, MCP tool registration, HTTP API parity, session handling, redaction, and patch application.
+The tests cover binary manifests, CLI parity, GitHub App scripts, install behavior, Sprite scripts, zodex-agent forwarding, MCP tool registration, session handling, redaction, patch application, mode-first CLI contracts, and public documentation contracts.
 
 ## Docs site checks
 
@@ -51,11 +51,11 @@ These paths are ignored.
 
 Keep docs tied to actual zodex behavior:
 
-- mention the real binaries: `zodex`, `zodex-agent`, `zodex-client`, `zodexd`, `zodex-prd`
+- mention the real binaries: `zodex`, `zodex-agent`, `git-remote-zodex`, `zodexd`, `zodex-prd`
 - distinguish operator-machine commands from Sprite-side commands
 - keep the read/write access model explicit
 - explain when a command needs an active grant
-- document both MCP and direct HTTP routes when changing server behavior
+- keep MCP as the supported remote coding transport; do not reintroduce deleted legacy transports
 - update command examples when Clap arguments change
 - when Local observability routes, response fields, filters, SSE event types, discovery fields, API/presentation versions, or recovery semantics change, update [Local observability API](/docs/local/observability-api) in the same change
 - when the first-party watch picker, filters, keyboard controls, presentation behavior, or recovery UX changes, update [Local watch TUI](/docs/local/watch) in the same change

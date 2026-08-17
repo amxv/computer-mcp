@@ -1,190 +1,177 @@
 ---
 title: "Troubleshooting"
-description: "Diagnose Sprite runtime, MCP URL, service, TLS, proxy, GitHub reader, publisher, push-grant, and YOLO problems."
-order: 12
+description: "Diagnose the Sprite wake origin, managed services, canonical Worker, MCP capability, GitHub reader, publisher, push grants, and YOLO policy."
+order: 11
 category: Sprite
-summary: "A symptom-first recovery guide for remote Sprite deployments."
+summary: "A symptom-first recovery guide for the current wake-on-demand Sprite architecture."
 ---
 
-Start with:
+Start with the end-to-end check:
+
+```bash
+zodex sprite health --sprite dev
+```
+
+Then isolate the first failing layer instead of repeatedly retrying the whole workflow.
+
+## 1. Sprite identity / raw origin
+
+```bash
+sprite info dev
+```
+
+The canonical Worker needs `url auth: public`. Repair with:
+
+```bash
+sprite config update --url-auth public dev
+sprite info dev
+```
+
+The raw URL is only the Worker upstream/wake origin; do not register it directly in ChatGPT.
+
+## 2. Managed service state
 
 ```bash
 zodex sprite status --sprite dev
-zodex sprite health --sprite dev
-zodex sprite logs --sprite dev --service zodexd --lines 200
-zodex sprite logs --sprite dev --service zodex-prd --lines 200
+zodex sprite logs --sprite dev --service zodex-prd --lines 100
+zodex sprite logs --sprite dev --service zodexd --lines 100
 ```
 
-## The Sprite cannot be reached
-
-Check the public Sprite URL:
+If definitions drift:
 
 ```bash
-sprite use dev
-sprite url
+zodex sprite sync --sprite dev
 ```
 
-Then:
+If definitions are correct but a service needs repair:
 
 ```bash
-zodex sprite health --sprite dev
-zodex proxy verify-origin --sprite dev
+zodex sprite restart --sprite dev
 ```
 
-If the raw Sprite origin is healthy but the ChatGPT URL is not, inspect the optional proxy separately. See [Sprite: connect ChatGPT](/docs/sprite/connect).
+Neither command changes persistent VM power state.
 
-## `/mcp` rejects ChatGPT
-
-Confirm the connector URL includes the current Zodex key:
-
-```text
-https://<host>/mcp?key=<key>
-```
-
-If you changed/recreated Sprite config, refresh the ChatGPT connector/app with the current URL.
-
-## `zodexd` is not running
+## 3. Cloudflare Worker
 
 ```bash
-zodex sprite logs --sprite dev --service zodexd --lines 300
-zodex sprite sync --sprite dev --force-recreate
+zodex sprite proxy status --sprite dev
+zodex sprite proxy verify --sprite dev
 ```
 
-Common causes include stale service definitions, port conflicts from older installs, invalid TLS paths, or malformed `/etc/zodex/config.toml`.
+Common cases:
 
-## `zodex-prd` is not running
+### Worker is stale or foreign
 
 ```bash
-zodex sprite logs --sprite dev --service zodex-prd --lines 300
+zodex sprite proxy deploy --sprite dev
+zodex sprite proxy verify --sprite dev
+```
+
+### Several Cloudflare accounts are available
+
+Choose explicitly:
+
+```bash
+zodex sprite proxy deploy --sprite dev --cloudflare-account <id-or-name>
+```
+
+### Temporary claim expired
+
+Rerun deploy to create a fresh temporary deployment/claim URL. Treat the new claim URL as a secret and claim it within the displayed 60-minute window.
+
+### Temporary Worker was claimed but not permanently registered
+
+```bash
+wrangler login --use-keyring
+zodex sprite proxy deploy --sprite dev
+```
+
+The claim step and normal Wrangler authentication are separate. Zodex never persists the claim URL.
+
+### No Wrangler-capable runner
+
+Install/provide a supported Node/Wrangler environment or make `wrangler`, `bunx`, or `npx` available on `PATH`. Zodex intentionally does not install a general-purpose JS toolchain itself.
+
+## 4. ChatGPT endpoint
+
+```bash
+zodex sprite connect --sprite dev
+```
+
+If the Worker is current/reachable, this copies the secret capability URL. Use `--show-url` only when you want it printed.
+
+If ChatGPT sees no tools, check:
+
+- the app endpoint came from `zodex sprite connect`;
+- Developer Mode/custom apps are enabled for the account/workspace;
+- current plan/workspace policy supports the required MCP behavior;
+- tools were rescanned after endpoint changes.
+
+Current OpenAI guidance supports full write/modify custom MCP on Business and Enterprise/Edu on ChatGPT web; Pro custom MCP is read/fetch-only. See [OpenAI's current guide](https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt).
+
+## 5. Reader GitHub failures
+
+Recheck the **reader App**:
+
+- Contents: Read-only;
+- installed for the exact repository;
+- App ID/installation correspond to its PEM;
+- reader PEM ownership remains intact.
+
+Setup/upgrade health checks should catch most of these failures.
+
+## 6. PR publishing fails
+
+```bash
+zodex sprite logs --sprite dev --service zodex-prd --lines 100
 ```
 
 Check:
 
-- writer App ID/install information;
-- writer App private key path/permissions;
-- publisher state-directory ownership;
-- repository installation scope.
+- worktree is clean/committed;
+- requested `owner/repo` matches the checkout origin;
+- writer App is installed for that repository;
+- writer permissions include Contents, Pull requests, and Workflows read/write;
+- writer PEM remains readable only by the publisher boundary;
+- bundle is within the default 128 MiB ceiling.
 
-## Clone/fetch fails
+Do not fix this by making the writer PEM readable to `zodex-agent`.
 
-The reader App is the first thing to check.
+## 7. Direct push fails
 
-Confirm:
-
-- `Contents: Read-only` is enabled;
-- the App is installed on the repository;
-- the configured reader App ID/installation is current.
-
-From the Sprite:
+Inspect both explicit grants and YOLO policy:
 
 ```bash
-git ls-remote https://github.com/owner/repo.git HEAD
+zodex sprite github list-grants --sprite dev
+zodex sprite github status --sprite dev
 ```
 
-If that fails, direct-push grants are irrelevant—the read path must work first.
+A valid push needs the exact repo to be covered by the active grant/YOLO path **and** by the writer App installation/target configuration.
 
-## `publish-pr` fails
-
-Check the writer App has:
-
-```text
-Contents: Read & write
-Pull requests: Read & write
-```
-
-and is installed on the target repository.
-
-Then inspect publisher logs:
+Open a grant deliberately:
 
 ```bash
-zodex sprite logs --sprite dev --service zodex-prd --lines 300
+zodex sprite github grant-push --sprite dev --repo owner/repo
 ```
 
-## `request-push` cannot start device flow
-
-The writer App needs:
-
-- Device Flow enabled;
-- user access token expiration enabled;
-- its client ID configured/available.
-
-Then retry:
+Or scoped YOLO:
 
 ```bash
-zodex-agent github request-push --repo owner/repo
+zodex sprite github yolo --sprite dev --repo owner/repo --ttl 2h
 ```
 
-See [Sprite PRs and push grants](/docs/sprite/push-grants).
+## 8. Setup failed after runtime became healthy
 
-## `git push` is still denied after approval
-
-List the active grant:
+Setup is resumable. A Cloudflare deployment/auth failure does not require you to wipe or rebuild the healthy guest runtime. Fix the reported Worker/auth prerequisite and rerun setup or:
 
 ```bash
-zodex-agent github list-grants
+zodex sprite proxy deploy --sprite dev
 ```
 
-Check:
+## Before invasive manual repair
 
-- the grant repository exactly matches the checkout's GitHub remote;
-- the grant has not expired;
-- the writer App is installed on that repository;
-- local Git is using Zodex's direct-push credential plumbing.
-
-If the local credential state itself is wrong, revoke and forget it before requesting again:
+Inspect active work first, then consider a checkpoint:
 
 ```bash
-zodex-agent github revoke-push --repo owner/repo --forget-local-auth
-zodex-agent github request-push --repo owner/repo
+sprite checkpoint create -s dev --comment "before manual recovery"
 ```
-
-## YOLO is active but a repo cannot push
-
-Inspect scope:
-
-```bash
-zodex github mode status --sprite dev
-```
-
-A repo-scoped YOLO grant does not authorize a different repo, and Zodex cannot grant access to a repository outside the writer App installation.
-
-## An old deployment conflicts with Zodex
-
-Older Sprite installs may still have legacy services or config paths.
-
-Use:
-
-```bash
-zodex sprite sync --sprite dev --force-recreate
-```
-
-and inspect active Sprite Services. Remove/disable obsolete services only after confirming they belong to the old deployment.
-
-## Repair versus upgrade
-
-Resync current version/configuration:
-
-```bash
-zodex sprite sync --sprite dev --force-recreate
-```
-
-Upgrade binaries first, then sync:
-
-```bash
-zodex sprite upgrade --sprite dev
-zodex sprite status --sprite dev
-```
-
-## Still stuck?
-
-Collect non-secret output from:
-
-```bash
-zodex sprite status --sprite dev
-zodex sprite health --sprite dev
-zodex proxy inspect --sprite dev
-zodex sprite logs --sprite dev --service zodexd --lines 300
-zodex sprite logs --sprite dev --service zodex-prd --lines 300
-```
-
-Do not paste private PEMs, API keys, access tokens, or full secret-bearing config into an issue/chat.

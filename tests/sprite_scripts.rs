@@ -4,38 +4,56 @@ fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-#[test]
-fn setup_doc_describes_sprite_first_zodex_flow() {
-    let setup =
-        std::fs::read_to_string(repo_root().join("docs").join("setup.md")).expect("read setup doc");
+fn read(path: &str) -> String {
+    std::fs::read_to_string(repo_root().join(path))
+        .unwrap_or_else(|error| panic!("read {path}: {error}"))
+}
 
-    assert!(setup.contains("zodex sprite setup"));
-    assert!(setup.contains("curl -fsSL https://zodex.ashray.xyz/install.sh | sh"));
-    assert!(setup.contains("curl -fsSL https://sprites.dev/install.sh | sh"));
-    assert!(setup.contains("sprite org auth"));
-    assert!(setup.contains("sprite create zodex-dev"));
-    assert!(setup.contains("sprite url update --auth public"));
-    assert!(setup.contains("choose **No authentication**"));
-    assert!(setup.contains("reader_app_id"));
-    assert!(setup.contains("publisher_client_id"));
-    assert!(setup.contains("npx wrangler deploy"));
-    assert!(setup.contains("vars.SPRITE_ORIGIN"));
-    assert!(setup.contains("zodex-agent github request-push"));
-    assert!(setup.contains("zodex sprite github grant-push"));
-    assert!(setup.contains("zodex-agent github revoke-push"));
-    assert!(setup.contains("--forget-local-auth"));
-    assert!(setup.contains("--ttl <duration>"));
-    assert!(setup.contains("--no-ttl"));
-    assert!(setup.contains("--cache-refresh-token"));
-    assert!(setup.contains("zodex-agent github list-grants"));
-    assert!(setup.contains("read-only GitHub access"));
-    assert!(setup.contains("temporary repo-scoped direct push access"));
-    assert!(setup.contains("Expired grants stop working in the credential-helper path"));
-    assert!(setup.contains("canonical repository slug is `amxv/zodex`"));
-    assert!(setup.contains("--repo amxv/zodex"));
-    assert!(setup.contains("https://github.com/amxv/zodex.git"));
-    let deprecated_deploy_path = ["Run", "pod"].join("");
-    let deprecated_vm_path = ['V', 'P', 'S'].iter().collect::<String>();
-    assert!(!setup.contains(&deprecated_deploy_path));
-    assert!(!setup.contains(&deprecated_vm_path));
+#[test]
+fn sprite_site_guide_describes_current_first_class_setup_flow() {
+    let setup = read("src/content/docs/sprite.md");
+
+    for required in [
+        "zodex sprite setup",
+        "curl -fsSL https://zodex.ashray.xyz/install.sh | sh",
+        "curl -fsSL https://sprites.dev/install.sh | sh",
+        "sprite login",
+        "sprite create zodex-dev",
+        "sprite info zodex-dev",
+        "--reader-app-id",
+        "--reader-pem",
+        "--publisher-app-id",
+        "--publisher-client-id",
+        "--publisher-pem",
+        "Cloudflare Worker",
+        "claim URL",
+        "60 minutes",
+        "wrangler login --use-keyring",
+        "zodex sprite proxy deploy",
+        "zodex sprite connect",
+        "zodex-agent github request-push",
+        "zodex sprite github grant-push",
+        "zodex-agent github publish-pr",
+    ] {
+        assert!(
+            setup.contains(required),
+            "Sprite guide missing `{required}`"
+        );
+    }
+
+    for removed in [
+        "sprite url update",
+        "npx wrangler deploy",
+        "zodex github ",
+        "zodex proxy ",
+        "--url-auth sprite",
+        "zodex-client",
+    ] {
+        assert!(
+            !setup.contains(removed),
+            "Sprite guide still contains legacy surface `{removed}`"
+        );
+    }
+
+    assert!(!repo_root().join("docs/setup.md").exists());
 }

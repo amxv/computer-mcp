@@ -1,104 +1,114 @@
 ---
 title: "Operations"
-description: "Check runtime health, inspect logs, resync Sprite Services, upgrade binaries, verify the proxy origin, and diagnose older installs."
+description: "Check end-to-end health, inspect Sprite Service logs, restart/reconcile services, upgrade the runtime, and maintain the canonical Worker."
 order: 9
 category: Sprite
-summary: "Day-to-day commands for keeping a zodex Sprite deployment healthy."
+summary: "Day-to-day commands for keeping a wake-on-demand Zodex Sprite healthy without manually managing VM power."
 ---
 
-## Status
+## You do not start or stop a Sprite
 
-Check the installed Sprite services:
+Sprite mode is wake-on-demand. Incoming operator/HTTP work wakes the remote environment and it can sleep again when idle. Zodex deliberately has no `zodex sprite start` or `stop` commands.
+
+`restart` means **restart the managed Zodex service stack**, not change VM power state.
+
+## Status and health
+
+Start with:
 
 ```bash
-zodex sprite status --sprite dev-sprite
+zodex sprite status --sprite dev
+zodex sprite health --sprite dev
 ```
 
-The expected services are `zodexd` and `zodex-prd`.
+- `status` reports Sprite Service state/definition drift and the selected deployment identity.
+- `health` verifies the supported chain rather than merely checking a local PID.
 
-The `status` command also has the alias:
+Inspect the raw Sprite configuration when needed:
 
 ```bash
-zodex sprite services-status --sprite dev-sprite
+sprite info dev
 ```
 
 ## Logs
 
-Read service logs from the operator machine:
+```bash
+zodex sprite logs --sprite dev --service zodexd --lines 100
+zodex sprite logs --sprite dev --service zodex-prd --lines 100
+```
+
+Add `--duration` when you need a provider-supported time window.
+
+## Worker front door
 
 ```bash
-zodex sprite logs --sprite dev-sprite --service zodexd --lines 100
-zodex sprite logs --sprite dev-sprite --service zodex-prd --lines 100
+zodex sprite proxy status --sprite dev
+zodex sprite proxy verify --sprite dev
 ```
 
-Use `--duration` when investigating a time window:
+Redeploy a stale/missing permanent Worker:
 
 ```bash
-zodex sprite logs --sprite dev-sprite --service zodexd --duration 30m
+zodex sprite proxy deploy --sprite dev
 ```
 
-The `logs` command also has the alias:
+If multiple Cloudflare accounts are available, choose one explicitly:
 
 ```bash
-zodex sprite service-logs --sprite dev-sprite --service zodexd --lines 100
+zodex sprite proxy deploy --sprite dev --cloudflare-account <id-or-name>
 ```
 
-## Health
+The installed operator embeds the Worker project. Do not manage normal deployments from a Zodex source checkout.
 
-Check runtime health through the Sprite path:
+## Restart the Zodex services
 
 ```bash
-zodex sprite health --sprite dev-sprite
+zodex sprite restart --sprite dev
 ```
 
-You can also verify the public origin and proxy:
+This uses dependency-safe service sequencing for `zodex-prd` and `zodexd`. Use it after a service-level failure when the deployed definitions themselves are still correct.
+
+## Reconcile desired service state
 
 ```bash
-zodex proxy verify-origin --sprite dev-sprite
-curl https://dev-zodex.example.net/health
+zodex sprite sync --sprite dev
 ```
 
-A healthy daemon returns:
+`sync` is an advanced repair/reconciliation command. Use it when service definitions drift, after older/manual installations, or when setup/upgrade explicitly directs you there.
 
-```json
-{"status":"ok"}
-```
+The flags `--force-recreate` and `--skip-stop-detached` are recovery controls; do not make them the everyday path.
 
-## Sync services
-
-After changing service definitions or runtime configuration:
+## Upgrade a Sprite runtime
 
 ```bash
-zodex sprite sync --sprite dev-sprite --force-recreate
+zodex sprite upgrade --sprite dev --version latest
 ```
 
-To avoid stopping detached services during a targeted sync:
+This is distinct from root `zodex upgrade`, which upgrades only the operator CLI. Sprite upgrade replaces the guest runtime, reconciles/restarts managed services, validates the running version/health, preserves GitHub grant/YOLO state, and updates a registered permanent Worker when the embedded Worker changed and Cloudflare auth is available.
+
+If it reports that the Worker update still needs operator auth:
 
 ```bash
-zodex sprite sync --sprite dev-sprite --skip-stop-detached
+wrangler login --use-keyring
+zodex sprite proxy deploy --sprite dev
+zodex sprite proxy verify --sprite dev
 ```
 
-## Upgrade
+## Checkpoint before risky manual repairs
 
-Upgrade an installed runtime:
+For invasive remote work outside normal Zodex commands:
 
 ```bash
-zodex sprite upgrade --sprite dev-sprite --version latest
+sprite checkpoint create -s dev --comment "before manual repair"
+sprite checkpoint list -s dev
 ```
 
-To upgrade while also updating repo or URL auth behavior:
+A checkpoint is a recovery aid, not a substitute for inspecting active work/processes first.
+
+## Connect after maintenance
 
 ```bash
-zodex sprite upgrade   --sprite dev-sprite   --version v0.2.10   --repo owner/repo   --url-auth sprite
+zodex sprite connect --sprite dev
 ```
 
-After an upgrade, verify service status, logs, proxy origin, reader-backed clone, and one short command execution through MCP.
-
-## Migration checks
-
-For older pre-zodex Sprites, check these before debugging the new runtime:
-
-- remove or disable `computer-mcpd` and `computer-mcp-prd`
-- migrate old `/etc/computer-mcp` repo references into `/etc/zodex/config.toml`
-- verify `/var/lib/zodex/publisher` is writable by the publisher user
-- run TLS setup before expecting `zodex-prd` and `zodexd` to start cleanly
+This verifies the registered permanent Worker/build/origin before deliberately revealing/copying the secret MCP capability URL.

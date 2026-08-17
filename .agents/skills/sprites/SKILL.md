@@ -1,200 +1,152 @@
 ---
 name: sprites
-description: Use when operating Sprites from the CLI, including auth/context setup, command execution, networking, persistence behavior, checkpoints, day-to-day workflows with an existing Sprite, or diagnosing access differences between the default sprite guest user and the separate zodex-agent account used by coding agents.
+summary: Operate Zodex Sprite workspaces safely: identify the right user and service boundary, inspect current Sprite state, checkpoint before risky changes, and use the mode-first Zodex operator commands.
 ---
 
 # Sprites
 
-Supported framing for this repo:
-- use `zodex` for operator-facing commands and product naming
-- use Sprite-first language and workflows throughout
+Use this skill when working on or diagnosing Zodex's **Sprite** mode. Zodex Local is a peer product mode; do not describe Sprite as the universal/default architecture when the task is about Local.
 
-Use this skill when work involves understanding or operating Sprites with the `sprite` CLI.
+## Mental model
 
-This skill is based on:
+A Sprite is a wake-on-demand remote Linux workspace. Ordinary users do not manually start or stop the VM: incoming HTTP/operator work wakes it and it can sleep again when idle.
 
-- https://docs.sprites.dev/
-- https://docs.sprites.dev/quickstart/
-- https://docs.sprites.dev/working-with-sprites/
-- https://docs.sprites.dev/cli/commands/
-- https://docs.sprites.dev/cli/authentication/
-- https://docs.sprites.dev/cli/installation/
+The supported ChatGPT path is:
 
-## Core Mental Model
-
-A Sprite is a persistent cloud Linux environment.
-
-- Filesystem persists across sleep/wake
-- Processes and RAM do not persist when a Sprite sleeps
-- Sprite wakes automatically on CLI command execution and HTTP requests
-- Each Sprite has a URL and supports local-to-remote port forwarding
-
-Treat it like a remote dev box with automatic hibernation.
-
-## Guest identities and agent access
-
-`sprite exec` runs non-interactive commands as the `sprite` Linux user by
-default. On the zodex Sprite this is UID 1001 with home `/home/sprite`; it is
-not root. The `sprite` user may have passwordless sudo for operator tasks, but
-commands run as `sprite` do not prove what a coding agent can access.
-
-Coding agents use the separate `zodex-agent` Linux account. On the zodex
-Sprite this is UID 997 with home `/home/zodex-agent` and its own `PATH`, local
-installations, files, and configuration. For example, AgentBox is resolved
-from `/home/zodex-agent/.local/bin/agentbox` and its profile is read from
-`/home/zodex-agent/.config/agentbox/profiles.json`.
-
-When checking agent-visible tools, credentials, or configuration, run the
-command explicitly as `zodex-agent`:
-
-```bash
-sprite exec -s <sprite> -- sudo -n -iu zodex-agent -- /bin/bash -lc \
-  'id; whoami; printf "HOME=%s\\n" "$HOME"; command -v <command>; <command>'
+```text
+ChatGPT → Zodex Cloudflare Worker → public Sprite wake edge → zodexd → workspace
 ```
 
-Check both identities when diagnosing a discrepancy. A successful command as
-the default `sprite` user is not evidence that the same command succeeds for
-`zodex-agent`.
+The raw Sprite URL is public so the Worker can wake and reach it. That does **not** make Zodex execution unauthenticated: `/mcp` still requires the secret Zodex query capability. Use `zodex sprite connect` for the connector URL rather than constructing it manually.
 
-Repository permissions can differ even when the default user can list a
-workspace. On the zodex Sprite, `/workspace/repos/zodex` and its Git metadata
-are owned by `zodex-agent:zodex`; `sprite` can see the worktree but cannot read
-`.git/config`. Git may therefore report `not a git repository` when run as
-`sprite`. Run Git checks as the agent account:
+## Identity matters
 
-The top-level `/workspace` directory is owned by `zodex-agent:zodex` (mode
-`750`), as are its immediate directories, including `/workspace/repos` (mode
-`755`).
+Do not confuse these users:
 
-```bash
-sprite exec -s <sprite> -- sudo -n -u zodex-agent -H \
-  git -C /workspace/repos/zodex status --short --branch
-```
+- `sprite` is the default interactive Sprite user used by `sprite console` / ordinary `sprite exec`.
+- `zodex-agent` is the restricted account that executes ChatGPT coding work.
+- `zodex-publisher` owns the isolated writer key and publisher daemon state.
 
-## CLI Command Groups
+When reproducing an agent-visible permission or Git problem, run the check as `zodex-agent`, not merely as `sprite` or root.
 
-Use commands in four groups:
-
-1. Auth and context
-- `sprite org auth`
-- `sprite org list`
-- `sprite use <sprite-name>`
-- `sprite list`
-
-2. Execution and sessions
-- `sprite exec ...` for one-off commands and scripts
-- `sprite console` for interactive shell work
-- `sprite sessions list|attach|kill` for detached TTY sessions
-
-3. Networking
-- `sprite url` and `sprite url update --auth <sprite|public>`
-- `sprite proxy <port>` or `<local:remote>` for TCP forwarding
-
-4. State safety and lifecycle
-- `sprite checkpoint create|list|restore`
-- `sprite destroy`
-
-## Recommended Operator Workflow (Existing Sprite)
-
-For an existing Sprite (example: `coding-sprite`):
+Example:
 
 ```bash
-sprite use coding-sprite
-sprite exec 'echo hello && uname -a && pwd'
-sprite console
+sprite exec -s dev -- sudo -u zodex-agent -H bash -lc 'id; pwd; git status --short --branch'
 ```
 
-Use `sprite exec` for automation and repeatable scripts.
-Use `sprite console` for exploratory debugging.
+## Inspect before mutating
 
-For `zodex` on Sprites, prefer control-plane lifecycle commands over in-guest service management:
-
-- Initial install or full reconfiguration: `zodex sprite setup --sprite <sprite> --repo <owner/repo> ...`
-- Routine upgrade: `zodex sprite upgrade --sprite <sprite> [--org <org>]`
-- If control-plane state is stale: `zodex sprite sync --sprite <sprite> [--org <org>] --force-recreate`
-
-That keeps Sprite Services as the lifecycle owner and avoids depending on guest-local process state when upgrading.
-
-## Persistence Rules
-
-Persists:
-- Installed packages
-- Files, git repos, and DB files on disk
-- Network and URL settings
-
-Does not persist through sleep:
-- Running ad hoc processes from interactive sessions
-- In-memory state
-
-If a service must survive hibernation/wake cycles, run it as a managed Service (for example with `sprite-env services ...`) so it can restart automatically.
-
-## Networking and URL Auth
+Start with current truth:
 
 ```bash
-sprite url
-sprite url update --auth public
-sprite url update --auth sprite
+sprite info dev
+zodex sprite status --sprite dev
+zodex sprite health --sprite dev
+zodex sprite proxy status --sprite dev
 ```
 
-- Private/authenticated URL mode is safer for normal development
-- Public mode is appropriate for demos, webhooks, or intentionally public endpoints
-- Never expose secrets in publicly reachable handlers
-
-Port forwarding examples:
+For service-specific evidence:
 
 ```bash
-sprite proxy 5432
-sprite proxy 3001:3000
-sprite proxy 3000 8080 5432
+zodex sprite logs --sprite dev --service zodexd --lines 100
+zodex sprite logs --sprite dev --service zodex-prd --lines 100
 ```
 
-## Checkpoint Discipline
-
-Use checkpoints before risky changes:
+If raw URL auth is wrong, use the current Sprite configuration command:
 
 ```bash
-sprite checkpoint create --comment "before dependency upgrade"
-sprite checkpoint list
-sprite restore <version-id>
+sprite config update --url-auth public dev
+sprite info dev
 ```
 
-Restoring replaces the full filesystem state with the checkpoint version.
+Do not teach the legacy URL-update subcommand in new guidance.
 
-## Practical One-Liners
+## Prefer Zodex's service control plane
+
+Use the operator commands instead of ad hoc in-guest daemon management:
 
 ```bash
-sprite exec --dir /home/sprite/project npm test
-sprite exec --env NODE_ENV=production,DEBUG=1 node app.js
-sprite exec --file ./local.env:/home/sprite/.env cat /home/sprite/.env
+zodex sprite restart --sprite dev
+zodex sprite sync --sprite dev
+zodex sprite upgrade --sprite dev
 ```
 
-## Security and Hygiene
+- `restart` restarts the managed Zodex service stack; it is not VM power control.
+- `sync` reconciles desired Sprite Service definitions and is primarily repair/advanced operations.
+- `upgrade` replaces the selected Sprite runtime and reconciles/restarts it.
 
-- Keep `.sprite` out of git (`.gitignore`)
-- Use organization-scoped auth and tokens
-- Use private URL auth mode by default
-- Prefer checkpoints before destructive experiments
-- Treat `sprite destroy` as irreversible
+Avoid inventing `zodex sprite start` or `stop` workflows.
 
-## Version Drift Rule
+## Cloudflare Worker
 
-Docs can differ slightly across pages and CLI versions.
-When behavior is ambiguous, trust the installed CLI help first:
+The Worker is the canonical ChatGPT front door, not an optional workaround. The installed `zodex` binary embeds/materializes its Worker project; do not require a repository checkout or manual `wrangler.jsonc` editing.
+
+Useful commands:
 
 ```bash
-sprite --help
-sprite <subcommand> --help
-sprite url update --help
+zodex sprite proxy status --sprite dev
+zodex sprite proxy verify --sprite dev
+zodex sprite proxy deploy --sprite dev
 ```
 
-## Quick Troubleshooting
+If multiple Cloudflare accounts are available, pass the intended account explicitly:
 
 ```bash
-sprite org auth
-sprite list
-sprite exec ps aux
-sprite exec df -h
-sprite exec free -h
+zodex sprite proxy deploy --sprite dev --cloudflare-account <id-or-name>
 ```
 
-If auth is broken, refresh Fly.io auth and retry `sprite org auth`.
+On a first unauthenticated deploy, Zodex may surface Wrangler's temporary Worker and one-time claim URL. Treat that claim URL as a secret. Claim it within the provider's displayed window; after claim, establish normal Wrangler auth and deploy/register a permanent Worker:
+
+```bash
+wrangler login --use-keyring
+zodex sprite proxy deploy --sprite dev
+```
+
+## GitHub write policy
+
+Operator-side controls:
+
+```bash
+zodex sprite github grant-push --sprite dev --repo owner/repo
+zodex sprite github revoke-push --sprite dev --repo owner/repo
+zodex sprite github list-grants --sprite dev
+zodex sprite github yolo --sprite dev --repo owner/repo --ttl 2h
+zodex sprite github status --sprite dev
+zodex sprite github default --sprite dev
+```
+
+Guest/Agent-side controls:
+
+```bash
+zodex-agent github request-push --repo owner/repo
+zodex-agent github list-grants
+zodex-agent github publish-pr --repo owner/repo --title "Title"
+zodex-agent github revoke-push --repo owner/repo
+```
+
+Never expose the writer PEM or writer installation token to the agent shell.
+
+## Checkpoint before risky remote changes
+
+If a change could damage user work or make recovery expensive, create a checkpoint first:
+
+```bash
+sprite checkpoint create -s dev --comment "before zodex repair"
+sprite checkpoint list -s dev
+```
+
+Use checkpoints as recovery aids, not as permission to skip inspection or tests.
+
+## Debug before retrying
+
+When an operation fails unexpectedly, inspect the exact layer before repeating it:
+
+1. `sprite info` / URL auth
+2. `zodex sprite status`
+3. `zodex sprite logs`
+4. `zodex sprite proxy status`
+5. `zodex sprite proxy verify`
+6. GitHub grant/YOLO status when the failure is a push
+
+Repeated retries can hide the actual layer that failed. For MCP mutations specifically, never design a proxy retry that can replay an already-dispatched tool call.

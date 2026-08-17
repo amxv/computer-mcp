@@ -1,84 +1,83 @@
 # AGENTS.md
 
-## Product Story
+## Project overview
 
-Treat the supported product story as:
+Zodex is a Rust MCP coding harness with two first-class execution modes:
 
-- product and operator CLI: `zodex`
-- daemon: `zodexd`
-- primary client focus: ChatGPT MCP sessions
-- execution modes:
-  - Sprite: remote Sprite-backed Linux workspace
-  - Local: trusted direct execution on an Apple Silicon Mac
-- default public front door for Sprite deployments: the proxy-backed MCP URL
-- Local front door: the managed OpenAI Secure MCP Tunnel to the authenticated loopback Local MCP server
-- exact ChatGPT-facing tool surface in both modes: `exec_command`, `write_stdin`, `apply_patch`
-- `exec_command` and `apply_patch` always require an explicit absolute existing `workdir`; Local start-directory guidance is not a backend cwd fallback
-- Local has one Mac-wide runtime and one runtime-wide TTL shared by many provider-correlated Agents
-- Local Agent identity comes from provider request metadata and must never be inferred from workdir/timing heuristics
-- Local observability is a separate read-only loopback bearer API/TUI/history surface, not another execution authority
-- default access model: reader GitHub App for read, PR publishing without direct shell write tokens, and operator-chosen write modes for direct push
-- write modes: PR-only, agent-requested push, operator-granted push, timed YOLO, repo-scoped YOLO, and no-TTL YOLO for trusted sessions
+- **Local** runs directly as the logged-in user on a trusted Apple Silicon Mac and connects through an OpenAI Secure MCP Tunnel.
+- **Sprite** runs on a wake-on-demand remote Linux Sprite and connects through the canonical Cloudflare Worker front door.
 
-Keep the repo, docs, and operator guidance centered on the current `zodex` surface only. Position zodex as ChatGPT-native coding on real machines: remote Sprite Linux or trusted direct Apple Silicon Mac. The MCP tools intentionally resemble the command, stdin, and patch surfaces GPT models already know how to use well.
+Both modes expose exactly three model-facing tools: `exec_command`, `write_stdin`, and `apply_patch`. Model-visible execution and patch calls require an explicit absolute existing `workdir`; there is no ambient working-directory fallback.
 
-Do not inspect or use `zodex-mac-sandbox` as implementation guidance. Local's current branch/code/spec is authoritative.
+## Product command shape
 
-## Validation Baseline
+The public operator root is mode-first:
 
-As of July 6, 2026, `main` has a healthy repo-wide validation gate:
+```text
+zodex local ...
+zodex sprite ...
+zodex upgrade
+```
+
+Do not reintroduce generic root Linux lifecycle, TLS, proxy, GitHub, or direct HTTP command families. Root `zodex upgrade` upgrades only the operator; remote runtime upgrades use `zodex sprite upgrade`.
+
+Sprite power state is automatic. There is no public `zodex sprite start` or `stop`; incoming work wakes the Sprite. `zodex sprite restart` repairs the managed Zodex service stack, while `zodex sprite sync` is advanced desired-state reconciliation.
+
+## Sprite trust boundary
+
+The operator `zodex` binary lives on the user's machine. A Sprite receives the restricted guest runtime:
+
+- `zodex-agent`
+- `git-remote-zodex`
+- `zodexd`
+- `zodex-prd`
+
+Do not install the operator CLI into the guest merely for convenience.
+
+GitHub access intentionally uses two Apps:
+
+- reader App: read-only repository contents for clone/fetch;
+- writer App: contents, pull requests, and workflows write access for configured repositories, with Device Flow enabled for push-grant workflows.
+
+The writer PEM belongs to `zodex-publisher` and must remain unreadable by `zodex-agent`. PR publishing keeps writer tokens inside `zodex-prd`. Direct push requires an explicit repo grant or active YOLO policy plus writer installation coverage.
+
+Operator GitHub policy commands are under `zodex sprite github`:
+
+```text
+zodex sprite github grant-push
+zodex sprite github revoke-push
+zodex sprite github list-grants
+zodex sprite github yolo
+zodex sprite github default
+zodex sprite github status
+```
+
+The restricted guest interface remains:
+
+```text
+zodex-agent github request-push
+zodex-agent github revoke-push
+zodex-agent github list-grants
+zodex-agent github publish-pr
+```
+
+`zodex sprite github default` removes YOLO policy only; it must not silently revoke unrelated explicit push grants.
+
+## Sprite connection architecture
+
+The supported ChatGPT path is Cloudflare Worker → public Sprite HTTPS wake edge → plain-HTTP `zodexd` Sprite Service. The raw Sprite URL is an upstream/wake origin, not the normal ChatGPT connector endpoint. The MCP query capability remains secret and must be redacted from routine status/log output.
+
+Worker deployment is release-self-contained through `zodex sprite proxy`; do not require a Zodex source checkout or manual Wrangler project edits. The Worker may retry idempotent readiness probes, but a dispatched MCP request must be forwarded at most once.
+
+## Validation
+
+Before submitting changes, run the repository checks appropriate to the files touched:
 
 ```bash
 bash scripts/check.sh
-```
-
-This runs:
-
-- `cargo fmt --check`
-- `cargo clippy --all-targets -- -D warnings`
-- `cargo test --test source_file_size source_files_stay_under_1000_lines`
-- `cargo test`
-
-Use `bash scripts/check.sh` as the default full validation command before pushing broad Rust, CLI, runtime, or cross-module changes. The source file size test enforces the 1000 LOC guard for repo-owned source files. Treat unexpected failures in this command as real regressions unless you can prove they come from an unrelated in-flight branch.
-
-For workflow changes also run:
-
-```bash
+bun run check
+bun run build
 actionlint .github/workflows/*.yml
 ```
 
-For Local/RMCP contract changes, `bash scripts/check-local-contract.sh` is a useful focused preflight, but it does not replace the full repository gate.
-
-For docs changes run:
-
-```bash
-bun run check
-bun run build
-```
-
-## Default Access Model
-
-When updating operator or setup guidance, treat this as the supported product story:
-
-- read access comes from the reader GitHub App
-- PR publishing goes through `zodex-agent github publish-pr` and keeps publisher credentials inside `zodex-prd`
-- one-off direct push can be opened with `zodex-agent github request-push` or `zodex github grant-push`
-- trusted direct-push sessions can be opened by the operator with `zodex github mode yolo`
-- YOLO mode can be scoped to all installed repos or one or more `--repo` allowlist entries
-- YOLO mode defaults to a TTL, can be changed with `--ttl`, and can be made indefinite with `--no-ttl`
-- `zodex github mode default` turns YOLO mode off
-- `zodex github revoke-push` turns explicit push grants back off
-- Sprite deployments should assume the proxy-backed MCP front door by default
-
-## Changelog Guidelines
-
-When cutting a release, update `src/content/docs/changelog.md` before tagging.
-
-- Add a new section for the exact version tag being released.
-- Keep the newest version at the top.
-- Skip versions that do not have git tags.
-- Use commit history and diffs on `main` to summarize code changes.
-- This is an OSS project, so internal code changes may be included when useful.
-- Do not include docs-site-only changes such as site styling, Zuedocs/package bumps, deploy plumbing, footer/layout changes, or documentation navigation changes.
-- Rewrite commit subjects into clear release notes instead of pasting raw commit messages.
-- If a release contains only tagging/release metadata, write: `Maintenance release. No direct code behavior changes beyond release preparation.`
+Normal CI must validate product/code contracts directly and must not depend on private or historical planning files under `gg/` or `tmp/gg/`.

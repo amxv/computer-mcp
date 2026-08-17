@@ -3,96 +3,108 @@ title: "GitHub Apps"
 description: "Create the narrow reader and writer GitHub Apps used by Sprite mode for clone/fetch, PR publishing, push grants, and YOLO."
 order: 5
 category: Sprite
-summary: "The one-time Sprite checklist for reader/writer app permissions, device flow, private keys, IDs, and repository installation scope."
+summary: "The one-time Sprite checklist for reader/writer permissions, Device Flow, private keys, App IDs, Client ID, and selected-repository installation."
 ---
 
-## Why there are two apps
+## Why there are two Apps
 
-zodex uses two GitHub Apps because reading code and writing to GitHub have different risk profiles.
+Sprite mode intentionally separates read access from write authority:
 
-The reader app stays available so ChatGPT can clone and fetch. The writer app powers PR publishing, one-off push grants, and operator-controlled YOLO mode.
+- the **reader App** supports always-on clone/fetch;
+- the **writer App** supports PR publishing and approved direct-push paths.
 
-In config and CLI output, the writer app is often called the publisher or push-grant app because it publishes generated PR branches and backs direct-push windows.
+Create and install both Apps yourself so repository scope remains an explicit user-owned security decision. Zodex does not auto-create Apps through a manifest flow in this setup.
 
-## Reader app checklist
+## Reader App
 
-Create a GitHub App named for the zodex reader role. Configure it with:
+Create a GitHub App with the minimum repository permission:
 
 ```text
 Repository permissions:
   Contents: Read-only
-Installation scope:
-  Only select repositories
-Private key:
-  download PEM and store it on the operator machine for setup
 ```
 
-Record the app ID and install the app on the repositories ChatGPT is allowed to read.
+Then:
 
-## Writer app checklist
+1. install it on **Only select repositories**;
+2. select each repository that Sprite mode should be able to clone/fetch;
+3. generate/download a private-key PEM;
+4. record the **App ID** and absolute PEM path.
 
-Create a second GitHub App for the writer role. Configure it with:
+No writer permission belongs on this App.
+
+## Writer App
+
+Create a separate GitHub App with:
 
 ```text
 Repository permissions:
   Contents: Read & write
   Pull requests: Read & write
-Installation scope:
-  Only select repositories
-User access tokens:
-  expiration enabled
+  Workflows: Read & write
+
 Device Flow:
-  enabled
-Private key:
-  download PEM and store it on the operator machine for setup
+  Enabled
 ```
 
-Record both the app ID and the client ID. The app ID is used during setup. The client ID is used by device-flow grant commands.
+Then:
 
-## Install on selected repositories
+1. install it on **Only select repositories**;
+2. select only repositories that should support PR/direct-write workflows;
+3. generate/download a private-key PEM;
+4. record the **App ID**;
+5. record the **Client ID** from the same App settings page.
 
-Install both apps on the same target repositories unless you intentionally want different read and writer scopes.
+The Client ID is used by GitHub Device Flow and is distinct from the App ID. GitHub requires Device Flow to be enabled in the App settings before a CLI/headless flow can request a device code.
 
-```text
-owner/repo
-```
-
-Avoid organization-wide installation unless every repository in the organization is allowed for ChatGPT access and for the write modes you plan to use.
-
-## Use the values in setup
-
-Run setup with both app IDs and PEM paths:
+## Feed both Apps to setup
 
 ```bash
 zodex sprite setup \
-  --sprite dev-sprite \
+  --sprite dev \
   --repo owner/repo \
-  --reader-app-id 123456 \
-  --reader-pem /secure/zodex/reader.pem \
-  --publisher-app-id 987654 \
-  --publisher-pem /secure/zodex/writer.pem \
-  --default-base main \
-  --url-auth sprite
+  --reader-app-id <reader-app-id> \
+  --reader-pem /absolute/path/to/reader.pem \
+  --publisher-app-id <writer-app-id> \
+  --publisher-client-id <writer-client-id> \
+  --publisher-pem /absolute/path/to/writer.pem
 ```
 
-Then configure the push-grant client ID for day-to-day grants:
+Setup validates **before mutating the Sprite** that:
 
-```toml
-publisher_client_id = "Iv1.real-device-flow-client-id"
-```
+- the reader/writer App IDs match their PEMs;
+- the supplied writer Client ID belongs to that writer App;
+- writer Device Flow can issue a device code;
+- both Apps are installed for the selected repository;
+- the reader can obtain repository read access;
+- the writer can obtain the write permissions Zodex requires.
 
-or pass it directly:
+If any check fails, fix the App/installation instead of broadening permissions blindly.
+
+## Runtime isolation
+
+After setup:
+
+- reader key: `/etc/zodex/reader/private-key.pem`, readable for the restricted read path;
+- writer key: `/etc/zodex/publisher/private-key.pem`, owned by `zodex-publisher` with restrictive permissions;
+- `zodex-agent` must **not** be able to read the writer PEM;
+- `zodex-prd` mints/consumes writer installation tokens inside the publisher boundary.
+
+Verify after repairs/upgrades with:
 
 ```bash
-zodex-agent github request-push --repo owner/repo --publisher-client-id Iv1.real-device-flow-client-id
+zodex sprite health --sprite dev
+zodex sprite status --sprite dev
 ```
 
-## How the apps map to write modes
+## Which App controls a GitHub operation?
 
-| Write mode | App used | Credential exposure |
-| --- | --- | --- |
-| Clone/fetch | Reader app | Read-only helper path |
-| `publish-pr` | Writer app | Token stays inside the publisher daemon |
-| `request-push` | Writer app + device flow | Repo-scoped grant for the requested window |
-| `grant-push` | Writer app + device flow | Operator-created repo-scoped grant |
-| `mode yolo` | Writer app | Operator-controlled direct-push policy for the selected scope |
+| Operation | Credential boundary |
+| --- | --- |
+| clone/fetch/`git ls-remote` | Reader App |
+| `publish-pr` | Writer App inside `zodex-prd` |
+| agent `request-push` | Writer App Device Flow + repo-scoped grant |
+| operator `grant-push` | Writer App Device Flow + repo-scoped grant |
+| YOLO direct push | YOLO policy **and** writer installation coverage |
+
+See [Permissions and autonomy](/docs/sprite/permissions) and [Write modes](/docs/sprite/write-modes).

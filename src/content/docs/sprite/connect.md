@@ -1,98 +1,123 @@
 ---
 title: "Connect ChatGPT"
-description: "Connect ChatGPT to a Sprite-hosted Zodex MCP server, verify the public origin, and use the optional Cloudflare front door when needed."
+description: "Use the canonical Cloudflare Worker front door, understand the secret capability URL, and add a Sprite deployment to ChatGPT."
 order: 2
 category: Sprite
-summary: "The Sprite MCP URL, API key, origin checks, ChatGPT app setup, and optional proxy deployment."
+summary: "Verify the raw wake origin and permanent Worker, then use zodex sprite connect to copy the ChatGPT MCP endpoint safely."
 ---
 
-This page is **Sprite-specific**.
+This page is **Sprite-specific**. Zodex Local connects through the [OpenAI Secure MCP Tunnel](/docs/local/setup) and does not use this Cloudflare/Sprite front door.
 
-Zodex Local does not require this Cloudflare/Sprite proxy. Use [Local setup and ChatGPT connection](/docs/local/setup) for the Mac path.
-
-## The URL ChatGPT needs
-
-A Sprite deployment exposes Zodex over HTTPS. The MCP URL has this shape:
+## The supported path
 
 ```text
-https://<sprite-host>/mcp?key=<zodex-api-key>
+ChatGPT
+  → https://<worker>.workers.dev/mcp?key=<secret>
+  → Cloudflare Worker
+  → public https://<sprite>.sprites.app wake edge
+  → zodexd HTTP service
 ```
 
-Treat the complete URL as a secret because the query parameter is the Zodex MCP credential.
+The Worker is canonical because it can perform idempotent readiness/wake checks before forwarding a request. Once an MCP request is dispatched upstream, Zodex forwards it **at most once**; it does not replay a possibly side-effecting tool call after an ambiguous failure.
 
-## Get the Sprite host
+## Raw origin versus capability URL
+
+The Sprite's raw HTTPS URL must be public so Cloudflare can wake and reach it. Inspect it with current Sprite CLI syntax:
 
 ```bash
-sprite use dev
-sprite url
+sprite info dev
 ```
 
-If you are handing ChatGPT the raw Sprite URL, first verify that Zodex is healthy there:
+If URL auth needs repair:
 
 ```bash
+sprite config update --url-auth public dev
+```
+
+A public raw origin is **not** equivalent to public Zodex execution. `/mcp` still requires the Zodex query key, and the deleted privileged `/v1` command API is not part of the public surface.
+
+## Verify each layer
+
+```bash
+zodex sprite proxy status --sprite dev
+zodex sprite proxy verify --sprite dev
 zodex sprite health --sprite dev
-zodex proxy verify-origin --sprite dev
 ```
 
-A healthy origin should reach the Zodex health/MCP routes consistently.
+`proxy verify` checks both the raw origin and the registered Worker. `health` checks the supported end-to-end Sprite chain.
 
-## Add it to ChatGPT
-
-In ChatGPT, create a custom MCP app/connector and enter the full `/mcp?key=...` URL.
-
-Because the Zodex key is already part of the URL, choose **No authentication** at the ChatGPT connector layer unless your own front door adds a separate authentication scheme.
-
-Scan the MCP tools. You should see exactly:
-
-```text
-exec_command
-write_stdin
-apply_patch
-```
-
-Then open a fresh chat, select/enable the app, and try a harmless command against an explicit Sprite workdir.
-
-## When to use the Cloudflare proxy
-
-Some deployments use the repository's Cloudflare Worker as a stable public front door instead of handing ChatGPT the raw Sprite URL.
-
-Use it when the raw Sprite origin has cold-start, routing, or path-normalization behavior that makes direct MCP unreliable in your environment.
-
-Do **not** deploy the proxy merely because it exists. Verify the raw origin first:
+If no permanent Worker is registered, deploy it from the installed operator:
 
 ```bash
-zodex proxy inspect --sprite dev
-zodex proxy verify-origin --sprite dev
+zodex sprite proxy deploy --sprite dev
 ```
 
-If the raw origin works reliably for your client, you may not need the extra layer.
+No source checkout or hand-edited Wrangler project is required.
 
-## Deploy the repository Cloudflare Worker
+### First unauthenticated Cloudflare deploy
 
-From a repository checkout:
+With a current Wrangler-capable runner, Zodex can fall back to Wrangler's temporary deployment flow. It prints a live Worker URL and one-time claim URL.
+
+- Treat the **claim URL as a secret**.
+- Claim it within **60 minutes**.
+- Zodex does not persist it.
+- Wrangler may cache temporary deployment credentials/claim state in its own global config directory.
+- Claiming the Worker does not give future CLI sessions permanent Cloudflare authentication.
+
+After claim:
 
 ```bash
-cd proxy/cloudflare-worker
+wrangler login --use-keyring
+zodex sprite proxy deploy --sprite dev
 ```
 
-Set `vars.SPRITE_ORIGIN` in `wrangler.jsonc` to the Sprite origin, then:
+If several Cloudflare accounts are available, Zodex refuses to guess. Pass the intended account:
 
 ```bash
-npx wrangler deploy
+zodex sprite proxy deploy --sprite dev --cloudflare-account <id-or-name>
 ```
 
-Or use the operator helper where appropriate:
+## Copy the ChatGPT endpoint
 
 ```bash
-zodex proxy deploy --sprite dev
+zodex sprite connect --sprite dev
 ```
 
-`update` is an alias for the deploy path.
+`connect` requires a current registered Worker, validates that it points to the selected Sprite origin, reads the remote MCP key, and tries to copy the full endpoint to the clipboard.
 
-## Verify after deployment
+Use this only when you explicitly want the URL printed:
 
-Test the proxy's health endpoint and MCP connection separately from the raw Sprite origin.
+```bash
+zodex sprite connect --sprite dev --show-url
+```
 
-If the proxy fails but the Sprite origin works, debug the Worker/configuration—not the Zodex guest runtime.
+The URL is HTTPS, so it is encrypted in transit. The security concern is **credential-in-URL leakage**: shell history, logs, screenshots, pasted chats, and browser history can expose the full capability. Treat the entire endpoint as a secret.
 
-If both fail, start with [Sprite troubleshooting](/docs/sprite/troubleshooting).
+## Add the custom app in ChatGPT
+
+OpenAI's current guidance for custom MCP apps on ChatGPT web is:
+
+1. enable Developer Mode in **Settings → Apps** (or Workspace Settings → Apps);
+2. create a custom app and provide the MCP endpoint;
+3. scan the tools;
+4. create the app.
+
+Zodex's endpoint already embeds its capability secret. Do not paste that key into an unrelated authentication field. OpenAI's current custom-app guide documents OAuth where authentication is used, but does not document a static custom-header/API-key field for this flow.
+
+For full write/modify MCP, current OpenAI guidance supports **Business and Enterprise/Edu on ChatGPT web**. **Pro custom MCP remains read/fetch-only.** See [Developer mode and MCP apps in ChatGPT](https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt).
+
+## Reconnect later
+
+You do not need to reconstruct the endpoint from runtime config. Run:
+
+```bash
+zodex sprite connect --sprite dev
+```
+
+If it says the Worker is stale or foreign, repair the front door first:
+
+```bash
+zodex sprite proxy status --sprite dev
+zodex sprite proxy deploy --sprite dev
+zodex sprite proxy verify --sprite dev
+```

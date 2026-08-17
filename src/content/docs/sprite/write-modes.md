@@ -1,164 +1,103 @@
 ---
 title: "Write modes"
-description: "Choose PR-only publishing, a temporary repo push grant, operator-granted push, or scoped YOLO for a Sprite coding session."
+description: "Choose PR publishing, a temporary repo push grant, operator-granted push, or scoped YOLO for a Sprite coding session."
 order: 4
 category: Sprite
 summary: "A practical decision guide for how much GitHub write autonomy to give a Sprite Agent."
 ---
 
-These write modes are the **Sprite GitHub autonomy model**.
+These are the **Sprite GitHub autonomy modes**. They do not change MCP execution authority inside the remote workspace.
 
-ChatGPT can clone, inspect, edit, test, and commit inside the Sprite before any direct GitHub push is enabled. When it is time to publish work, choose the smallest write mode that matches the task.
-
-## Quick decision table
-
-| Need | Use | Typical command |
+| Goal | Mode | Command |
 | --- | --- | --- |
-| Review before merge | PR-only | `zodex-agent github publish-pr ...` |
-| One repo needs normal push briefly | Agent-requested grant | `zodex-agent github request-push --repo owner/repo` |
-| Human should open the window | Operator grant | `zodex github grant-push --sprite dev --repo owner/repo` |
-| Repeated trusted pushes | Repo-scoped YOLO | `zodex github mode yolo --sprite dev --repo owner/repo --ttl 4h` |
-| Trusted session across installed repos | YOLO | `zodex github mode yolo --sprite dev` |
-| Intentionally indefinite autonomy | No-TTL YOLO | `zodex github mode yolo --sprite dev --no-ttl` |
+| Human review before GitHub change lands | Publish PR | `zodex-agent github publish-pr --repo owner/repo --title "..."` |
+| Agent asks for one repo window | Request push | `zodex-agent github request-push --repo owner/repo` |
+| Human opens one repo window | Operator grant | `zodex sprite github grant-push --sprite dev --repo owner/repo` |
+| Repeated trusted pushes to one repo | Repo YOLO | `zodex sprite github yolo --sprite dev --repo owner/repo --ttl 2h` |
+| Trusted session across all eligible repos | Broad YOLO | `zodex sprite github yolo --sprite dev --ttl 2h` |
+| Intentional indefinite autonomy | No-TTL YOLO | `zodex sprite github yolo --sprite dev --no-ttl` |
 
-## PR-only: the recommended starting point
+## 1. Publish a PR
+
+Use this first when review is desirable:
 
 ```bash
 zodex-agent github publish-pr \
   --repo owner/repo \
-  --title "Describe the change" \
-  --base main \
-  --body "Summary and tests."
+  --title "Implement feature" \
+  --body "Summary and validation"
 ```
 
-Use it when:
+The agent never receives the writer App key/token; `zodex-prd` owns that boundary.
 
-- you want a reviewable branch/PR;
-- the repository is important or protected;
-- you are testing a new model/workflow;
-- the Agent does not need ordinary `git push`.
-
-The writer App token stays inside the publisher service.
-
-## Agent-requested push
+## 2. Agent-requested temporary push
 
 ```bash
 zodex-agent github request-push --repo owner/repo
 ```
 
-Then normal Git works for that repo during the grant:
+Complete GitHub Device Flow as instructed. The default TTL is 30 minutes; set `--ttl` or `--no-ttl` deliberately when different behavior is required.
+
+Then use ordinary Git:
 
 ```bash
-git push origin main
+git push origin HEAD
 ```
 
-Defaults:
-
-```text
-TTL: 30m
-scope: requested repository
-```
-
-Change the duration:
+Inspect/revoke from the guest:
 
 ```bash
-zodex-agent github request-push --repo owner/repo --ttl 2h
-```
-
-Disable the TTL only intentionally:
-
-```bash
-zodex-agent github request-push --repo owner/repo --no-ttl
-```
-
-Revoke:
-
-```bash
+zodex-agent github list-grants
 zodex-agent github revoke-push --repo owner/repo
 ```
 
-Use `--forget-local-auth` as well when you deliberately want to clear cached device-flow auth state.
+## 3. Operator-granted repo push
 
-## Operator-granted push
-
-From the operator machine:
+When the human wants to open the window directly:
 
 ```bash
-zodex github grant-push --sprite dev --repo owner/repo
+zodex sprite github grant-push --sprite dev --repo owner/repo
 ```
 
-Revoke:
+Revoke it independently:
 
 ```bash
-zodex github revoke-push --sprite dev --repo owner/repo
+zodex sprite github revoke-push --sprite dev --repo owner/repo
 ```
 
-This is useful when the human should control the exact moment the remote Agent gets direct push access.
-
-## YOLO mode
-
-Open a trusted write window:
+## 4. Repo-scoped YOLO
 
 ```bash
-zodex github mode yolo --sprite dev
-```
-
-Defaults:
-
-```text
-TTL:   2h
-scope: all repositories installed for the writer App
-```
-
-Narrow it:
-
-```bash
-zodex github mode yolo --sprite dev --repo owner/repo --ttl 4h
-```
-
-Grant several selected repos:
-
-```bash
-zodex github mode yolo \
+zodex sprite github yolo \
   --sprite dev \
   --repo owner/repo \
-  --repo owner/another-repo \
-  --ttl 4h
+  --ttl 2h
 ```
 
-Make a new grant indefinite:
+Repeat `--repo` to grant several repositories. Repo-scoped YOLO entries preserve independent expiries rather than replacing unrelated active repo entries.
+
+## 5. Broad YOLO
 
 ```bash
-zodex github mode yolo --sprite dev --no-ttl
+zodex sprite github yolo --sprite dev --ttl 2h
 ```
 
-Inspect:
+This removes the policy-side per-repo restriction, but writer App installation/target coverage still independently limits where a push can succeed.
+
+## Inspect and leave YOLO
 
 ```bash
-zodex github mode status --sprite dev
+zodex sprite github status --sprite dev
+zodex sprite github default --sprite dev
 ```
 
-Return to default:
+`default` removes YOLO state. Explicit push grants are separate capabilities and remain until they expire or are revoked.
 
-```bash
-zodex github mode default --sprite dev
-```
+## Which should I choose?
 
-Repo-scoped YOLO grants merge with other active repo grants and keep their own expiry.
+Prefer the narrowest mode that keeps the workflow moving:
 
-## Recommended progression
-
-For a new Sprite deployment:
-
-1. Start with PR publishing.
-2. Use a temporary push grant when direct push is genuinely useful.
-3. Move trusted, high-iteration repos to repo-scoped YOLO.
-4. Use broad or no-TTL YOLO only when you intentionally accept that write autonomy.
-
-The MCP connection does not change as you move between these modes.
-
-## Related guides
-
-- [Sprite permissions and autonomy](/docs/sprite/permissions)
-- [Sprite PRs and push grants](/docs/sprite/push-grants)
-- [Sprite operator write controls](/docs/sprite/operator-controls)
+1. PR for review-first work;
+2. one repo grant for a small direct-push task;
+3. repo-scoped YOLO for repeated trusted work;
+4. broad/no-TTL YOLO only when you consciously want that larger autonomy window.

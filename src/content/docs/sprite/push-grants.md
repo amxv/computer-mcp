@@ -1,133 +1,98 @@
 ---
 title: "PRs and push grants"
-description: "Publish PRs from a Sprite, request temporary direct-push access, use normal Git after approval, and revoke the grant when finished."
+description: "Publish PRs from a Sprite, request temporary direct-push access, use normal Git after approval, and revoke grants independently of YOLO."
 order: 6
 category: Sprite
 summary: "The Agent-side Sprite write workflow: publish-pr, request-push, list-grants, normal Git push, and revocation."
 ---
 
-ChatGPT can do almost all coding work before GitHub direct push is enabled: clone, inspect, edit, test, and commit. This page covers the write step after the local commit exists.
+ChatGPT can clone, inspect, edit, test, and commit before direct GitHub push is enabled. Choose a write path only when the work is ready to leave the Sprite.
 
-Use this quick rule:
-
-- use `publish-pr` when you want review
-- use `request-push` when ChatGPT should ask for one repo-scoped push window
-- use `grant-push` when the operator should approve remotely
-- use `github mode yolo` when repeated approvals are slowing down a trusted session
-
-## Open a pull request
-
-After committing locally, ChatGPT can publish a generated branch and open a PR without `gh` or a direct push grant:
+## Publish a PR
 
 ```bash
 zodex-agent github publish-pr \
   --repo owner/repo \
-  --title "Improve zodex runtime docs" \
+  --title "Ship the change" \
   --base main \
-  --body "Adds detailed runtime, grant, and operations documentation."
+  --body "Summary and validation"
 ```
 
-For a draft PR:
+Add `--draft` when appropriate.
 
-```bash
-zodex-agent github publish-pr \
-  --repo owner/repo \
-  --title "Improve zodex runtime docs" \
-  --base main \
-  --draft
-```
+`publish-pr` requires a clean committed checkout and a supported GitHub origin matching the requested repository. The writer App must cover that repository. Writer tokens remain inside `zodex-prd`.
 
-`publish-pr` sends a bundle of the current committed `HEAD` to the publisher daemon. The daemon mints short-lived writer-app credentials, pushes a generated branch, opens the PR, and keeps credentials inside the daemon.
-
-## Request access from the Sprite
-
-When a direct push should be allowed from inside the ChatGPT session, request a repo-scoped push grant:
+## Request direct push from the Agent
 
 ```bash
 zodex-agent github request-push --repo owner/repo
 ```
 
-The command runs a GitHub App device-flow authorization. It prints a verification URL and user code, tries to open the URL, and activates the grant after approval.
+The command uses the writer App's Device Flow. Setup already receives and validates the writer Client ID, so there should be no manual runtime-config edit first.
 
-The default grant TTL is `30m`:
+Defaults:
 
-```bash
-zodex-agent github request-push --repo owner/repo --ttl 30m
-```
+- TTL: 30 minutes;
+- scope: exact `owner/repo`;
+- refresh-token caching: off unless explicitly requested.
 
-For a longer grant:
-
-```bash
-zodex-agent github request-push --repo owner/repo --ttl 2h
-```
-
-For a grant without TTL enforcement:
+After approval, normal Git works:
 
 ```bash
-zodex-agent github request-push --repo owner/repo --no-ttl
+git push origin HEAD
 ```
 
-Use `--no-ttl` only for an intentional operator-controlled window.
+## Inspect grants
 
-## Push normally
-
-After the grant is active, use Git directly:
-
-```bash
-git push origin main
-```
-
-For branch-based work:
-
-```bash
-git switch -c docs-runtime-guide
-git push origin docs-runtime-guide
-```
-
-The zodex Git credential helper uses the active repo grant. It does not make unrelated repositories writable.
-
-## List grants
-
-On the Sprite:
+From the guest:
 
 ```bash
 zodex-agent github list-grants
 ```
 
-From the operator machine:
+From the operator:
 
 ```bash
-zodex github list-grants --sprite dev-sprite
+zodex sprite github list-grants --sprite dev
 ```
 
-Use this before assuming a push failure is caused by code, branch protection, or GitHub permissions.
+Expired grants are not usable by the credential helper.
 
-## Revoke when finished
+## Revoke a grant
 
-Revoke after the push step:
+Guest:
 
 ```bash
 zodex-agent github revoke-push --repo owner/repo
 ```
 
-To also clear local device-flow auth state:
+Operator:
 
 ```bash
-zodex-agent github revoke-push --repo owner/repo --forget-local-auth
+zodex sprite github revoke-push --sprite dev --repo owner/repo
 ```
 
-## When to use YOLO instead
+Revocation is per repository.
 
-Use YOLO mode when direct push should remain available across repeated commits in a trusted session:
+## When repeated approval becomes noise
+
+Use repo-scoped YOLO instead of turning one grant into an accidental forever credential:
 
 ```bash
-zodex github mode yolo --sprite dev-sprite --repo owner/repo --ttl 4h
+zodex sprite github yolo \
+  --sprite dev \
+  --repo owner/repo \
+  --ttl 2h
 ```
 
-Return to the default policy when finished:
+Return to default policy:
 
 ```bash
-zodex github mode default --sprite dev-sprite
+zodex sprite github default --sprite dev
 ```
 
-For the full decision guide, see [Write modes](/docs/sprite/write-modes).
+This does not remove unrelated explicit grants; revoke those separately.
+
+## Bundle size
+
+PR and direct/YOLO bundle submission share the default **128 MiB** ceiling. Oversized bundles are rejected before the publisher performs GitHub work.

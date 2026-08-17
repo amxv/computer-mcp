@@ -21,9 +21,10 @@ fn normal_ci_covers_linux_and_native_apple_silicon_without_secrets() {
         "runs-on: macos-15",
         "CARGO_BUILD_TARGET: aarch64-apple-darwin",
         "targets: aarch64-apple-darwin",
-        "gg/zodex-local/zodex-local-implementation-plan-2026-08-15.md",
-        "gg/zodex-local/zodex-local-acceptance.md",
-        "bash scripts/check-local-contract.sh",
+        "README.md",
+        "AGENTS.md",
+        ".agents/**",
+        "bash scripts/check-product-contract.sh",
         "bash scripts/check.sh",
     ] {
         assert!(
@@ -36,25 +37,24 @@ fn normal_ci_covers_linux_and_native_apple_silicon_without_secrets() {
         !workflow.contains("secrets."),
         "ordinary CI must not require provider/private credentials"
     );
+    assert!(
+        !workflow.contains("gg/") && !workflow.contains("tmp/gg/"),
+        "ordinary CI must validate product/code contracts rather than tracked planning files"
+    );
 }
 
 #[test]
-fn portable_contract_script_pins_modern_legacy_workdir_and_local_operator_proofs() {
-    let script = read("scripts/check-local-contract.sh");
+fn portable_contract_script_pins_shared_mcp_mode_first_cli_and_public_docs_proofs() {
+    let script = read("scripts/check-product-contract.sh");
     for required in [
         "modern_stateless_tool_call_observes_openai_session_without_transport_session",
         "tunnel_compat_initialize_is_sessionless_and_has_no_provider_attribution",
         "workdir_is_required_in_model_visible_exec_and_patch_schemas",
         "local_discovery_and_tools_list_are_stateless_and_runtime_specific",
+        "zodex_root_help_exposes_only_first_class_modes_and_upgrade",
+        "zodex_root_rejects_removed_commands_and_global_config",
         "zodex_local_help_exposes_complete_public_family_and_inspection_examples",
-        "zodex-local-implementation-plan-2026-08-15.md",
-        "zodex-local-acceptance.md",
-        "acceptance-map:start",
-        "plan-acceptance-cksum",
-        "plan-file-cksum",
-        "cksum",
-        "Phase-13-native",
-        "/bin/rm -rf \"$tmpdir\"",
+        "cargo test --locked --test docs_contract",
         "-- --exact",
     ] {
         assert!(
@@ -62,10 +62,12 @@ fn portable_contract_script_pins_modern_legacy_workdir_and_local_operator_proofs
             "portable contract check missing `{required}`"
         );
     }
-    assert!(
-        !script.contains("144"),
-        "acceptance validation must derive the current criterion set rather than hard-code the planning-time count"
-    );
+    for forbidden in ["gg/", "tmp/gg/", "cksum", "acceptance-map", "Phase-"] {
+        assert!(
+            !script.contains(forbidden),
+            "portable product contract must not depend on planning artifact `{forbidden}`"
+        );
+    }
 }
 
 #[test]
