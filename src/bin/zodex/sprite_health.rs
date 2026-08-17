@@ -175,6 +175,7 @@ async fn post_worker_mcp(
     method_header: Option<&str>,
     body: serde_json::Value,
 ) -> Result<serde_json::Value> {
+    let expected_id = body.get("id").cloned();
     let mut request = client
         .post(capability_url)
         .header("content-type", "application/json")
@@ -190,6 +191,11 @@ async fn post_worker_mcp(
         .await
         .map_err(|_| anyhow!("Worker MCP request failed; capability URL suppressed"))?;
     let status = response.status();
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
     let text = response
         .text()
         .await
@@ -197,7 +203,57 @@ async fn post_worker_mcp(
     if !status.is_success() {
         bail!("Worker MCP request returned HTTP {status}");
     }
-    serde_json::from_str(&text).context("Worker MCP response was not valid JSON")
+    parse_worker_mcp_response(content_type.as_deref(), &text, expected_id.as_ref())
+}
+
+fn parse_worker_mcp_response(
+    content_type: Option<&str>,
+    body: &str,
+    expected_id: Option<&serde_json::Value>,
+) -> Result<serde_json::Value> {
+    let is_event_stream = content_type
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("text/event-stream"));
+
+    if !is_event_stream {
+        return serde_json::from_str(body).context("Worker MCP response was not valid JSON");
+    }
+
+    let mut data_lines = Vec::new();
+    let mut saw_json_message = false;
+
+    for raw_line in body.lines().chain(std::iter::once("")) {
+        let line = raw_line.trim_end_matches('\r');
+        if line.is_empty() {
+            if data_lines.is_empty() {
+                continue;
+            }
+
+            let event_data = data_lines.join("\n");
+            data_lines.clear();
+            if event_data.trim().is_empty() {
+                continue;
+            }
+
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&event_data) else {
+                continue;
+            };
+            saw_json_message = true;
+            if expected_id.is_none_or(|id| value.get("id") == Some(id)) {
+                return Ok(value);
+            }
+            continue;
+        }
+
+        if let Some(data) = line.strip_prefix("data:") {
+            data_lines.push(data.strip_prefix(' ').unwrap_or(data).to_string());
+        }
+    }
+
+    if saw_json_message {
+        bail!("Worker MCP event stream did not contain the expected JSON-RPC response");
+    }
+    bail!("Worker MCP event stream did not contain a JSON-RPC response")
 }
 
 async fn verify_worker_mcp_contract(worker_url: &str, key: &str) -> Result<()> {

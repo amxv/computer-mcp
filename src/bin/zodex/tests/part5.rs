@@ -226,6 +226,52 @@
     }
 
     #[test]
+    fn mcp_health_response_parser_accepts_json_and_streamable_http_sse() {
+        let json = r#"{"jsonrpc":"2.0","id":1,"result":{"ok":true}}"#;
+        let parsed = super::parse_worker_mcp_response(
+            Some("application/json; charset=utf-8"),
+            json,
+            Some(&serde_json::json!(1)),
+        )
+        .expect("plain JSON MCP response");
+        assert_eq!(parsed["id"], 1);
+
+        let sse = concat!(
+            "data: \n",
+            "id: 0\n",
+            "retry: 3000\n",
+            "\n",
+            "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}\n",
+            "\n",
+            "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}\n",
+            "\n",
+        );
+        let parsed = super::parse_worker_mcp_response(
+            Some("text/event-stream"),
+            sse,
+            Some(&serde_json::json!(1)),
+        )
+        .expect("SSE MCP response");
+        assert_eq!(parsed["id"], 1);
+        assert_eq!(parsed["result"]["ok"], true);
+    }
+
+    #[test]
+    fn mcp_health_response_parser_rejects_sse_without_expected_response_id() {
+        let sse = concat!(
+            "data: {\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{}}\n",
+            "\n",
+        );
+        let err = super::parse_worker_mcp_response(
+            Some("text/event-stream; charset=utf-8"),
+            sse,
+            Some(&serde_json::json!(1)),
+        )
+        .expect_err("wrong JSON-RPC response id must fail");
+        assert!(err.to_string().contains("expected JSON-RPC response"));
+    }
+
+    #[test]
     fn setup_cli_requires_writer_client_id_and_defaults_raw_edge_to_public() {
         let missing = Cli::try_parse_from([
             "zodex",
