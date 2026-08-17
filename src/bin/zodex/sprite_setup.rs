@@ -165,6 +165,9 @@ async fn sprite_setup(options: SpriteSetupOptions<'_>) -> Result<()> {
         ],
     )?;
 
+    let resolved = resolve_remote_sprite(Some(options.sprite), options.org)?;
+    reconcile_github_agent_git_for_mode(&resolved)?;
+
     sync_sprite_services(
         options.sprite,
         options.org,
@@ -266,6 +269,9 @@ async fn sprite_upgrade(
         &exec_args,
         &[(script_file.path(), SPRITE_UPGRADE_REMOTE_SCRIPT_PATH)],
     )?;
+
+    let resolved = resolve_remote_sprite(Some(sprite), org)?;
+    reconcile_github_agent_git_for_mode(&resolved)?;
 
     let installed_version = verify_installed_sprite_release(sprite, org, version)?;
     sync_sprite_services(sprite, org, remote_config, false, false)?;
@@ -455,7 +461,6 @@ sudo chmod 0640 "$CFG"
 helper_cmd="/usr/local/bin/zodex-agent --config $CFG git-credential-helper"
 sudo -u zodex-agent env HOME=/home/zodex-agent git config --global --replace-all credential.https://github.com.helper "$helper_cmd"
 sudo -u zodex-agent env HOME=/home/zodex-agent git config --global credential.https://github.com.useHttpPath true
-sudo -u zodex-agent env HOME=/home/zodex-agent git config --global url."zodex::https://github.com/".pushInsteadOf https://github.com/
 sudo -u zodex-agent env HOME=/home/zodex-agent git config --global user.name "Zodex Agent"
 sudo -u zodex-agent env HOME=/home/zodex-agent git config --global user.email "zodex-agent@local.invalid"
 
@@ -551,7 +556,6 @@ fi
 helper_cmd="/usr/local/bin/zodex-agent --config $CFG git-credential-helper"
 sudo -u zodex-agent env HOME=/home/zodex-agent git config --global --replace-all credential.https://github.com.helper "$helper_cmd"
 sudo -u zodex-agent env HOME=/home/zodex-agent git config --global credential.https://github.com.useHttpPath true
-sudo -u zodex-agent env HOME=/home/zodex-agent git config --global url."zodex::https://github.com/".pushInsteadOf https://github.com/
 
 current_name="$(sudo -u zodex-agent env HOME=/home/zodex-agent git config --global --get user.name || true)"
 current_email="$(sudo -u zodex-agent env HOME=/home/zodex-agent git config --global --get user.email || true)"

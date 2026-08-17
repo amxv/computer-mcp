@@ -1,3 +1,26 @@
+const MAX_GITHUB_ERROR_DETAIL_CHARS: usize = 2_048;
+
+fn summarize_github_error_body(body: &str) -> String {
+    if body.trim().is_empty() {
+        return "empty response body".to_string();
+    }
+    if serde_json::from_str::<serde_json::Value>(body).is_err() {
+        return format!("non-JSON response body ({} bytes)", body.len());
+    }
+
+    let normalized = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut chars = normalized.chars();
+    let preview = chars
+        .by_ref()
+        .take(MAX_GITHUB_ERROR_DETAIL_CHARS)
+        .collect::<String>();
+    if chars.next().is_some() {
+        format!("{preview} … [truncated]")
+    } else {
+        preview
+    }
+}
+
 fn resolve_publisher_client_id(publisher_client_id: Option<&str>) -> Option<String> {
     publisher_client_id
         .map(str::trim)
@@ -178,7 +201,10 @@ async fn github_repo_id(repo: &str, bearer_token: Option<&str>) -> Result<Option
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        bail!("GitHub repository lookup failed ({status}): {body}");
+        bail!(
+            "GitHub repository lookup failed ({status}): {}",
+            summarize_github_error_body(&body)
+        );
     }
 
     let payload: GitHubRepoResponse = response
@@ -277,7 +303,10 @@ async fn poll_device_flow_access_token(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        bail!("GitHub device flow token request failed ({status}): {body}");
+        bail!(
+            "GitHub device flow token request failed ({status}): {}",
+            summarize_github_error_body(&body)
+        );
     }
 
     response
@@ -307,7 +336,10 @@ async fn refresh_user_access_token(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        bail!("GitHub user access token refresh failed ({status}): {body}");
+        bail!(
+            "GitHub user access token refresh failed ({status}): {}",
+            summarize_github_error_body(&body)
+        );
     }
 
     response

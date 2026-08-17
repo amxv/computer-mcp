@@ -1,5 +1,6 @@
     use super::{
-        Commands, GithubYoloAgentGitStatus, OPERATOR_SPRITES_REGISTRY_VERSION,
+        Commands, GithubYoloAgentGitStatus, MAX_GITHUB_ERROR_DETAIL_CHARS,
+        OPERATOR_SPRITES_REGISTRY_VERSION,
         OperatorSpriteRecord, OperatorSpriteRegistry, PUBLISHER_SERVICE_LABEL, ProxyCommand,
         ProxyDeployCommandSpec, ProxyOriginResolution, ProxyWorkerStatus, PushGrantRecord,
         ResolvedSprite, SPRITE_MAIN_SERVICE_LABEL, SpriteCommand, SpriteGithubCommand,
@@ -11,6 +12,7 @@
         ensure_proxy_origin_is_publicly_routable, ensure_temporary_wrangler_version,
         expected_sprite_service_definitions, expected_zodex_agent_git_helper,
         github_mode_expired,
+        github_default_agent_git_repair_script,
         github_yolo_agent_git_inspect_script, github_yolo_agent_git_repair_script,
         local_sprite_health_probe_script, derive_proxy_worker_name, execute_wrangler_deploy,
         materialize_proxy_project,
@@ -23,6 +25,7 @@
         resolve_publisher_client_id, resolve_remote_sprite_from_registry,
         shell_escape_single_quotes, sprite_config_url_auth_args, sprite_info_args,
         sprite_service_logs_api_path, sprite_service_delete_order, strip_sprite_api_prelude,
+        summarize_github_error_body,
         upsert_operator_sprite_record, validate_installed_sprite_release,
         validate_sprite_service_operation_stream,
     };

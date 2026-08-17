@@ -25,7 +25,9 @@ use git_remote::{
     resolve_git_object_id, resolve_git_object_type, sanitize_remote_helper_error,
 };
 #[cfg(test)]
-use github::{PushGrantRecord, parse_push_grants, resolve_active_push_grant};
+use github::{
+    PushGrantRecord, parse_push_grants, resolve_active_push_grant, summarize_github_error_body,
+};
 
 #[derive(Debug, Parser)]
 #[command(name = "zodexd")]
@@ -176,7 +178,7 @@ mod tests {
     use super::{
         Args, PushGrantRecord, create_direct_push_bundle_from_dir, git_remote_zodex_push_dst,
         git_remote_zodex_repo, parse_push_grants, resolve_active_push_grant, resolve_git_object_id,
-        resolve_git_object_type, sanitize_remote_helper_error,
+        resolve_git_object_type, sanitize_remote_helper_error, summarize_github_error_body,
     };
     use clap::CommandFactory;
     use std::fs;
@@ -209,6 +211,15 @@ mod tests {
         let message = err.to_string();
         assert!(message.contains("no active push grant"));
         assert!(message.contains("request-push"));
+    }
+
+    #[test]
+    fn github_provider_error_body_does_not_dump_html() {
+        let html = "<html><body>provider error</body></html>";
+        assert_eq!(
+            summarize_github_error_body(html),
+            format!("non-JSON response body ({} bytes)", html.len())
+        );
     }
 
     #[test]

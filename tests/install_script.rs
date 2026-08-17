@@ -89,7 +89,6 @@ fn install_script_has_expected_structure() {
         "# id = \"amxv/zodex\"",
         "# repo = \"amxv/zodex\"",
         "credential.https://github.com.useHttpPath true",
-        "url.\"zodex::https://github.com/\".pushInsteadOf",
         "Runtime lifecycle is managed from the operator machine with zodex sprite commands.",
     ];
 
@@ -99,6 +98,10 @@ fn install_script_has_expected_structure() {
             "install script missing snippet: {snippet}"
         );
     }
+    assert!(
+        !script.contains("url.\"zodex::https://github.com/\".pushInsteadOf"),
+        "default runtime install must not force the YOLO direct-push rewrite"
+    );
     assert!(
         script
             .lines()
@@ -145,6 +148,106 @@ printf 'runtime=%s\n' "$(resolved_install_mode)"
         String::from_utf8_lossy(&output.stdout),
         "auto=operator\noperator=operator\nruntime=runtime\n"
     );
+}
+
+#[test]
+fn runtime_config_migration_updates_only_the_known_legacy_bundle_default() {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock before Unix epoch")
+        .as_nanos();
+    let test_dir = std::env::temp_dir().join(format!(
+        "zodex-runtime-config-migration-test-{}-{unique}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&test_dir).expect("create migration test directory");
+    let legacy_config = test_dir.join("legacy.toml");
+    let partially_migrated_config = test_dir.join("partially-migrated.toml");
+    let custom_config = test_dir.join("custom.toml");
+    std::fs::write(
+        &legacy_config,
+        concat!(
+            "api_key = \"redacted\"\n",
+            "bind_port = 8443\n",
+            "http_bind_port = 9090\n",
+            "tls_mode = \"manual\"\n",
+            "publisher_max_bundle_bytes = 33554432\n",
+        ),
+    )
+    .expect("write legacy config");
+    std::fs::write(
+        &partially_migrated_config,
+        concat!(
+            "api_key = \"redacted\"\n",
+            "service_port = 8080\n",
+            "publisher_max_bundle_bytes = 33554432\n",
+            "# BEGIN ZODEX_GH_APPS_MANAGED\n",
+            "reader_app_id = 1\n",
+            "publisher_app_id = 2\n",
+            "# END ZODEX_GH_APPS_MANAGED\n",
+        ),
+    )
+    .expect("write partially migrated config");
+    std::fs::write(
+        &custom_config,
+        concat!(
+            "api_key = \"redacted\"\n",
+            "service_port = 7070\n",
+            "publisher_max_bundle_bytes = 33554432\n",
+            "# BEGIN ZODEX_GH_APPS_MANAGED\n",
+            "publisher_client_id = \"Iv1.current\"\n",
+            "# END ZODEX_GH_APPS_MANAGED\n",
+        ),
+    )
+    .expect("write custom config");
+
+    let command = r#"
+eval "$(sed -n '/^migrate_runtime_config()/,/^}/p' "${INSTALL_SCRIPT}")"
+log() { :; }
+die() { printf '%s\n' "$*" >&2; exit 1; }
+ZODEX_SERVICE_PORT=8080
+ZODEX_DEFAULT_PUBLISHER_MAX_BUNDLE_BYTES=134217728
+ZODEX_CONFIG_PATH="${LEGACY_CONFIG}"
+migrate_runtime_config
+ZODEX_CONFIG_PATH="${PARTIALLY_MIGRATED_CONFIG}"
+migrate_runtime_config
+ZODEX_CONFIG_PATH="${CUSTOM_CONFIG}"
+migrate_runtime_config
+"#;
+    let output = Command::new("bash")
+        .arg("-c")
+        .arg(command)
+        .env("INSTALL_SCRIPT", install_script_path())
+        .env("LEGACY_CONFIG", &legacy_config)
+        .env("PARTIALLY_MIGRATED_CONFIG", &partially_migrated_config)
+        .env("CUSTOM_CONFIG", &custom_config)
+        .output()
+        .expect("run runtime config migration");
+    if !output.status.success() {
+        panic!(
+            "runtime config migration failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let migrated = std::fs::read_to_string(&legacy_config).expect("read migrated config");
+    assert!(migrated.contains("service_port = 9090"));
+    assert!(migrated.contains("publisher_max_bundle_bytes = 134217728"));
+    assert!(!migrated.contains("bind_port ="));
+    assert!(!migrated.contains("http_bind_port ="));
+    assert!(!migrated.contains("tls_mode ="));
+
+    let partially_migrated = std::fs::read_to_string(&partially_migrated_config)
+        .expect("read partially migrated config");
+    assert!(partially_migrated.contains("service_port = 8080"));
+    assert!(partially_migrated.contains("publisher_max_bundle_bytes = 134217728"));
+    assert!(partially_migrated.contains("# BEGIN ZODEX_GH_APPS_MANAGED"));
+
+    let custom = std::fs::read_to_string(&custom_config).expect("read custom config");
+    assert!(custom.contains("service_port = 7070"));
+    assert!(custom.contains("publisher_max_bundle_bytes = 33554432"));
+
+    std::fs::remove_dir_all(&test_dir).expect("remove migration test directory");
 }
 
 #[test]

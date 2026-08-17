@@ -138,6 +138,17 @@
     }
 
     #[test]
+    fn default_agent_git_repair_script_keeps_grant_helper_and_removes_yolo_rewrite() {
+        let script = github_default_agent_git_repair_script();
+
+        assert!(script.contains(r#"helper_cmd="/usr/local/bin/zodex-agent --config /etc/zodex/config.toml git-credential-helper""#));
+        assert!(script.contains(r#"git config --global --replace-all credential.https://github.com.helper "$helper_cmd""#));
+        assert!(script.contains(r#"git config --global credential.https://github.com.useHttpPath true"#));
+        assert!(script.contains(r#"git config --global --unset-all url."zodex::https://github.com/".pushInsteadOf || true"#));
+        assert!(!script.contains(r#"--replace-all url."zodex::https://github.com/".pushInsteadOf"#));
+    }
+
+    #[test]
     fn yolo_agent_git_inspect_script_reads_direct_push_plumbing() {
         let script = github_yolo_agent_git_inspect_script();
 
@@ -344,6 +355,20 @@
     }
 
     #[test]
+    fn github_provider_error_body_is_bounded_and_does_not_dump_html() {
+        let html = "<html><body>provider error</body></html>";
+        assert_eq!(
+            summarize_github_error_body(html),
+            format!("non-JSON response body ({} bytes)", html.len())
+        );
+
+        let huge_json = serde_json::json!({ "error": "x".repeat(4_096) }).to_string();
+        let summary = summarize_github_error_body(&huge_json);
+        assert!(summary.ends_with("… [truncated]"));
+        assert!(summary.chars().count() <= MAX_GITHUB_ERROR_DETAIL_CHARS + 16);
+    }
+
+    #[test]
     fn push_grant_expired_only_when_epoch_cutoff_has_passed() {
         let active = PushGrantRecord {
             repo: "amxv/zodex".to_string(),
@@ -393,7 +418,7 @@
     }
 
     #[test]
-    fn sprite_setup_and_upgrade_scripts_enable_github_use_http_path() {
+    fn sprite_setup_and_upgrade_scripts_enable_github_use_http_path_without_forcing_yolo() {
         let setup_script = build_sprite_setup_script(&super::SpriteSetupScriptOptions {
             repo: "owner/repo",
             reader_app_id: 1,
@@ -413,8 +438,8 @@
         assert!(setup_script.contains("credential.https://github.com.useHttpPath true"));
         assert!(setup_script.contains("publisher_client_id = \"Iv1.writer-client\""));
         assert!(upgrade_script.contains("credential.https://github.com.useHttpPath true"));
-        assert!(setup_script.contains("url.\"zodex::https://github.com/\".pushInsteadOf"));
-        assert!(upgrade_script.contains("url.\"zodex::https://github.com/\".pushInsteadOf"));
+        assert!(!setup_script.contains("url.\"zodex::https://github.com/\".pushInsteadOf"));
+        assert!(!upgrade_script.contains("url.\"zodex::https://github.com/\".pushInsteadOf"));
         assert!(!setup_script.contains(".insteadOf https://github.com/"));
         assert!(!upgrade_script.contains(".insteadOf https://github.com/"));
         let disabled_setting = ["credential.https://github.com.useHttpPath ", "false"].concat();

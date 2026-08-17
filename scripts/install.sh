@@ -20,6 +20,7 @@ ZODEX_DEFAULT_WORKDIR="${ZODEX_DEFAULT_WORKDIR:-/workspace}"
 ZODEX_PUBLISHER_USER="${ZODEX_PUBLISHER_USER:-zodex-publisher}"
 ZODEX_PUBLISHER_HOME="${ZODEX_PUBLISHER_HOME:-/nonexistent}"
 ZODEX_SERVICE_GROUP="${ZODEX_SERVICE_GROUP:-zodex}"
+ZODEX_DEFAULT_PUBLISHER_MAX_BUNDLE_BYTES=134217728
 ZODEX_GIT_USER_NAME_WAS_SET=0
 if [[ "${ZODEX_GIT_USER_NAME+x}" == "x" ]]; then
   ZODEX_GIT_USER_NAME_WAS_SET=1
@@ -549,8 +550,80 @@ EOF
     log "created config at ${ZODEX_CONFIG_PATH}"
   fi
 
+  migrate_runtime_config
+
   chgrp "${ZODEX_SERVICE_GROUP}" "${ZODEX_CONFIG_PATH}"
   chmod 0640 "${ZODEX_CONFIG_PATH}"
+}
+
+migrate_runtime_config() {
+  [[ -f "${ZODEX_CONFIG_PATH}" ]] || return 0
+
+  local legacy_runtime_config=0
+  local legacy_managed_github_config=0
+  local legacy_service_port=""
+  local config_tmp=""
+
+  if grep -Eq '^[[:space:]]*(bind_port|http_bind_port|tls_[A-Za-z0-9_]+)[[:space:]]*=' "${ZODEX_CONFIG_PATH}"; then
+    legacy_runtime_config=1
+  fi
+  if grep -q '^# BEGIN ZODEX_GH_APPS_MANAGED$' "${ZODEX_CONFIG_PATH}" \
+    && ! grep -Eq '^[[:space:]]*publisher_client_id[[:space:]]*=' "${ZODEX_CONFIG_PATH}"; then
+    legacy_managed_github_config=1
+  fi
+  legacy_service_port="$(awk -F= '
+    /^[[:space:]]*http_bind_port[[:space:]]*=/ {
+      value=$2
+      gsub(/[[:space:]]/, "", value)
+      print value
+      exit
+    }
+  ' "${ZODEX_CONFIG_PATH}")"
+
+  config_tmp="$(mktemp "${ZODEX_CONFIG_PATH}.XXXXXX")"
+  if ! awk \
+    -v legacy_runtime_config="${legacy_runtime_config}" \
+    -v legacy_managed_github_config="${legacy_managed_github_config}" \
+    -v legacy_service_port="${legacy_service_port}" \
+    -v default_service_port="${ZODEX_SERVICE_PORT}" \
+    -v default_bundle_bytes="${ZODEX_DEFAULT_PUBLISHER_MAX_BUNDLE_BYTES}" '
+      BEGIN { seen_service_port=0 }
+      /^[[:space:]]*service_port[[:space:]]*=/ {
+        seen_service_port=1
+        print
+        next
+      }
+      /^[[:space:]]*(bind_port|http_bind_port|tls_[A-Za-z0-9_]+)[[:space:]]*=/ {
+        next
+      }
+      /^[[:space:]]*publisher_max_bundle_bytes[[:space:]]*=[[:space:]]*33554432[[:space:]]*$/ {
+        if (legacy_runtime_config == 1 || legacy_managed_github_config == 1) {
+          print "publisher_max_bundle_bytes = " default_bundle_bytes
+          next
+        }
+      }
+      { print }
+      END {
+        if (!seen_service_port) {
+          if (legacy_service_port != "") {
+            print "service_port = " legacy_service_port
+          } else {
+            print "service_port = " default_service_port
+          }
+        }
+      }
+    ' "${ZODEX_CONFIG_PATH}" >"${config_tmp}"; then
+    /bin/rm -f "${config_tmp}"
+    die "failed to migrate runtime config at ${ZODEX_CONFIG_PATH}"
+  fi
+
+  if cmp -s "${ZODEX_CONFIG_PATH}" "${config_tmp}"; then
+    /bin/rm -f "${config_tmp}"
+    return 0
+  fi
+
+  mv "${config_tmp}" "${ZODEX_CONFIG_PATH}"
+  log "migrated runtime config at ${ZODEX_CONFIG_PATH}"
 }
 
 run_as_agent_user() {
@@ -581,8 +654,6 @@ configure_agent_git_reader_helper() {
     git config --global --replace-all credential.https://github.com.helper "${helper_cmd}"
   run_as_agent_user \
     git config --global credential.https://github.com.useHttpPath true
-  run_as_agent_user \
-    git config --global url."zodex::https://github.com/".pushInsteadOf https://github.com/
 }
 
 configure_agent_git_identity() {
