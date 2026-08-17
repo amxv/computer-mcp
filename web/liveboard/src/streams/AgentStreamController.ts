@@ -20,7 +20,7 @@ interface CardSlot {
   setRecord: Setter<PresentationRecord>
 }
 
-interface CommandExpansionSlot {
+interface ExpansionSlot {
   override: Accessor<boolean | undefined>
   setOverride: Setter<boolean | undefined>
 }
@@ -73,6 +73,9 @@ export interface AgentStreamController {
   commandExpanded: (presentationId: string) => Accessor<boolean>
   toggleCommandExpansion: (presentationId: string) => void
   setCommandExpansionDefault: (expanded: boolean) => void
+  diffExpanded: (diffKey: string) => Accessor<boolean>
+  toggleDiffExpansion: (diffKey: string) => void
+  setDiffExpansionDefault: (expanded: boolean) => void
   setFollowing: (following: boolean) => void
   returnToLive: () => void
   loadEarlier: () => Promise<number>
@@ -94,7 +97,8 @@ export function createAgentStreamController(
 ): AgentStreamController {
   const cards = new Map<string, CardSlot>()
   const outputStates = new Map<string, CommandOutputState>()
-  const commandExpansion = new Map<string, CommandExpansionSlot>()
+  const commandExpansion = new Map<string, ExpansionSlot>()
+  const diffExpansion = new Map<string, ExpansionSlot>()
   const unseenIds = new Set<string>()
   const [orderedIds, setOrderedIds] = createSignal<string[]>([])
   const [following, setFollowingSignal] = createSignal(true)
@@ -104,6 +108,7 @@ export function createAgentStreamController(
   const [historyExhausted, setHistoryExhausted] = createSignal(false)
   const [historyError, setHistoryError] = createSignal<string>()
   const [commandExpansionDefault, setCommandExpansionDefaultSignal] = createSignal(false)
+  const [diffExpansionDefault, setDiffExpansionDefaultSignal] = createSignal(true)
   let historyCursor: string | undefined
   let disposed = false
 
@@ -188,12 +193,12 @@ export function createAgentStreamController(
     return state
   }
 
-  const expansionSlot = (presentationId: string) => {
-    const existing = commandExpansion.get(presentationId)
+  const expansionSlot = (slots: Map<string, ExpansionSlot>, key: string) => {
+    const existing = slots.get(key)
     if (existing) return existing
     const [override, setOverride] = createSignal<boolean | undefined>()
     const slot = { override, setOverride }
-    commandExpansion.set(presentationId, slot)
+    slots.set(key, slot)
     return slot
   }
 
@@ -275,17 +280,30 @@ export function createAgentStreamController(
     lastLiveOutputSequence: (presentationId) =>
       outputStates.get(presentationId)?.buffer.lastRetainedSequence(),
     commandExpanded: (presentationId) => {
-      const slot = expansionSlot(presentationId)
+      const slot = expansionSlot(commandExpansion, presentationId)
       return () => slot.override() ?? commandExpansionDefault()
     },
     toggleCommandExpansion: (presentationId) => {
-      const slot = expansionSlot(presentationId)
+      const slot = expansionSlot(commandExpansion, presentationId)
       slot.setOverride(!(slot.override() ?? commandExpansionDefault()))
     },
     setCommandExpansionDefault: (expanded) => {
       if (commandExpansionDefault() === expanded) return
       setCommandExpansionDefaultSignal(expanded)
       for (const slot of commandExpansion.values()) slot.setOverride(undefined)
+    },
+    diffExpanded: (diffKey) => {
+      const slot = expansionSlot(diffExpansion, diffKey)
+      return () => slot.override() ?? diffExpansionDefault()
+    },
+    toggleDiffExpansion: (diffKey) => {
+      const slot = expansionSlot(diffExpansion, diffKey)
+      slot.setOverride(!(slot.override() ?? diffExpansionDefault()))
+    },
+    setDiffExpansionDefault: (expanded) => {
+      if (diffExpansionDefault() === expanded) return
+      setDiffExpansionDefaultSignal(expanded)
+      for (const slot of diffExpansion.values()) slot.setOverride(undefined)
     },
     setFollowing,
     returnToLive: () => setFollowing(true),
@@ -295,6 +313,7 @@ export function createAgentStreamController(
       cards.clear()
       outputStates.clear()
       commandExpansion.clear()
+      diffExpansion.clear()
       unseenIds.clear()
       setOrderedIds([])
       setUnseenCount(0)

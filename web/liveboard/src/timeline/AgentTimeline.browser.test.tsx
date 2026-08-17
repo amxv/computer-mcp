@@ -2,7 +2,10 @@ import { render } from 'solid-js/web'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { ApiTimelinePage, PresentationRecord } from '../api/client'
+import '../diff.css'
 import '../styles.css'
+import type { DiffHighlighter } from '../diff/HighlightWorkerClient'
+import type { DiffHighlightInput } from '../diff/protocol'
 import { createAgentStreamController } from '../streams/AgentStreamController'
 import { AgentTimeline } from './AgentTimeline'
 
@@ -44,6 +47,64 @@ function page(records: PresentationRecord[]): ApiTimelinePage {
     records,
     has_more: false,
     next_cursor: null,
+  }
+}
+
+function fileChange(id: number, agentId: string): PresentationRecord {
+  return {
+    presentation_id: `file-${id}`,
+    primary_invocation_id: id,
+    raw_evidence_count: 1,
+    raw_invocation_ids: [id],
+    raw_invocation_ids_truncated: false,
+    agent_id: agentId,
+    declared_workdir: '/repo',
+    normalized_workdir: '/repo',
+    new_workdir: null,
+    started_at_ms: id * 100,
+    duration_ms: 10,
+    evidence: {
+      evidence_state: 'complete',
+      capture_state: 'complete',
+      degraded: false,
+      reason: null,
+    },
+    kind: 'file_changes',
+    source_tool: 'apply_patch',
+    changes: [
+      {
+        operation: 'edited',
+        path: `/repo/src/file_${id}.rs`,
+        old_path: null,
+        write_mode: null,
+        added: 1,
+        removed: 0,
+        diff_truncated: false,
+        lines: [
+          {
+            kind: 'add',
+            old_line: null,
+            new_line: id,
+            text: `let value_${id}: usize = ${id};`,
+          },
+        ],
+      },
+    ],
+  }
+}
+
+class CountingHighlighter implements DiffHighlighter {
+  readonly calls: DiffHighlightInput[] = []
+  isReady = () => true
+  eagerLanguages = () => ['rust'] as const
+  highlight = async (input: DiffHighlightInput) => {
+    this.calls.push(input)
+    return {
+      subjectKey: input.subjectKey,
+      revision: input.revision,
+      language: input.language,
+      rows: input.rows.map((row) => ({ index: row.index, html: null })),
+    }
   }
 }
 
@@ -230,5 +291,36 @@ describe('independent virtualized Agent timeline', () => {
     await vi.waitFor(() => expect(controllerA.unseenCount()).toBe(1))
     await vi.waitFor(() => expect(distanceFromEnd(scrollB)).toBeLessThanOrEqual(3))
     expect(controllerB.unseenCount()).toBe(0)
+  })
+
+  it('highlights only expanded file diffs that the Agent virtualizer actually mounts', async () => {
+    const controller = createAgentStreamController({
+      agentId: 'a111',
+      attachWatermarkMs: 20_000,
+      loadHistoryPage: async () => page([]),
+      ...outputLoaders,
+    })
+    const highlighter = new CountingHighlighter()
+    const container = document.createElement('div')
+    container.style.width = '340px'
+    container.style.height = '360px'
+    document.body.append(container)
+    containers.push(container)
+    disposers.push(
+      render(
+        () => <AgentTimeline controller={controller} diffHighlighter={highlighter} />,
+        container,
+      ),
+    )
+
+    controller.mergeRecovery(
+      Array.from({ length: 100 }, (_, index) => fileChange(index + 1, 'a111')),
+    )
+    const scroll = container.querySelector<HTMLElement>('[data-agent-timeline="a111"]')!
+    await vi.waitFor(() => expect(highlighter.calls.length).toBeGreaterThan(0))
+    await vi.waitFor(() => expect(scroll.scrollHeight).toBeGreaterThan(scroll.clientHeight))
+    expect(container.querySelectorAll('.virtual-timeline-item').length).toBeLessThan(30)
+    expect(highlighter.calls.length).toBeLessThan(30)
+    expect(highlighter.calls.length).toBeLessThan(controller.orderedIds().length)
   })
 })

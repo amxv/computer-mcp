@@ -1,7 +1,12 @@
-import { For, Match, Show, Switch } from 'solid-js'
+import { Match, Show, Switch } from 'solid-js'
 
 import type { PresentationRecord } from '../api/client'
 import { CommandCard } from '../command/CommandCard'
+import { FileChangesCard } from '../diff/FileChangeCard'
+import {
+  PLAIN_DIFF_HIGHLIGHTER,
+  type DiffHighlighter,
+} from '../diff/HighlightWorkerClient'
 import type { AgentStreamController } from '../streams/AgentStreamController'
 
 export function TimelineCard(props: {
@@ -9,6 +14,7 @@ export function TimelineCard(props: {
   controller: AgentStreamController
   runtimeId: string
   nowMs: number
+  diffHighlighter?: DiffHighlighter
 }) {
   if (props.record.kind === 'command') {
     return (
@@ -20,6 +26,15 @@ export function TimelineCard(props: {
       />
     )
   }
+  if (props.record.kind === 'file_changes') {
+    return (
+      <FileChangesCard
+        record={props.record}
+        controller={props.controller}
+        highlighter={props.diffHighlighter ?? PLAIN_DIFF_HIGHLIGHTER}
+      />
+    )
+  }
   return (
     <article
       class="timeline-card"
@@ -27,30 +42,6 @@ export function TimelineCard(props: {
       data-presentation-id={props.record.presentation_id}
     >
       <Switch>
-        <Match when={props.record.kind === 'file_changes'}>
-          {(() => {
-            const record = props.record.kind === 'file_changes' ? props.record : undefined
-            if (!record) return null
-            return (
-              <>
-                <div class="timeline-card-heading">
-                  <span class="card-kind">Files</span>
-                  <span>{record.changes.length} change{record.changes.length === 1 ? '' : 's'}</span>
-                </div>
-                <div class="file-change-preview">
-                  <For each={record.changes.slice(0, 3)}>
-                    {(change) => (
-                      <span>
-                        <strong>{change.operation}</strong> {change.path}
-                        <em>+{change.added} −{change.removed}</em>
-                      </span>
-                    )}
-                  </For>
-                </div>
-              </>
-            )
-          })()}
-        </Match>
         <Match when={props.record.kind === 'stdin'}>
           {(() => {
             const record = props.record.kind === 'stdin' ? props.record : undefined

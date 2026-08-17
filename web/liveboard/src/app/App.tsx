@@ -15,6 +15,10 @@ import {
 } from '../api/client'
 import { Board } from '../board/Board'
 import { initialVisibleAgentIds } from '../board/model'
+import {
+  defaultDiffHighlighter,
+  type DiffHighlighter,
+} from '../diff/HighlightWorkerClient'
 import { createRuntimeConnection } from '../streams/runtime'
 import { AgentTimeline } from '../timeline/AgentTimeline'
 import { applyTheme } from './bootstrap'
@@ -25,6 +29,7 @@ type Bootstrap = Awaited<ReturnType<typeof loadBootstrap>>
 function LiveboardWorkspace(props: {
   bootstrap: Bootstrap
   viewerAttachWatermarkMs: number
+  diffHighlighter: DiffHighlighter
 }) {
   const [preferences, setPreferences] = createSignal(props.bootstrap.preferences)
   const [pendingSaves, setPendingSaves] = createSignal(0)
@@ -77,6 +82,8 @@ function LiveboardWorkspace(props: {
             runtimeId={runtime.runtimeId()}
             nowMs={now()}
             commandOutputsExpanded={preferences().command_outputs_expanded}
+            diffsExpanded={preferences().diffs_expanded}
+            diffHighlighter={props.diffHighlighter}
           />
         )}
       />
@@ -84,7 +91,11 @@ function LiveboardWorkspace(props: {
   )
 }
 
-export function App() {
+export function App(props: { diffHighlighter?: DiffHighlighter }) {
+  // Start the one common-language worker before bootstrap can surface Agents.
+  // The app does not wait for ready; a first expanded diff may briefly render
+  // plain text and enrich as soon as the worker responds.
+  const diffHighlighter = props.diffHighlighter ?? defaultDiffHighlighter()
   const viewerAttachWatermarkMs = Date.now()
   const [bootstrap] = createResource(loadBootstrap)
 
@@ -108,6 +119,7 @@ export function App() {
           <LiveboardWorkspace
             bootstrap={value()}
             viewerAttachWatermarkMs={viewerAttachWatermarkMs}
+            diffHighlighter={diffHighlighter}
           />
         )}
       </Match>

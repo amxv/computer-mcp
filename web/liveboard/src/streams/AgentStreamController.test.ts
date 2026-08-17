@@ -196,6 +196,34 @@ describe('AgentStreamController', () => {
     expect(second()).toBe(false)
   })
 
+  it('keeps diff expansion overrides local and resets them on each global diff action', () => {
+    const controller = createAgentStreamController({
+      agentId: 'a111',
+      attachWatermarkMs: 1_000,
+      loadHistoryPage: async () => page([], false, null),
+      ...outputLoaders,
+    })
+    const first = controller.diffExpanded('inv-1:file-change:0')
+    const second = controller.diffExpanded('inv-2:file-change:0')
+    expect(first()).toBe(true)
+    expect(second()).toBe(true)
+
+    controller.toggleDiffExpansion('inv-1:file-change:0')
+    expect(first()).toBe(false)
+    expect(second()).toBe(true)
+
+    controller.setDiffExpansionDefault(false)
+    expect(first()).toBe(false)
+    expect(second()).toBe(false)
+    controller.toggleDiffExpansion('inv-1:file-change:0')
+    expect(first()).toBe(true)
+    expect(second()).toBe(false)
+
+    controller.setDiffExpansionDefault(true)
+    expect(first()).toBe(true)
+    expect(second()).toBe(true)
+  })
+
   it('releases a finalized command live buffer while retaining canonical card truth', () => {
     const controller = createAgentStreamController({
       agentId: 'a111',

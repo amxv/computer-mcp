@@ -2,6 +2,10 @@ import { createVirtualizer } from '@tanstack/solid-virtual'
 import { For, Show, createEffect, onCleanup } from 'solid-js'
 
 import type { AgentStreamController } from '../streams/AgentStreamController'
+import {
+  PLAIN_DIFF_HIGHLIGHTER,
+  type DiffHighlighter,
+} from '../diff/HighlightWorkerClient'
 import { TimelineCard } from './TimelineCard'
 
 const END_THRESHOLD_PX = 40
@@ -12,6 +16,8 @@ export function AgentTimeline(props: {
   runtimeId?: string
   nowMs?: number
   commandOutputsExpanded?: boolean
+  diffsExpanded?: boolean
+  diffHighlighter?: DiffHighlighter
 }) {
   let scrollElement: HTMLDivElement | undefined
   let userScrollIntentUntil = 0
@@ -72,6 +78,10 @@ export function AgentTimeline(props: {
 
   createEffect(() => {
     props.controller.setCommandExpansionDefault(props.commandOutputsExpanded ?? false)
+  })
+
+  createEffect(() => {
+    props.controller.setDiffExpansionDefault(props.diffsExpanded ?? true)
   })
 
   const scrollToLiveEnd = () => {
@@ -190,6 +200,7 @@ export function AgentTimeline(props: {
                         controller={props.controller}
                         runtimeId={props.runtimeId ?? 'runtime-test'}
                         nowMs={props.nowMs ?? Date.now()}
+                        diffHighlighter={props.diffHighlighter ?? PLAIN_DIFF_HIGHLIGHTER}
                       />
                     </div>
                   )}
