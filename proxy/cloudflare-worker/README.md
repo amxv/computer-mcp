@@ -1,43 +1,31 @@
-# zodex Cloudflare Worker proxy
+# zodex Cloudflare Worker
 
-This Worker is a supported `zodex` component.
-
-It fronts a Sprite-hosted `zodexd` deployment with a stable public MCP edge when the raw Sprite URL is not reliable enough for MCP clients on its own.
-
-For this repository, pair it with the `amxv/zodex` release and setup flow.
+This is the repository-owned source for the canonical Sprite front door. The
+operator embeds this source at release build time and materializes a temporary
+Wrangler project for `zodex sprite proxy deploy`; installed users do not need
+this directory.
 
 ## Responsibilities
 
-- normalize `/mcp` to the Sprite origin's working `/mcp/` upstream path
-- warm the Sprite before proxying requests
-- retry transient cold-start and edge failures
-- preserve streamed MCP responses
+- expose non-secret Worker component/build status
+- retry only idempotent Sprite health/readiness probes used for cold wake
+- normalize `/mcp` to the Sprite origin's `/mcp/` path
+- forward each incoming MCP request to the Sprite origin at most once
+- preserve MCP query parameters and streamed responses
+- disable caching for status, health, and MCP traffic
+
+The Worker deliberately does not proxy documentation or retry a dispatched MCP
+request after an upstream error/status. A tool call may already have executed
+when an edge failure becomes visible, so replay would risk duplicate side
+effects.
 
 ## Routes
 
-- `/health` -> `${SPRITE_ORIGIN}/health`
-- `/mcp` -> `${SPRITE_ORIGIN}/mcp/`
-- `/mcp/` -> `${SPRITE_ORIGIN}/mcp/`
+- `/` and `/status` — Worker component/build metadata
+- `/health` — retryable idempotent probe of `${SPRITE_ORIGIN}/health`
+- `/mcp` — `${SPRITE_ORIGIN}/mcp/`
+- `/mcp/` and descendants — corresponding Sprite MCP path
+- all other paths — `404`
 
-## Deploy
-
-Deploy the Worker directly with Wrangler from this directory:
-
-```bash
-cd proxy/cloudflare-worker
-```
-
-Set `vars.SPRITE_ORIGIN` in `wrangler.jsonc` to the public Sprite URL you want to front, then deploy:
-
-```bash
-npx wrangler deploy
-```
-
-## Inspect
-
-```bash
-zodex proxy inspect --sprite <sprite>
-zodex proxy verify-origin --sprite <sprite>
-```
-
-`zodex proxy verify-origin` checks the raw Sprite URL behavior directly so operators can confirm whether the Worker is still required as the front door for a given deployment.
+The checked-in Wrangler file is a template. Zodex fills the Worker name,
+Sprite origin, and Worker build identity only in its temporary deploy project.

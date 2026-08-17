@@ -97,12 +97,6 @@ const SPRITE_REMOTE_UPLOAD_GIT_REMOTE_HELPER_PATH: &str = "/tmp/git-remote-zodex
 const SPRITE_REMOTE_UPLOAD_DAEMON_PATH: &str = "/tmp/zodexd";
 #[allow(dead_code)]
 const SPRITE_REMOTE_UPLOAD_PUBLISHER_PATH: &str = "/tmp/zodex-prd";
-const PROXY_COMPONENT_DIR: &str = "proxy/cloudflare-worker";
-const PROXY_COMPONENT_README: &str = "proxy/cloudflare-worker/README.md";
-const PROXY_WORKER_ENTRYPOINT: &str = "proxy/cloudflare-worker/src/index.js";
-const PROXY_WRANGLER_TEMPLATE_PATH: &str = "proxy/cloudflare-worker/wrangler.jsonc";
-const PROXY_SPRITE_ORIGIN_PLACEHOLDER: &str = "__SPRITE_ORIGIN__";
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ServiceManager {
     Systemd,
@@ -300,13 +294,18 @@ enum SpriteCommand {
 
 #[derive(Debug, Subcommand)]
 enum ProxyCommand {
-    Inspect {
+    #[command(alias = "inspect")]
+    Status {
         #[arg(long)]
         sprite: Option<String>,
         #[arg(long)]
         org: Option<String>,
         #[arg(long)]
         origin: Option<String>,
+        #[arg(long)]
+        worker_name: Option<String>,
+        #[arg(long)]
+        worker_url: Option<String>,
     },
     #[command(alias = "update")]
     Deploy {
@@ -316,16 +315,23 @@ enum ProxyCommand {
         org: Option<String>,
         #[arg(long)]
         origin: Option<String>,
+        #[arg(long)]
+        worker_name: Option<String>,
+        #[arg(long)]
+        cloudflare_account: Option<String>,
         #[arg(long, default_value_t = false)]
         skip_verify_origin: bool,
     },
-    VerifyOrigin {
+    #[command(alias = "verify-origin")]
+    Verify {
         #[arg(long)]
         sprite: Option<String>,
         #[arg(long)]
         org: Option<String>,
         #[arg(long)]
         origin: Option<String>,
+        #[arg(long)]
+        worker_url: Option<String>,
     },
 }
 

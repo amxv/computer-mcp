@@ -1,9 +1,11 @@
     use super::{
         Commands, DEFAULT_LOG_LINES, GithubYoloAgentGitStatus, OperatorSpriteRecord,
         OperatorSpriteRegistry, PUBLISHER_SERVICE_LABEL, ProcessModeState, ProxyCommand,
-        PushGrantRecord, SERVICE_NAME, SPRITE_MAIN_SERVICE_LABEL, ServiceManager, SpriteCommand,
+        ProxyDeployCommandSpec, ProxyOriginResolution, ProxyWorkerStatus, PushGrantRecord,
+        ResolvedSprite, SERVICE_NAME, SPRITE_MAIN_SERVICE_LABEL, ServiceManager, SpriteCommand,
         SpriteGithubCommand, SpriteServiceAction, SpriteServiceState, SpriteServiceStatus,
-        SystemctlAction, browser_open_attempts, build_certbot_args,
+        SystemctlAction,
+        browser_open_attempts, build_certbot_args,
         build_github_yolo_agent_git_status_lines, build_github_yolo_mode_record,
         build_github_yolo_mode_record_at, build_journalctl_args, build_operator_upgrade_shell_args,
         build_process_status_lines, build_publisher_status_lines, build_reader_status_lines,
@@ -13,21 +15,25 @@
         build_systemctl_args, certbot_cert_name,
         credential_host_is_github, credential_url_host, credential_url_path,
         credential_url_protocol, ensure_http_listener_ready_for_start,
+        ensure_proxy_origin_is_publicly_routable, ensure_temporary_wrangler_version,
         expected_sprite_service_definitions, expected_zodex_agent_git_helper,
         generate_self_signed_certificate, git_credential_request_repo,
         git_credential_request_targets_github, github_mode_expired,
         github_yolo_agent_git_inspect_script, github_yolo_agent_git_repair_script,
         load_matching_push_grant, load_push_grant_from_dir, local_sprite_health_probe_script,
+        derive_proxy_worker_name, execute_wrangler_deploy, materialize_proxy_project,
         merge_github_yolo_mode_records, normalize_github_repo, normalize_github_repos,
-        normalize_proxy_origin,
+        normalize_proxy_origin, parse_sprite_info, parse_wrangler_deploy_output,
+        parse_wrangler_version,
         operator_sprites_registry_path_from_home, parse_git_credential_request,
         parse_github_yolo_agent_git_status, parse_push_grant_ttl, parse_push_grants,
         parse_systemctl_show, process_log_path, process_pid_path, proxy_mcp_status_looks_healthy,
-        push_grant_expired, read_tail_lines, render_proxy_wrangler_config,
+        proxy_worker_build_id, proxy_worker_build_state, push_grant_expired, read_tail_lines,
+        render_proxy_wrangler_config,
         restart_sprite_service_stack_with, render_systemd_unit, resolve_publisher_client_id,
         resolve_remote_sprite_from_registry, select_tls_san_ip, service_manager_from_pid1,
-        shell_escape_single_quotes, sprite_service_logs_api_path, sprite_service_delete_order,
-        sprite_service_supervisor_pids_from_ps,
+        shell_escape_single_quotes, sprite_config_url_auth_args, sprite_info_args,
+        sprite_service_logs_api_path, sprite_service_delete_order, sprite_service_supervisor_pids_from_ps,
         state_root_for_config, status_host_hint, strip_sprite_api_prelude, tls_artifacts_exist,
         upsert_operator_sprite_record, validate_installed_sprite_release,
         validate_sprite_service_operation_stream, write_if_changed,
@@ -36,6 +42,8 @@
     use clap::{CommandFactory, Parser};
     use std::fs;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
     use std::time::Duration;
     use tempfile::tempdir;
@@ -236,37 +244,6 @@
     #[test]
     fn shell_escape_single_quotes_handles_embedded_quotes() {
         assert_eq!(shell_escape_single_quotes("v0.1.5's"), "'v0.1.5'\"'\"'s'");
-    }
-
-    #[test]
-    fn normalize_proxy_origin_strips_trailing_slash() {
-        let origin = normalize_proxy_origin("https://zodex.example.sprites.app/").expect("origin");
-        assert_eq!(origin, "https://zodex.example.sprites.app");
-    }
-
-    #[test]
-    fn normalize_proxy_origin_rejects_paths() {
-        let err =
-            normalize_proxy_origin("https://zodex.example.sprites.app/mcp").expect_err("path");
-        assert!(err.to_string().contains("must not include a path"));
-    }
-
-    #[test]
-    fn render_proxy_wrangler_config_replaces_origin_placeholder() {
-        let rendered = render_proxy_wrangler_config(
-            r#"{"vars":{"SPRITE_ORIGIN":"__SPRITE_ORIGIN__"}}"#,
-            "https://zodex.example.sprites.app",
-        )
-        .expect("render");
-        assert!(rendered.contains("https://zodex.example.sprites.app"));
-        assert!(!rendered.contains("__SPRITE_ORIGIN__"));
-    }
-
-    #[test]
-    fn proxy_mcp_status_looks_healthy_accepts_auth_or_success() {
-        assert!(proxy_mcp_status_looks_healthy(200));
-        assert!(proxy_mcp_status_looks_healthy(401));
-        assert!(!proxy_mcp_status_looks_healthy(404));
     }
 
     #[test]

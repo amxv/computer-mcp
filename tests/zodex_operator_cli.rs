@@ -97,7 +97,7 @@ fn zodex_sprite_github_help_exposes_flattened_operator_verbs() {
 }
 
 #[test]
-fn zodex_sprite_proxy_help_is_canonical_namespace_for_existing_proxy_handlers() {
+fn zodex_sprite_proxy_help_exposes_canonical_worker_operations() {
     let output = Command::new(env!("CARGO_BIN_EXE_zodex"))
         .args(["sprite", "proxy", "--help"])
         .output()
@@ -105,12 +105,22 @@ fn zodex_sprite_proxy_help_is_canonical_namespace_for_existing_proxy_handlers() 
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    for command in ["inspect", "deploy", "verify-origin"] {
+    for command in ["status", "deploy", "verify"] {
         assert!(
             stdout.contains(command),
             "missing Sprite proxy verb {command}: {stdout}"
         );
     }
+    assert!(
+        !stdout
+            .lines()
+            .any(|line| line.trim_start().starts_with("inspect"))
+    );
+    assert!(
+        !stdout
+            .lines()
+            .any(|line| line.trim_start().starts_with("verify-origin"))
+    );
 }
 
 #[test]

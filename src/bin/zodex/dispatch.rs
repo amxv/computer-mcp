@@ -337,27 +337,45 @@ pub(crate) async fn run() -> Result<()> {
 
 fn handle_proxy_command(command: ProxyCommand) -> Result<()> {
     match command {
-        ProxyCommand::Inspect {
+        ProxyCommand::Status {
             sprite,
             org,
             origin,
-        } => inspect_proxy_component(sprite.as_deref(), org.as_deref(), origin.as_deref()),
+            worker_name,
+            worker_url,
+        } => inspect_proxy_component(
+            sprite.as_deref(),
+            org.as_deref(),
+            origin.as_deref(),
+            worker_name.as_deref(),
+            worker_url.as_deref(),
+        ),
         ProxyCommand::Deploy {
             sprite,
             org,
             origin,
+            worker_name,
+            cloudflare_account,
             skip_verify_origin,
         } => deploy_proxy_component(
             sprite.as_deref(),
             org.as_deref(),
             origin.as_deref(),
+            worker_name.as_deref(),
+            cloudflare_account.as_deref(),
             skip_verify_origin,
         ),
-        ProxyCommand::VerifyOrigin {
+        ProxyCommand::Verify {
             sprite,
             org,
             origin,
-        } => verify_proxy_origin_command(sprite.as_deref(), org.as_deref(), origin.as_deref()),
+            worker_url,
+        } => verify_proxy_command(
+            sprite.as_deref(),
+            org.as_deref(),
+            origin.as_deref(),
+            worker_url.as_deref(),
+        ),
     }
 }
 
