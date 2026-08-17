@@ -198,6 +198,47 @@ afterEach(() => {
 })
 
 describe('independent virtualized Agent timeline', () => {
+  it('reactively replaces an in-progress generic apply_patch card with its completed file diff', async () => {
+    const controller = createAgentStreamController({
+      agentId: 'a111',
+      attachWatermarkMs: 10_000,
+      loadHistoryPage: async () => page([]),
+      ...outputLoaders,
+    })
+    const initial = {
+      ...(generic(10, 'a111', undefined) as Extract<PresentationRecord, { kind: 'generic' }>),
+      tool_name: 'apply_patch',
+      status: 'in_progress',
+      summary: null,
+    } satisfies PresentationRecord
+    const completed = {
+      ...(fileChange(10, 'a111') as Extract<PresentationRecord, { kind: 'file_changes' }>),
+      presentation_id: initial.presentation_id,
+    } satisfies PresentationRecord
+    const container = document.createElement('div')
+    container.style.width = '520px'
+    container.style.height = '260px'
+    document.body.append(container)
+    containers.push(container)
+    disposers.push(render(() => <AgentTimeline controller={controller} />, container))
+
+    controller.upsert(initial, false)
+    await vi.waitFor(() =>
+      expect(
+        container.querySelector('[data-presentation-id="inv-10"] .card-kind')?.textContent,
+      ).toBe('apply_patch'),
+    )
+
+    controller.upsert(completed, false)
+    await vi.waitFor(() =>
+      expect(
+        container.querySelector('[data-presentation-id="inv-10"].file-change-group'),
+      ).not.toBeNull(),
+    )
+    expect(container.querySelector('[data-presentation-id="inv-10"].timeline-card')).toBeNull()
+    expect(container.textContent).toContain('file_10.rs')
+  })
+
   it('follows append/growth at the end, pauses one column, and preserves prepend anchor', async () => {
     const historyRecords = Array.from({ length: 8 }, (_, index) =>
       generic(index + 1, 'a111', `older ${index + 1}`),

@@ -393,6 +393,61 @@ fn apply_patch_file_changes_cover_create_update_delete_move_and_fail_closed() {
     };
     assert_eq!(changes.len(), 2);
     assert_eq!(changes[1].path, "/tmp/presentation/second file.txt");
+
+    let mut recreate = invocation(
+        16,
+        "apply_patch",
+        json!({
+            "workdir":workdir,
+            "patch":"*** Begin Patch\n*** Delete File: recreated.txt\n*** Add File: recreated.txt\n+new\n*** Update File: other.txt\n@@\n-old\n+new other\n*** End Patch\n"
+        }),
+    );
+    recreate.file_evidence = vec![
+        evidence(
+            0,
+            "delete",
+            (
+                "/tmp/presentation/recreated.txt",
+                "/tmp/presentation/recreated.txt",
+            ),
+            ("text", Some("old\n")),
+            ("text", Some("new\n")),
+        ),
+        evidence(
+            1,
+            "create",
+            (
+                "/tmp/presentation/recreated.txt",
+                "/tmp/presentation/recreated.txt",
+            ),
+            ("text", Some("old\n")),
+            ("text", Some("new\n")),
+        ),
+        evidence(
+            2,
+            "update",
+            ("/tmp/presentation/other.txt", "/tmp/presentation/other.txt"),
+            ("text", Some("old\n")),
+            ("text", Some("new other\n")),
+        ),
+    ];
+    let document = build_presentation(&[recreate.clone()], &[]);
+    let PresentationKind::FileChanges { changes, .. } = &document.records[0].kind else {
+        panic!("same-path delete+recreate should render its net file changes");
+    };
+    assert_eq!(changes.len(), 2);
+    assert_eq!(changes[0].operation, PresentationFileOperation::Edited);
+    assert_eq!(changes[0].path, "/tmp/presentation/recreated.txt");
+    assert_eq!(changes[0].added, 1);
+    assert_eq!(changes[0].removed, 1);
+    assert_eq!(changes[1].path, "/tmp/presentation/other.txt");
+
+    recreate.file_evidence[1].after_text = Some("contradictory\n".to_string());
+    let document = build_presentation(&[recreate], &[]);
+    assert!(matches!(
+        document.records[0].kind,
+        PresentationKind::Generic { .. }
+    ));
 }
 
 #[test]

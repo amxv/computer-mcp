@@ -26,11 +26,24 @@ export function AgentTimeline(props: {
   let returnToLiveFrame: number | undefined
 
   const noteUserScrollIntent = () => {
+    if (followResizeFrame !== undefined) {
+      cancelAnimationFrame(followResizeFrame)
+      followResizeFrame = undefined
+    }
     if (returnToLiveFrame !== undefined) {
       cancelAnimationFrame(returnToLiveFrame)
       returnToLiveFrame = undefined
     }
     userScrollIntentUntil = performance.now() + 250
+    if (scrollElement) {
+      const distanceFromEnd = Math.max(
+        0,
+        scrollElement.scrollHeight - scrollElement.clientHeight - scrollElement.scrollTop,
+      )
+      if (distanceFromEnd > END_THRESHOLD_PX) {
+        props.controller.setFollowing(false)
+      }
+    }
   }
 
   const hasUserScrollIntent = () => performance.now() <= userScrollIntentUntil

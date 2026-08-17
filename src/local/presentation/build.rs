@@ -678,24 +678,66 @@ fn build_file_changes(record: &PresentationInput) -> Option<Vec<PresentationFile
         return None;
     }
 
-    plans
-        .iter()
-        .zip(&record.file_evidence)
-        .map(|(plan, evidence)| build_file_change(plan, evidence))
-        .collect()
+    let mut consumed = vec![false; plans.len()];
+    let mut changes = Vec::new();
+    for index in 0..plans.len() {
+        if consumed[index] {
+            continue;
+        }
+        let plan = &plans[index];
+        let evidence = &record.file_evidence[index];
+        validate_file_change_identity(plan, evidence)?;
+
+        if record.tool_name == "apply_patch" && plan.path_before == plan.path_after {
+            let matching = plans
+                .iter()
+                .enumerate()
+                .filter_map(|(candidate_index, candidate)| {
+                    (candidate.path_before == plan.path_before
+                        && candidate.path_after == plan.path_after)
+                        .then_some(candidate_index)
+                })
+                .collect::<Vec<_>>();
+            if matching.len() > 1 {
+                let path = &plan.path_before;
+                if plans
+                    .iter()
+                    .enumerate()
+                    .any(|(candidate_index, candidate)| {
+                        !matching.contains(&candidate_index)
+                            && (candidate.path_before == *path || candidate.path_after == *path)
+                    })
+                {
+                    return None;
+                }
+                let grouped = matching
+                    .iter()
+                    .map(|candidate_index| {
+                        let candidate_plan = &plans[*candidate_index];
+                        let candidate_evidence = &record.file_evidence[*candidate_index];
+                        validate_file_change_identity(candidate_plan, candidate_evidence)?;
+                        Some(candidate_evidence)
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                changes.push(build_same_path_net_change(path, &grouped)?);
+                for candidate_index in matching {
+                    consumed[candidate_index] = true;
+                }
+                continue;
+            }
+        }
+
+        changes.push(build_file_change(plan, evidence)?);
+        consumed[index] = true;
+    }
+    Some(changes)
 }
 
 fn build_file_change(
     plan: &crate::local::file_evidence::FileCapturePlan,
     evidence: &HistoryFileEvidence,
 ) -> Option<PresentationFileChange> {
-    if evidence.source_kind != plan.source.as_str()
-        || evidence.operation_hint != plan.operation.as_str()
-        || Path::new(&evidence.path_before) != plan.path_before
-        || Path::new(&evidence.path_after) != plan.path_after
-    {
-        return None;
-    }
+    validate_file_change_identity(plan, evidence)?;
 
     let (operation, write_mode, before, after, old_path) = match evidence.operation_hint.as_str() {
         "create" => {
@@ -776,6 +818,71 @@ fn build_file_change(
         path: sanitize_display_text(&evidence.path_after),
         old_path,
         write_mode,
+        added: diff.added,
+        removed: diff.removed,
+        diff_truncated: diff.truncated,
+        lines: diff.lines,
+    })
+}
+
+fn validate_file_change_identity(
+    plan: &crate::local::file_evidence::FileCapturePlan,
+    evidence: &HistoryFileEvidence,
+) -> Option<()> {
+    (evidence.source_kind == plan.source.as_str()
+        && evidence.operation_hint == plan.operation.as_str()
+        && Path::new(&evidence.path_before) == plan.path_before
+        && Path::new(&evidence.path_after) == plan.path_after)
+        .then_some(())
+}
+
+fn build_same_path_net_change(
+    path: &Path,
+    evidence: &[&HistoryFileEvidence],
+) -> Option<PresentationFileChange> {
+    let first = *evidence.first()?;
+    if evidence.iter().any(|candidate| {
+        candidate.path_before != first.path_before
+            || candidate.path_after != first.path_after
+            || candidate.before_state != first.before_state
+            || candidate.before_text != first.before_text
+            || candidate.after_state != first.after_state
+            || candidate.after_text != first.after_text
+            || candidate.destination_before_state.is_some()
+            || candidate.destination_before_text.is_some()
+            || candidate.destination_before_reason.is_some()
+            || candidate.source_after_state.is_some()
+            || candidate.source_after_text.is_some()
+            || candidate.source_after_reason.is_some()
+    }) {
+        return None;
+    }
+
+    let (operation, before, after) = match (first.before_state.as_str(), first.after_state.as_str())
+    {
+        ("missing", "text") => (
+            PresentationFileOperation::Created,
+            "",
+            first.after_text.as_deref()?,
+        ),
+        ("text", "missing") => (
+            PresentationFileOperation::Deleted,
+            first.before_text.as_deref()?,
+            "",
+        ),
+        ("text", "text") => (
+            PresentationFileOperation::Edited,
+            first.before_text.as_deref()?,
+            first.after_text.as_deref()?,
+        ),
+        _ => return None,
+    };
+    let diff = build_text_diff(before, after)?;
+    Some(PresentationFileChange {
+        operation,
+        path: sanitize_display_text(&path.to_string_lossy()),
+        old_path: None,
+        write_mode: None,
         added: diff.added,
         removed: diff.removed,
         diff_truncated: diff.truncated,
