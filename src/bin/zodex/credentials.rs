@@ -151,14 +151,31 @@ fn load_operator_sprite_registry_from_path(path: &Path) -> Result<OperatorSprite
     }
     let raw = fs::read_to_string(path)
         .with_context(|| format!("failed to read Sprite registry at {}", path.display()))?;
-    serde_json::from_str(&raw)
-        .with_context(|| format!("failed to parse Sprite registry at {}", path.display()))
+    let mut registry: OperatorSpriteRegistry = serde_json::from_str(&raw)
+        .with_context(|| format!("failed to parse Sprite registry at {}", path.display()))?;
+    match registry.version {
+        1 => registry.version = OPERATOR_SPRITES_REGISTRY_VERSION,
+        OPERATOR_SPRITES_REGISTRY_VERSION => {}
+        other => bail!(
+            "unsupported Sprite registry version {other} at {}; expected <= {}",
+            path.display(),
+            OPERATOR_SPRITES_REGISTRY_VERSION
+        ),
+    }
+    Ok(registry)
 }
 
 fn save_operator_sprite_registry_to_path(
     path: &Path,
     registry: &OperatorSpriteRegistry,
 ) -> Result<()> {
+    if registry.version != OPERATOR_SPRITES_REGISTRY_VERSION {
+        bail!(
+            "refusing to write Sprite registry version {}; expected {}",
+            registry.version,
+            OPERATOR_SPRITES_REGISTRY_VERSION
+        );
+    }
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
@@ -189,14 +206,85 @@ fn upsert_operator_sprite_record(
 fn register_operator_sprite(sprite: &str, org: Option<&str>, remote_config: &Path) -> Result<()> {
     let path = operator_sprites_registry_path()?;
     let mut registry = load_operator_sprite_registry_from_path(&path)?;
+    let setup_at = format_epoch_seconds_rfc3339(current_epoch_seconds()?)?;
+    update_operator_sprite_setup_record(&mut registry, sprite, org, remote_config, &setup_at);
+    save_operator_sprite_registry_to_path(&path, &registry)
+}
+
+fn update_operator_sprite_setup_record(
+    registry: &mut OperatorSpriteRegistry,
+    sprite: &str,
+    org: Option<&str>,
+    remote_config: &Path,
+    setup_at: &str,
+) {
+    let existing_proxy = registry
+        .sprites
+        .iter()
+        .find(|candidate| candidate.name == sprite && candidate.org.as_deref() == org)
+        .and_then(|candidate| candidate.proxy.clone());
     let record = OperatorSpriteRecord {
         name: sprite.to_string(),
         org: org.map(str::to_string),
         remote_config: remote_config.display().to_string(),
-        last_setup_at: format_epoch_seconds_rfc3339(current_epoch_seconds()?)?,
+        last_setup_at: setup_at.to_string(),
+        proxy: existing_proxy,
     };
-    upsert_operator_sprite_record(&mut registry, record);
+    upsert_operator_sprite_record(registry, record);
+}
+
+fn operator_sprite_record<'a>(
+    registry: &'a OperatorSpriteRegistry,
+    sprite: &ResolvedSprite,
+) -> Option<&'a OperatorSpriteRecord> {
+    registry.sprites.iter().find(|candidate| {
+        candidate.name == sprite.name && candidate.org.as_deref() == sprite.org.as_deref()
+    })
+}
+
+fn operator_sprite_record_mut<'a>(
+    registry: &'a mut OperatorSpriteRegistry,
+    sprite: &ResolvedSprite,
+) -> Option<&'a mut OperatorSpriteRecord> {
+    registry.sprites.iter_mut().find(|candidate| {
+        candidate.name == sprite.name && candidate.org.as_deref() == sprite.org.as_deref()
+    })
+}
+
+fn load_operator_sprite_record(sprite: &ResolvedSprite) -> Result<Option<OperatorSpriteRecord>> {
+    let registry = load_operator_sprite_registry_from_path(&operator_sprites_registry_path()?)?;
+    Ok(operator_sprite_record(&registry, sprite).cloned())
+}
+
+fn save_operator_sprite_proxy_record(
+    sprite: &ResolvedSprite,
+    proxy: OperatorSpriteProxyRecord,
+) -> Result<()> {
+    let path = operator_sprites_registry_path()?;
+    let mut registry = load_operator_sprite_registry_from_path(&path)?;
+    update_operator_sprite_proxy_record(&mut registry, sprite, proxy);
     save_operator_sprite_registry_to_path(&path, &registry)
+}
+
+fn update_operator_sprite_proxy_record(
+    registry: &mut OperatorSpriteRegistry,
+    sprite: &ResolvedSprite,
+    proxy: OperatorSpriteProxyRecord,
+) {
+    if let Some(record) = operator_sprite_record_mut(registry, sprite) {
+        record.proxy = Some(proxy);
+    } else {
+        registry.sprites.push(OperatorSpriteRecord {
+            name: sprite.name.clone(),
+            org: sprite.org.clone(),
+            remote_config: DEFAULT_CONFIG_PATH.to_string(),
+            last_setup_at: String::new(),
+            proxy: Some(proxy),
+        });
+        registry
+            .sprites
+            .sort_by(|a, b| (&a.org, &a.name).cmp(&(&b.org, &b.name)));
+    }
 }
 
 fn resolve_remote_sprite_from_registry(

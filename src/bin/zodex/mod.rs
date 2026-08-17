@@ -4,6 +4,8 @@ include!("dispatch.rs");
 include!("credentials.rs");
 include!("sprite_services.rs");
 include!("proxy_worker.rs");
+include!("cloudflare_agent.rs");
+include!("sprite_connect.rs");
 include!("sprite_proxy.rs");
 include!("github_device.rs");
 include!("github_mode.rs");
@@ -17,4 +19,5 @@ mod tests {
     include!("tests/part1.rs");
     include!("tests/part2.rs");
     include!("tests/part3.rs");
+    include!("tests/part4.rs");
 }

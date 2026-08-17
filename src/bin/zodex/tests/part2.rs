@@ -286,11 +286,13 @@
     #[test]
     fn sprite_registry_resolves_explicit_env_single_and_ambiguous_cases() {
         let registry = OperatorSpriteRegistry {
+            version: OPERATOR_SPRITES_REGISTRY_VERSION,
             sprites: vec![OperatorSpriteRecord {
                 name: "dev-sprite".to_string(),
                 org: None,
                 remote_config: "/etc/zodex/config.toml".to_string(),
                 last_setup_at: "2026-06-30T00:00:00Z".to_string(),
+                proxy: None,
             }],
         };
 
@@ -323,18 +325,21 @@
         assert!(empty_message.contains("zodex sprite setup"));
 
         let ambiguous = OperatorSpriteRegistry {
+            version: OPERATOR_SPRITES_REGISTRY_VERSION,
             sprites: vec![
                 OperatorSpriteRecord {
                     name: "one".to_string(),
                     org: None,
                     remote_config: "/etc/zodex/config.toml".to_string(),
                     last_setup_at: "2026-06-30T00:00:00Z".to_string(),
+                    proxy: None,
                 },
                 OperatorSpriteRecord {
                     name: "two".to_string(),
                     org: None,
                     remote_config: "/etc/zodex/config.toml".to_string(),
                     last_setup_at: "2026-06-30T00:00:00Z".to_string(),
+                    proxy: None,
                 },
             ],
         };
@@ -366,6 +371,7 @@
                 org: None,
                 remote_config: "/old".to_string(),
                 last_setup_at: "old".to_string(),
+                proxy: None,
             },
         );
         upsert_operator_sprite_record(
@@ -375,6 +381,7 @@
                 org: None,
                 remote_config: "/new".to_string(),
                 last_setup_at: "new".to_string(),
+                proxy: None,
             },
         );
 

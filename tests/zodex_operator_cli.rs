@@ -44,7 +44,8 @@ fn zodex_sprite_help_exposes_nested_operator_families_and_restart_without_vm_sta
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     for command in [
-        "setup", "upgrade", "sync", "status", "logs", "health", "restart", "proxy", "github",
+        "setup", "upgrade", "sync", "status", "logs", "health", "restart", "connect", "proxy",
+        "github",
     ] {
         assert!(
             stdout

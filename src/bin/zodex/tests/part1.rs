@@ -1,6 +1,7 @@
     use super::{
-        Commands, DEFAULT_LOG_LINES, GithubYoloAgentGitStatus, OperatorSpriteRecord,
-        OperatorSpriteRegistry, PUBLISHER_SERVICE_LABEL, ProcessModeState, ProxyCommand,
+        Commands, DEFAULT_LOG_LINES, GithubYoloAgentGitStatus, OPERATOR_SPRITES_REGISTRY_VERSION,
+        OperatorSpriteRecord, OperatorSpriteRegistry, PUBLISHER_SERVICE_LABEL, ProcessModeState,
+        ProxyCommand,
         ProxyDeployCommandSpec, ProxyOriginResolution, ProxyWorkerStatus, PushGrantRecord,
         ResolvedSprite, SERVICE_NAME, SPRITE_MAIN_SERVICE_LABEL, ServiceManager, SpriteCommand,
         SpriteGithubCommand, SpriteServiceAction, SpriteServiceState, SpriteServiceStatus,
@@ -67,6 +68,7 @@
             vec!["zodex", "sprite", "logs", "--service", "zodexd"],
             vec!["zodex", "sprite", "health"],
             vec!["zodex", "sprite", "restart"],
+            vec!["zodex", "sprite", "connect"],
             vec!["zodex", "sprite", "proxy", "inspect"],
             vec!["zodex", "sprite", "github", "status"],
         ] {
@@ -95,6 +97,26 @@
                         skip_verify_origin: true,
                         ..
                     }
+                }
+            } if sprite == "dev"
+        ));
+
+        let connect = Cli::try_parse_from([
+            "zodex",
+            "sprite",
+            "connect",
+            "--sprite",
+            "dev",
+            "--show-url",
+        ])
+        .expect("Sprite connect syntax should parse");
+        assert!(matches!(
+            connect.command,
+            Commands::Sprite {
+                command: SpriteCommand::Connect {
+                    sprite: Some(ref sprite),
+                    show_url: true,
+                    ..
                 }
             } if sprite == "dev"
         ));

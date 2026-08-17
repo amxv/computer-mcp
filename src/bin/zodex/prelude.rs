@@ -280,6 +280,16 @@ enum SpriteCommand {
         #[arg(long)]
         org: Option<String>,
     },
+    /// Copy the registered ChatGPT MCP endpoint for this Sprite.
+    Connect {
+        #[arg(long)]
+        sprite: Option<String>,
+        #[arg(long)]
+        org: Option<String>,
+        /// Print the secret capability URL even when clipboard copy succeeds.
+        #[arg(long, default_value_t = false)]
+        show_url: bool,
+    },
     /// Manage the canonical Cloudflare front door for this Sprite.
     Proxy {
         #[command(subcommand)]
@@ -534,10 +544,27 @@ struct GithubModeRecord {
     token_source: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+const OPERATOR_SPRITES_REGISTRY_VERSION: u32 = 2;
+
+fn legacy_operator_sprites_registry_version() -> u32 {
+    1
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct OperatorSpriteRegistry {
+    #[serde(default = "legacy_operator_sprites_registry_version")]
+    version: u32,
     #[serde(default)]
     sprites: Vec<OperatorSpriteRecord>,
+}
+
+impl Default for OperatorSpriteRegistry {
+    fn default() -> Self {
+        Self {
+            version: OPERATOR_SPRITES_REGISTRY_VERSION,
+            sprites: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -547,6 +574,18 @@ struct OperatorSpriteRecord {
     org: Option<String>,
     remote_config: String,
     last_setup_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    proxy: Option<OperatorSpriteProxyRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct OperatorSpriteProxyRecord {
+    cloudflare_account_id: String,
+    worker_name: String,
+    worker_url: String,
+    worker_version: String,
+    worker_build: String,
+    deployed_at: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

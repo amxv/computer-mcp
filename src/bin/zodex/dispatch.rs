@@ -214,6 +214,13 @@ pub(crate) async fn run() -> Result<()> {
                     let resolved = resolve_remote_sprite(sprite.as_deref(), org.as_deref())?;
                     restart_sprite_services(&resolved.name, resolved.org.as_deref())?;
                 }
+                SpriteCommand::Connect {
+                    sprite,
+                    org,
+                    show_url,
+                } => {
+                    connect_sprite(sprite.as_deref(), org.as_deref(), show_url)?;
+                }
                 SpriteCommand::Proxy { command } => {
                     handle_proxy_command(command)?;
                 }

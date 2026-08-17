@@ -46,6 +46,7 @@ struct WranglerDeployMetadata {
     wrangler_version: Option<String>,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ProxyDeployResult {
     metadata: WranglerDeployMetadata,
@@ -93,6 +94,29 @@ fn run_sprite_exec(
     args.push("--".to_string());
     args.extend(exec_args.iter().cloned());
     run_command_capture("sprite", &args)
+}
+
+fn run_sprite_exec_sensitive(
+    sprite: &str,
+    org: Option<&str>,
+    exec_args: &[String],
+) -> Result<String> {
+    let mut args = build_sprite_scope_args(sprite, org);
+    args.push("exec".to_string());
+    args.push("--".to_string());
+    args.extend(exec_args.iter().cloned());
+    let output = Command::new("sprite")
+        .args(&args)
+        .output()
+        .context("failed to run Sprite command containing sensitive output")?;
+    if !output.status.success() {
+        let status = output.status.code().map_or_else(
+            || "terminated by signal".to_string(),
+            |code| code.to_string(),
+        );
+        bail!("sensitive Sprite command failed (status: {status}); output suppressed");
+    }
+    String::from_utf8(output.stdout).context("sensitive Sprite command returned non-UTF-8 output")
 }
 
 fn sprite_info_args(sprite: &str, org: Option<&str>) -> Vec<String> {
@@ -182,10 +206,15 @@ fn resolve_proxy_origin(
     origin: Option<&str>,
 ) -> Result<ProxyOriginResolution> {
     if let Some(origin) = origin {
+        let resolved = if sprite.is_some() {
+            Some(resolve_remote_sprite(sprite, org)?)
+        } else {
+            None
+        };
         return Ok(ProxyOriginResolution {
             origin: normalize_proxy_origin(origin)?,
             sprite_url_auth: None,
-            sprite: None,
+            sprite: resolved,
         });
     }
 
@@ -443,61 +472,29 @@ fn parse_wrangler_deploy_output(raw: &str) -> Result<WranglerDeployMetadata> {
     })
 }
 
+#[cfg(test)]
 fn execute_wrangler_deploy(
     deploy: &ProxyDeployCommandSpec,
     project_dir: &Path,
     config_path: &Path,
     cloudflare_account: Option<&str>,
 ) -> Result<ProxyDeployResult> {
-    let structured_path = project_dir.join("wrangler-output.ndjson");
-    let mut args = deploy.base_args.clone();
-    args.extend([
-        "deploy".to_string(),
-        "--config".to_string(),
-        config_path.display().to_string(),
-    ]);
-    let mut command = Command::new(&deploy.program);
-    command
-        .args(&args)
-        .current_dir(project_dir)
-        .env("WRANGLER_OUTPUT_FILE_PATH", &structured_path)
-        .env("FORCE_COLOR", "0");
-    if let Some(account) = cloudflare_account {
-        command.env("CLOUDFLARE_ACCOUNT_ID", account);
+    let attempt = run_wrangler_deploy_attempt(
+        deploy,
+        project_dir,
+        config_path,
+        cloudflare_account,
+        false,
+    )?;
+    if !attempt.success {
+        bail!("{}", wrangler_attempt_failure_message(&attempt));
     }
-    let output = command
-        .output()
-        .with_context(|| format!("failed to run {}", deploy.program))?;
-    let stdout = redact_api_key_query_params(&String::from_utf8_lossy(&output.stdout));
-    let stderr = redact_api_key_query_params(&String::from_utf8_lossy(&output.stderr));
-    let structured = fs::read_to_string(&structured_path).ok();
-
-    if !output.status.success() {
-        let structured_error = structured
-            .as_deref()
-            .and_then(|raw| parse_wrangler_deploy_output(raw).err())
-            .map(|error| error.to_string())
-            .unwrap_or_else(|| "Wrangler deployment failed".to_string());
-        let details = [stdout.trim(), stderr.trim()]
-            .into_iter()
-            .filter(|value| !value.is_empty())
-            .collect::<Vec<_>>()
-            .join("\n");
-        if details.is_empty() {
-            bail!("{structured_error}");
-        }
-        bail!("{structured_error}\n{details}");
-    }
-
-    let structured = structured.ok_or_else(|| {
-        anyhow!(
-            "Wrangler did not write structured deployment output to {}",
-            structured_path.display()
-        )
+    let structured = attempt.structured.ok_or_else(|| {
+        anyhow!("Wrangler did not write structured deployment output")
     })?;
     Ok(ProxyDeployResult {
         metadata: parse_wrangler_deploy_output(&structured)?,
-        human_output: stdout,
+        human_output: sanitize_wrangler_output(&attempt.stdout),
     })
 }
 
@@ -550,8 +547,10 @@ fn inspect_proxy_component(
     worker_url: Option<&str>,
 ) -> Result<()> {
     let resolution = resolve_proxy_origin(sprite, org, origin)?;
+    let registered = registered_proxy_for_resolution(&resolution)?;
     let derived_name = worker_name
         .map(str::to_string)
+        .or_else(|| registered.as_ref().map(|proxy| proxy.worker_name.clone()))
         .unwrap_or_else(|| derive_proxy_worker_name(&resolution));
     validate_worker_name(&derived_name)?;
     let build = proxy_worker_build_id();
@@ -564,11 +563,32 @@ fn inspect_proxy_component(
     }
     println!("routes: /, /status, /health, /mcp, /mcp/");
     println!("mcp-dispatch: at-most-once-after-readiness");
+    if let Some(proxy) = registered.as_ref() {
+        println!("deployment-state: permanent-registered");
+        println!("cloudflare-account-id: {}", proxy.cloudflare_account_id);
+        println!("registered-worker-url: {}", proxy.worker_url);
+        println!("registered-worker-version: {}", proxy.worker_version);
+        println!("registered-worker-build: {}", proxy.worker_build);
+        println!("registered-deployed-at: {}", proxy.deployed_at);
+    } else {
+        println!("deployment-state: unregistered");
+    }
+    let worker_url = worker_url.or_else(|| registered.as_ref().map(|proxy| proxy.worker_url.as_str()));
     if let Some(worker_url) = worker_url {
-        let status = proxy_worker_status(worker_url)?;
-        println!("deployed-component: {}", status.component);
-        println!("deployed-build: {}", status.build);
-        println!("build-state: {}", proxy_worker_build_state(&status, &build));
+        match proxy_worker_status(worker_url) {
+            Ok(status) => {
+                println!("deployed-component: {}", status.component);
+                println!("deployed-build: {}", status.build);
+                println!("build-state: {}", proxy_worker_build_state(&status, &build));
+            }
+            Err(error) => {
+                println!("build-state: unreachable");
+                println!(
+                    "recovery: rerun `zodex sprite proxy deploy` ({})",
+                    redact_api_key_query_params(&error.to_string())
+                );
+            }
+        }
     }
     match resolve_proxy_deploy_command() {
         Ok(command) => println!(
@@ -594,35 +614,25 @@ fn deploy_proxy_component(
     if !skip_verify_origin {
         print_proxy_origin_check(&verify_proxy_origin(&resolution)?);
     }
+    let existing_proxy = registered_proxy_for_resolution(&resolution)?;
     let name = worker_name
         .map(str::to_string)
+        .or_else(|| existing_proxy.as_ref().map(|proxy| proxy.worker_name.clone()))
         .unwrap_or_else(|| derive_proxy_worker_name(&resolution));
     validate_worker_name(&name)?;
     let build = proxy_worker_build_id();
     let project = tempfile::tempdir().context("failed to create temporary Worker project")?;
     let config_path = materialize_proxy_project(project.path(), &resolution, &name, &build)?;
     let deploy = resolve_proxy_deploy_command()?;
-    let result = execute_wrangler_deploy(
-        &deploy,
+    deploy_proxy_with_cloudflare_flow(
+        &resolution,
+        &name,
+        &build,
         project.path(),
         &config_path,
+        &deploy,
         cloudflare_account,
-    )?;
-    if !result.human_output.trim().is_empty() {
-        print!("{}", result.human_output);
-    }
-    println!("proxy-origin: {}", resolution.origin);
-    println!("worker-name: {}", result.metadata.worker_name);
-    println!("worker-version: {}", result.metadata.version_id);
-    println!("worker-build: {build}");
-    if let Some(version) = result.metadata.wrangler_version.as_deref() {
-        println!("wrangler-version: {version}");
-    }
-    for target in &result.metadata.targets {
-        println!("worker-target: {target}");
-    }
-    println!("proxy-deploy: complete");
-    Ok(())
+    )
 }
 
 fn verify_proxy_command(
@@ -633,6 +643,8 @@ fn verify_proxy_command(
 ) -> Result<()> {
     let resolution = resolve_proxy_origin(sprite, org, origin)?;
     print_proxy_origin_check(&verify_proxy_origin(&resolution)?);
+    let registered = registered_proxy_for_resolution(&resolution)?;
+    let worker_url = worker_url.or_else(|| registered.as_ref().map(|proxy| proxy.worker_url.as_str()));
     if let Some(worker_url) = worker_url {
         let status = proxy_worker_status(worker_url)?;
         if status.component != PROXY_WORKER_COMPONENT {
