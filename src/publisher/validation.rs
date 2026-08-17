@@ -3,8 +3,6 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow, bail};
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as BASE64;
 use rand::distr::{Alphanumeric, SampleString};
 
 use crate::config::{Config, PublishTarget};
@@ -15,7 +13,7 @@ use super::api::{DirectPushRequest, GithubModeRecord, GithubYoloRepoGrant, Publi
 pub fn validate_publish_request(
     config: &Config,
     request: &PublishPrRequest,
-) -> Result<(PublishTarget, Vec<u8>)> {
+) -> Result<PublishTarget> {
     let target = resolve_publisher_target(config, &request.repo_id).ok_or_else(|| {
         anyhow!(
             "repo is not covered by publisher installation config: {}",
@@ -50,27 +48,13 @@ pub fn validate_publish_request(
         );
     }
 
-    let bundle_bytes = BASE64
-        .decode(request.bundle_base64.as_bytes())
-        .context("bundle_base64 was not valid base64")?;
-    if bundle_bytes.is_empty() {
-        bail!("publish bundle cannot be empty");
-    }
-    if bundle_bytes.len() > config.publisher_max_bundle_bytes {
-        bail!(
-            "publish bundle exceeds limit ({} bytes > {} bytes)",
-            bundle_bytes.len(),
-            config.publisher_max_bundle_bytes
-        );
-    }
-
     if let Some(base) = request.base.as_deref()
         && base.trim().is_empty()
     {
         bail!("base branch cannot be empty when provided");
     }
 
-    Ok((target, bundle_bytes))
+    Ok(target)
 }
 
 pub fn build_publish_branch_name(prefix: &str) -> String {

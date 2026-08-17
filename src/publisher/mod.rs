@@ -8,7 +8,10 @@ pub use api::{
     DirectPushRequest, DirectPushResponse, MintedInstallationToken, PublishPrRequest,
     PublishPrResponse,
 };
-pub use git::{build_publish_request, create_head_bundle, detect_repo_root, ensure_clean_worktree};
+pub use git::{
+    GeneratedGitBundle, PublishPrSubmission, build_publish_request, create_head_bundle,
+    detect_repo_root, ensure_clean_worktree,
+};
 pub use github::{
     create_pull_request, mint_publisher_installation_token,
     mint_publisher_installation_token_with_metadata, mint_reader_installation_token,
@@ -22,7 +25,12 @@ pub(super) const GITHUB_API_VERSION: &str = "2022-11-28";
 pub(super) const SOCKET_DIR_MODE: u32 = 0o750;
 pub(super) const SOCKET_MODE: u32 = 0o660;
 pub(super) const ASKPASS_MODE: u32 = 0o700;
-pub(super) const MAX_SOCKET_REQUEST_BYTES: usize = 48 * 1024 * 1024;
+pub(super) const PUBLISHER_WIRE_MAGIC: [u8; 8] = *b"ZDXPUB\0\0";
+pub(super) const PUBLISHER_WIRE_VERSION: u16 = 1;
+pub(super) const PUBLISHER_WIRE_HEADER_BYTES: usize = 24;
+pub(super) const MAX_PUBLISHER_METADATA_BYTES: usize = 64 * 1024;
+pub(super) const MAX_PUBLISHER_RESPONSE_BYTES: usize = 64 * 1024;
+pub(super) const PUBLISHER_STREAM_BUFFER_BYTES: usize = 64 * 1024;
 pub(super) const IMPORTED_REF: &str = "refs/heads/__zodex_imported";
 pub(super) const ASKPASS_SCRIPT_NAME: &str = "git-askpass.sh";
 pub(super) const DEFAULT_USER_AGENT: &str = "zodex-prd/0.1";

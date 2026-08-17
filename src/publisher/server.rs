@@ -1,11 +1,9 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as BASE64;
-use tempfile::tempdir;
+use tempfile::{TempDir, tempdir};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 
@@ -24,8 +22,45 @@ use super::validation::{
     validate_publish_request, validate_publisher_config,
 };
 use super::{
-    DIRECT_PUSH_IMPORTED_REF, IMPORTED_REF, MAX_SOCKET_REQUEST_BYTES, SOCKET_DIR_MODE, SOCKET_MODE,
+    DIRECT_PUSH_IMPORTED_REF, IMPORTED_REF, MAX_PUBLISHER_METADATA_BYTES,
+    MAX_PUBLISHER_RESPONSE_BYTES, PUBLISHER_STREAM_BUFFER_BYTES, PUBLISHER_WIRE_HEADER_BYTES,
+    PUBLISHER_WIRE_MAGIC, PUBLISHER_WIRE_VERSION, SOCKET_DIR_MODE, SOCKET_MODE,
 };
+
+const PUBLISHER_METADATA_ACCEPTED: u8 = 1;
+const PUBLISHER_METADATA_REJECTED: u8 = 0;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct PublisherWireHeader {
+    pub(super) metadata_len: usize,
+    pub(super) bundle_len: u64,
+}
+
+#[derive(Debug)]
+pub(super) struct ReceivedBundle {
+    _tempdir: TempDir,
+    path: PathBuf,
+}
+
+impl ReceivedBundle {
+    pub(super) fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+#[derive(Debug)]
+pub(super) enum ValidatedPublisherRequest {
+    PublishPr {
+        request: PublishPrRequest,
+        target: PublishTarget,
+        bundle_len: u64,
+    },
+    DirectPush {
+        request: DirectPushRequest,
+        target: PublishTarget,
+        bundle_len: u64,
+    },
+}
 
 pub(super) fn ensure_publisher_socket_parent_dir(socket_path: &Path) -> Result<()> {
     if let Some(parent) = socket_path.parent() {
@@ -78,10 +113,17 @@ pub async fn serve_publisher(config: Config) -> Result<()> {
 
 pub async fn submit_publish_request(
     socket_path: &Path,
+    max_bundle_bytes: usize,
     request: &PublishPrRequest,
+    bundle_path: &Path,
 ) -> Result<PublishPrResponse> {
-    let payload = serde_json::to_vec(request).context("failed to serialize publish request")?;
-    let response = submit_publisher_payload(socket_path, &payload).await?;
+    let response = submit_publisher_request_frame(
+        socket_path,
+        max_bundle_bytes,
+        &PublisherRequest::PublishPr(request.clone()),
+        Some(bundle_path),
+    )
+    .await?;
     match serde_json::from_slice::<PublisherResponse>(&response) {
         Ok(PublisherResponse::PublishPr(response)) => Ok(response),
         Ok(PublisherResponse::DirectPush(_)) => {
@@ -93,10 +135,17 @@ pub async fn submit_publish_request(
 
 pub async fn submit_direct_push_request(
     socket_path: &Path,
+    max_bundle_bytes: usize,
     request: &DirectPushRequest,
+    bundle_path: Option<&Path>,
 ) -> Result<DirectPushResponse> {
-    let payload = encode_direct_push_wire_request(request)?;
-    let response = submit_publisher_payload(socket_path, &payload).await?;
+    let response = submit_publisher_request_frame(
+        socket_path,
+        max_bundle_bytes,
+        &PublisherRequest::DirectPush(request.clone()),
+        bundle_path,
+    )
+    .await?;
     match serde_json::from_slice::<PublisherResponse>(&response) {
         Ok(PublisherResponse::DirectPush(response)) => Ok(response),
         Ok(PublisherResponse::PublishPr(_)) => bail!("publisher returned unexpected response type"),
@@ -106,23 +155,110 @@ pub async fn submit_direct_push_request(
     }
 }
 
-pub(super) fn encode_direct_push_wire_request(request: &DirectPushRequest) -> Result<Vec<u8>> {
-    let mut value =
-        serde_json::to_value(request).context("failed to encode direct push request")?;
-    let object = value
-        .as_object_mut()
-        .ok_or_else(|| anyhow!("direct push request did not encode as an object"))?;
-    object.insert(
-        "kind".to_string(),
-        serde_json::Value::String("direct_push".to_string()),
-    );
-    serde_json::to_vec(&value).context("failed to serialize direct push request")
+pub(super) fn encode_publisher_wire_header(
+    metadata_len: usize,
+    bundle_len: u64,
+) -> Result<[u8; PUBLISHER_WIRE_HEADER_BYTES]> {
+    if metadata_len == 0 {
+        bail!("publisher metadata cannot be empty");
+    }
+    if metadata_len > MAX_PUBLISHER_METADATA_BYTES {
+        bail!(
+            "publisher metadata exceeds local limit ({} bytes > {} bytes)",
+            metadata_len,
+            MAX_PUBLISHER_METADATA_BYTES
+        );
+    }
+    let metadata_len = u32::try_from(metadata_len).context("publisher metadata length overflow")?;
+    let mut header = [0u8; PUBLISHER_WIRE_HEADER_BYTES];
+    header[..8].copy_from_slice(&PUBLISHER_WIRE_MAGIC);
+    header[8..10].copy_from_slice(&PUBLISHER_WIRE_VERSION.to_be_bytes());
+    header[10..12].copy_from_slice(&0u16.to_be_bytes());
+    header[12..16].copy_from_slice(&metadata_len.to_be_bytes());
+    header[16..24].copy_from_slice(&bundle_len.to_be_bytes());
+    Ok(header)
 }
 
-async fn submit_publisher_payload(socket_path: &Path, payload: &[u8]) -> Result<Vec<u8>> {
-    if payload.len() > MAX_SOCKET_REQUEST_BYTES {
-        bail!("publisher request exceeds local socket limit");
+pub(super) fn decode_publisher_wire_header(
+    header: &[u8; PUBLISHER_WIRE_HEADER_BYTES],
+) -> Result<PublisherWireHeader> {
+    if header[..8] != PUBLISHER_WIRE_MAGIC {
+        bail!("publisher request has an invalid wire magic");
     }
+    let version = u16::from_be_bytes([header[8], header[9]]);
+    if version != PUBLISHER_WIRE_VERSION {
+        bail!("unsupported publisher wire version {version}; expected {PUBLISHER_WIRE_VERSION}");
+    }
+    let flags = u16::from_be_bytes([header[10], header[11]]);
+    if flags != 0 {
+        bail!("publisher request has unsupported wire flags: {flags}");
+    }
+    let metadata_len =
+        u32::from_be_bytes([header[12], header[13], header[14], header[15]]) as usize;
+    if metadata_len == 0 {
+        bail!("publisher metadata cannot be empty");
+    }
+    if metadata_len > MAX_PUBLISHER_METADATA_BYTES {
+        bail!(
+            "publisher metadata exceeds local limit ({} bytes > {} bytes)",
+            metadata_len,
+            MAX_PUBLISHER_METADATA_BYTES
+        );
+    }
+    let bundle_len = u64::from_be_bytes([
+        header[16], header[17], header[18], header[19], header[20], header[21], header[22],
+        header[23],
+    ]);
+    Ok(PublisherWireHeader {
+        metadata_len,
+        bundle_len,
+    })
+}
+
+pub(super) fn encode_publisher_metadata(request: &PublisherRequest) -> Result<Vec<u8>> {
+    let metadata = serde_json::to_vec(request).context("failed to serialize publisher metadata")?;
+    if metadata.is_empty() || metadata.len() > MAX_PUBLISHER_METADATA_BYTES {
+        bail!(
+            "publisher metadata exceeds local limit ({} bytes > {} bytes)",
+            metadata.len(),
+            MAX_PUBLISHER_METADATA_BYTES
+        );
+    }
+    Ok(metadata)
+}
+
+pub(super) fn decode_publisher_metadata(metadata: &[u8]) -> Result<PublisherRequest> {
+    if metadata.is_empty() {
+        bail!("publisher metadata cannot be empty");
+    }
+    if metadata.len() > MAX_PUBLISHER_METADATA_BYTES {
+        bail!("publisher metadata exceeds local limit");
+    }
+    serde_json::from_slice(metadata).context("publisher metadata was not valid request JSON")
+}
+
+async fn submit_publisher_request_frame(
+    socket_path: &Path,
+    max_bundle_bytes: usize,
+    request: &PublisherRequest,
+    bundle_path: Option<&Path>,
+) -> Result<Vec<u8>> {
+    let metadata = encode_publisher_metadata(request)?;
+    let bundle_len = match bundle_path {
+        Some(path) => tokio::fs::metadata(path)
+            .await
+            .with_context(|| format!("failed to stat publisher bundle {}", path.display()))?
+            .len(),
+        None => 0,
+    };
+    if bundle_len > max_bundle_bytes as u64 {
+        bail!(
+            "publisher bundle exceeds configured limit ({} bytes > {} bytes)",
+            bundle_len,
+            max_bundle_bytes
+        );
+    }
+    let header = encode_publisher_wire_header(metadata.len(), bundle_len)?;
 
     let mut stream = UnixStream::connect(socket_path).await.with_context(|| {
         format!(
@@ -131,21 +267,42 @@ async fn submit_publisher_payload(socket_path: &Path, payload: &[u8]) -> Result<
         )
     })?;
     stream
-        .write_all(payload)
+        .write_all(&header)
         .await
-        .context("failed to write publish request")?;
+        .context("failed to write publisher frame header")?;
+    stream
+        .write_all(&metadata)
+        .await
+        .context("failed to write publisher metadata")?;
+    stream
+        .flush()
+        .await
+        .context("failed to flush publisher metadata")?;
+
+    match read_publisher_metadata_ack(&mut stream).await? {
+        None => {}
+        Some(error) => bail!(error),
+    }
+
+    if let Some(path) = bundle_path {
+        stream_bundle_file(&mut stream, path, bundle_len).await?;
+    }
     stream
         .shutdown()
         .await
         .context("failed to close publisher request stream")?;
 
     let mut response_buf = Vec::new();
-    stream
+    (&mut stream)
+        .take((MAX_PUBLISHER_RESPONSE_BYTES + 1) as u64)
         .read_to_end(&mut response_buf)
         .await
         .context("failed to read publisher response")?;
     if response_buf.is_empty() {
         bail!("publisher returned an empty response");
+    }
+    if response_buf.len() > MAX_PUBLISHER_RESPONSE_BYTES {
+        bail!("publisher response exceeds local size limit");
     }
 
     if let Ok(error) = serde_json::from_slice::<PublishPrError>(&response_buf) {
@@ -154,46 +311,124 @@ async fn submit_publisher_payload(socket_path: &Path, payload: &[u8]) -> Result<
 
     Ok(response_buf)
 }
-async fn handle_connection(mut stream: UnixStream, config: Config) -> Result<()> {
-    let mut request_bytes = Vec::new();
-    stream
-        .read_to_end(&mut request_bytes)
-        .await
-        .context("failed to read publisher request")?;
 
-    let response = match decode_request(&request_bytes) {
-        Ok(PublisherRequest::PublishPr(request)) => {
-            match validate_publish_request(&config, &request).map(|validated| (request, validated))
-            {
-                Ok((request, (target, bundle_bytes))) => {
-                    match handle_publish_request(&config, request, &target, &bundle_bytes).await {
-                        Ok(response) => serde_json::to_vec(&PublisherResponse::PublishPr(response))
-                            .context("failed to encode publish response")?,
-                        Err(err) => encode_publisher_error("publish-pr", &err)?,
-                    }
-                }
-                Err(err) => encode_publisher_error("publish-pr validation", &err)?,
+async fn stream_bundle_file(stream: &mut UnixStream, path: &Path, declared_len: u64) -> Result<()> {
+    let mut file = tokio::fs::File::open(path)
+        .await
+        .with_context(|| format!("failed to open publisher bundle {}", path.display()))?;
+    let mut limited = (&mut file).take(declared_len);
+    let copied = tokio::io::copy(&mut limited, stream)
+        .await
+        .context("failed to stream publisher bundle")?;
+    if copied != declared_len {
+        bail!(
+            "publisher bundle changed while sending ({} bytes streamed, {} declared)",
+            copied,
+            declared_len
+        );
+    }
+    let mut extra = [0u8; 1];
+    if file
+        .read(&mut extra)
+        .await
+        .context("failed to verify publisher bundle length")?
+        != 0
+    {
+        bail!("publisher bundle grew beyond its declared length while sending");
+    }
+    Ok(())
+}
+
+async fn read_publisher_metadata_ack(stream: &mut UnixStream) -> Result<Option<String>> {
+    let mut status = [0u8; 1];
+    stream
+        .read_exact(&mut status)
+        .await
+        .context("failed to read publisher metadata acknowledgement")?;
+    match status[0] {
+        PUBLISHER_METADATA_ACCEPTED => Ok(None),
+        PUBLISHER_METADATA_REJECTED => {
+            let mut len = [0u8; 4];
+            stream
+                .read_exact(&mut len)
+                .await
+                .context("failed to read publisher metadata rejection length")?;
+            let len = u32::from_be_bytes(len) as usize;
+            if len == 0 || len > MAX_PUBLISHER_RESPONSE_BYTES {
+                bail!("publisher returned an invalid metadata rejection frame");
+            }
+            let mut payload = vec![0u8; len];
+            stream
+                .read_exact(&mut payload)
+                .await
+                .context("failed to read publisher metadata rejection")?;
+            let error: PublishPrError = serde_json::from_slice(&payload)
+                .context("failed to decode publisher metadata rejection")?;
+            Ok(Some(error.error))
+        }
+        other => bail!("publisher returned unknown metadata acknowledgement byte {other}"),
+    }
+}
+
+async fn handle_connection(mut stream: UnixStream, config: Config) -> Result<()> {
+    let validated = match read_and_validate_publisher_metadata(&mut stream, &config).await {
+        Ok(validated) => validated,
+        Err(err) => {
+            write_publisher_metadata_rejection(&mut stream, &err).await?;
+            return Ok(());
+        }
+    };
+    stream
+        .write_all(&[PUBLISHER_METADATA_ACCEPTED])
+        .await
+        .context("failed to acknowledge publisher metadata")?;
+    stream
+        .flush()
+        .await
+        .context("failed to flush publisher metadata acknowledgement")?;
+
+    let bundle_len = validated_bundle_len(&validated);
+    let received_bundle = match receive_declared_bundle(&mut stream, bundle_len).await {
+        Ok(bundle) => bundle,
+        Err(err) => {
+            let response = encode_publisher_error("publisher bundle receive", &err)?;
+            write_final_publisher_response(&mut stream, &response).await?;
+            return Ok(());
+        }
+    };
+
+    let response = match validated {
+        ValidatedPublisherRequest::PublishPr {
+            request, target, ..
+        } => {
+            let bundle = received_bundle
+                .as_ref()
+                .ok_or_else(|| anyhow!("publish-pr bundle was missing after validation"))?;
+            match handle_publish_request(&config, request, &target, bundle.path()).await {
+                Ok(response) => serde_json::to_vec(&PublisherResponse::PublishPr(response))
+                    .context("failed to encode publish response")?,
+                Err(err) => encode_publisher_error("publish-pr", &err)?,
             }
         }
-        Ok(PublisherRequest::DirectPush(request)) => {
-            match handle_direct_push_request(&config, request).await {
+        ValidatedPublisherRequest::DirectPush {
+            request, target, ..
+        } => {
+            match handle_direct_push_request(
+                &config,
+                request,
+                &target,
+                received_bundle.as_ref().map(ReceivedBundle::path),
+            )
+            .await
+            {
                 Ok(response) => serde_json::to_vec(&PublisherResponse::DirectPush(response))
                     .context("failed to encode direct push response")?,
                 Err(err) => encode_publisher_error("direct push", &err)?,
             }
         }
-        Err(err) => encode_publisher_error("publisher request decode", &err)?,
     };
 
-    stream
-        .write_all(&response)
-        .await
-        .context("failed to write publisher response")?;
-    stream
-        .shutdown()
-        .await
-        .context("failed to close publisher response stream")?;
-    Ok(())
+    write_final_publisher_response(&mut stream, &response).await
 }
 
 fn encode_publisher_error(operation: &str, err: &anyhow::Error) -> Result<Vec<u8>> {
@@ -210,41 +445,191 @@ fn error_chain_string(err: &anyhow::Error) -> String {
         .join(": ")
 }
 
-pub(super) fn decode_request(request_bytes: &[u8]) -> Result<PublisherRequest> {
-    if request_bytes.is_empty() {
-        bail!("publisher request body was empty");
-    }
-    if request_bytes.len() > MAX_SOCKET_REQUEST_BYTES {
-        bail!("publisher request exceeds socket size limit");
-    }
-
-    let value: serde_json::Value =
-        serde_json::from_slice(request_bytes).context("publisher request was not valid JSON")?;
-    match value.get("kind").and_then(|kind| kind.as_str()) {
-        Some("direct_push") => {
-            let request: DirectPushRequest =
-                serde_json::from_value(value).context("failed to decode direct push request")?;
-            return Ok(PublisherRequest::DirectPush(request));
-        }
-        Some("publish_pr") => {
-            let request: PublishPrRequest =
-                serde_json::from_value(value).context("failed to decode publish request")?;
-            return Ok(PublisherRequest::PublishPr(request));
-        }
-        Some(kind) => bail!("unsupported publisher request kind: {kind}"),
-        None => {}
+async fn read_and_validate_publisher_metadata(
+    stream: &mut UnixStream,
+    config: &Config,
+) -> Result<ValidatedPublisherRequest> {
+    let mut header_bytes = [0u8; PUBLISHER_WIRE_HEADER_BYTES];
+    stream
+        .read_exact(&mut header_bytes)
+        .await
+        .context("failed to read publisher frame header")?;
+    let header = decode_publisher_wire_header(&header_bytes)?;
+    if header.bundle_len > config.publisher_max_bundle_bytes as u64 {
+        bail!(
+            "publisher bundle exceeds configured limit ({} bytes > {} bytes)",
+            header.bundle_len,
+            config.publisher_max_bundle_bytes
+        );
     }
 
-    let legacy: PublishPrRequest =
-        serde_json::from_value(value).context("failed to decode publish request")?;
-    Ok(PublisherRequest::PublishPr(legacy))
+    let mut metadata = vec![0u8; header.metadata_len];
+    stream
+        .read_exact(&mut metadata)
+        .await
+        .context("failed to read publisher metadata")?;
+    let request = decode_publisher_metadata(&metadata)?;
+    validate_publisher_request_before_body(config, request, header.bundle_len)
+}
+
+pub(super) fn validate_publisher_request_before_body(
+    config: &Config,
+    request: PublisherRequest,
+    bundle_len: u64,
+) -> Result<ValidatedPublisherRequest> {
+    if bundle_len > config.publisher_max_bundle_bytes as u64 {
+        bail!(
+            "publisher bundle exceeds configured limit ({} bytes > {} bytes)",
+            bundle_len,
+            config.publisher_max_bundle_bytes
+        );
+    }
+
+    match request {
+        PublisherRequest::PublishPr(request) => {
+            if bundle_len == 0 {
+                bail!("publish bundle cannot be empty");
+            }
+            let target = validate_publish_request(config, &request)?;
+            Ok(ValidatedPublisherRequest::PublishPr {
+                request,
+                target,
+                bundle_len,
+            })
+        }
+        PublisherRequest::DirectPush(request) => {
+            if request.src.is_empty() && bundle_len != 0 {
+                bail!("direct push deletion request cannot include a bundle");
+            }
+            if !request.src.is_empty() && bundle_len == 0 && request.src_oid.is_none() {
+                bail!(
+                    "direct push bundle is empty and no source object id was provided; this usually means the pushed ref points to an object already present on the remote"
+                );
+            }
+            let target = validate_direct_push_request(config, &request)?;
+            Ok(ValidatedPublisherRequest::DirectPush {
+                request,
+                target,
+                bundle_len,
+            })
+        }
+    }
+}
+
+fn validated_bundle_len(request: &ValidatedPublisherRequest) -> u64 {
+    match request {
+        ValidatedPublisherRequest::PublishPr { bundle_len, .. }
+        | ValidatedPublisherRequest::DirectPush { bundle_len, .. } => *bundle_len,
+    }
+}
+
+async fn write_publisher_metadata_rejection(
+    stream: &mut UnixStream,
+    err: &anyhow::Error,
+) -> Result<()> {
+    let payload = encode_publisher_error("publisher metadata validation", err)?;
+    if payload.len() > MAX_PUBLISHER_RESPONSE_BYTES {
+        bail!("publisher metadata rejection exceeds response limit");
+    }
+    stream
+        .write_all(&[PUBLISHER_METADATA_REJECTED])
+        .await
+        .context("failed to write publisher metadata rejection status")?;
+    stream
+        .write_all(&(payload.len() as u32).to_be_bytes())
+        .await
+        .context("failed to write publisher metadata rejection length")?;
+    stream
+        .write_all(&payload)
+        .await
+        .context("failed to write publisher metadata rejection")?;
+    stream
+        .shutdown()
+        .await
+        .context("failed to close rejected publisher request")?;
+    Ok(())
+}
+
+async fn write_final_publisher_response(stream: &mut UnixStream, response: &[u8]) -> Result<()> {
+    if response.is_empty() || response.len() > MAX_PUBLISHER_RESPONSE_BYTES {
+        bail!("publisher response is outside the allowed size range");
+    }
+    stream
+        .write_all(response)
+        .await
+        .context("failed to write publisher response")?;
+    stream
+        .shutdown()
+        .await
+        .context("failed to close publisher response stream")?;
+    Ok(())
+}
+
+pub(super) async fn receive_declared_bundle(
+    stream: &mut UnixStream,
+    bundle_len: u64,
+) -> Result<Option<ReceivedBundle>> {
+    if bundle_len == 0 {
+        let mut extra = [0u8; 1];
+        if stream
+            .read(&mut extra)
+            .await
+            .context("failed to verify empty publisher bundle")?
+            != 0
+        {
+            bail!("publisher peer sent bytes beyond declared bundle length");
+        }
+        return Ok(None);
+    }
+
+    let tempdir = tempdir().context("failed to create publisher bundle tempdir")?;
+    let bundle_path = tempdir.path().join("request.bundle");
+    let mut file = tokio::fs::File::create(&bundle_path)
+        .await
+        .with_context(|| format!("failed to create {}", bundle_path.display()))?;
+    let mut remaining = bundle_len;
+    let mut buffer = vec![0u8; PUBLISHER_STREAM_BUFFER_BYTES];
+    while remaining != 0 {
+        let chunk_len = remaining.min(PUBLISHER_STREAM_BUFFER_BYTES as u64) as usize;
+        let read = stream
+            .read(&mut buffer[..chunk_len])
+            .await
+            .context("failed while reading publisher bundle")?;
+        if read == 0 {
+            bail!("publisher bundle ended early ({} bytes missing)", remaining);
+        }
+        file.write_all(&buffer[..read])
+            .await
+            .context("failed while spooling publisher bundle")?;
+        remaining -= read as u64;
+    }
+    file.flush()
+        .await
+        .context("failed to flush publisher bundle")?;
+    drop(file);
+
+    let mut extra = [0u8; 1];
+    if stream
+        .read(&mut extra)
+        .await
+        .context("failed to verify publisher bundle framing")?
+        != 0
+    {
+        bail!("publisher peer sent bytes beyond declared bundle length");
+    }
+
+    Ok(Some(ReceivedBundle {
+        _tempdir: tempdir,
+        path: bundle_path,
+    }))
 }
 
 async fn handle_direct_push_request(
     config: &Config,
     request: DirectPushRequest,
+    target: &PublishTarget,
+    bundle_path: Option<&Path>,
 ) -> Result<DirectPushResponse> {
-    let target = validate_direct_push_request(config, &request)?;
     let token = mint_publisher_installation_token(
         config
             .publisher_app_id
@@ -270,23 +655,7 @@ async fn handle_direct_push_request(
             ],
         )?;
     } else {
-        let push_src = if let Some(bundle_base64) = request.bundle_base64.as_deref() {
-            let bundle_bytes = BASE64
-                .decode(bundle_base64.as_bytes())
-                .context("direct push bundle was not valid base64")?;
-            if bundle_bytes.is_empty() {
-                bail!("direct push bundle cannot be empty");
-            }
-            if bundle_bytes.len() > config.publisher_max_bundle_bytes {
-                bail!(
-                    "direct push bundle exceeds limit ({} bytes > {} bytes)",
-                    bundle_bytes.len(),
-                    config.publisher_max_bundle_bytes
-                );
-            }
-            let bundle_path = tempdir.path().join("direct-push.bundle");
-            fs::write(&bundle_path, bundle_bytes)
-                .with_context(|| format!("failed to write {}", bundle_path.display()))?;
+        let push_src = if let Some(bundle_path) = bundle_path {
             git_plain(
                 &repo_dir,
                 &[
@@ -325,7 +694,7 @@ async fn handle_direct_push_request(
     }
 
     Ok(DirectPushResponse {
-        repo: target.repo,
+        repo: target.repo.clone(),
         dst: request.dst,
     })
 }
@@ -334,7 +703,7 @@ async fn handle_publish_request(
     config: &Config,
     request: PublishPrRequest,
     target: &PublishTarget,
-    bundle_bytes: &[u8],
+    bundle_path: &Path,
 ) -> Result<PublishPrResponse> {
     let token = mint_publisher_installation_token(
         config
@@ -347,9 +716,6 @@ async fn handle_publish_request(
 
     let tempdir = tempdir().context("failed to create publisher tempdir")?;
     let askpass_path = write_askpass_script(tempdir.path())?;
-    let bundle_path = tempdir.path().join("request.bundle");
-    fs::write(&bundle_path, bundle_bytes)
-        .with_context(|| format!("failed to write {}", bundle_path.display()))?;
 
     let repo_dir = tempdir.path().join("repo");
     git_with_token(

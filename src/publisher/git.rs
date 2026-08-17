@@ -3,13 +3,38 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, anyhow, bail};
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as BASE64;
-use tempfile::tempdir;
+use tempfile::{TempDir, tempdir};
 
 use crate::config::Config;
 
 use super::api::PublishPrRequest;
+
+#[derive(Debug)]
+pub struct GeneratedGitBundle {
+    _tempdir: TempDir,
+    path: PathBuf,
+    len: u64,
+}
+
+impl GeneratedGitBundle {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn len(&self) -> u64 {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
+#[derive(Debug)]
+pub struct PublishPrSubmission {
+    pub request: PublishPrRequest,
+    pub bundle: GeneratedGitBundle,
+}
 
 pub fn build_publish_request(
     config: &Config,
@@ -19,29 +44,31 @@ pub fn build_publish_request(
     body: String,
     draft: bool,
     repo_root: &Path,
-) -> Result<PublishPrRequest> {
+) -> Result<PublishPrSubmission> {
     ensure_clean_worktree(repo_root)?;
     ensure_repo_root_matches_target(repo_root, &repo_id)?;
     if title.trim().is_empty() {
         bail!("PR title cannot be empty");
     }
 
-    let bundle_bytes = create_head_bundle(repo_root)?;
-    if bundle_bytes.len() > config.publisher_max_bundle_bytes {
+    let bundle = create_head_bundle(repo_root)?;
+    if bundle.len() > config.publisher_max_bundle_bytes as u64 {
         bail!(
             "git bundle is too large ({} bytes > {} bytes)",
-            bundle_bytes.len(),
+            bundle.len(),
             config.publisher_max_bundle_bytes
         );
     }
 
-    Ok(PublishPrRequest {
-        repo_id,
-        base,
-        title,
-        body,
-        draft,
-        bundle_base64: BASE64.encode(bundle_bytes),
+    Ok(PublishPrSubmission {
+        request: PublishPrRequest {
+            repo_id,
+            base,
+            title,
+            body,
+            draft,
+        },
+        bundle,
     })
 }
 
@@ -162,7 +189,7 @@ fn normalize_github_repo_path(path: &str) -> Option<String> {
     Some(format!("{owner}/{repo}"))
 }
 
-pub fn create_head_bundle(repo_root: &Path) -> Result<Vec<u8>> {
+pub fn create_head_bundle(repo_root: &Path) -> Result<GeneratedGitBundle> {
     let tempdir = tempdir().context("failed to create temporary directory for git bundle")?;
     let bundle_path = tempdir.path().join("head.bundle");
 
@@ -181,7 +208,14 @@ pub fn create_head_bundle(repo_root: &Path) -> Result<Vec<u8>> {
         );
     }
 
-    fs::read(&bundle_path).with_context(|| format!("failed to read {}", bundle_path.display()))
+    let len = fs::metadata(&bundle_path)
+        .with_context(|| format!("failed to stat {}", bundle_path.display()))?
+        .len();
+    Ok(GeneratedGitBundle {
+        _tempdir: tempdir,
+        path: bundle_path,
+        len,
+    })
 }
 
 pub fn ensure_clean_worktree(repo_root: &Path) -> Result<()> {

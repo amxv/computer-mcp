@@ -854,7 +854,7 @@ pub(super) async fn publish_pr(
 
     let current_dir = env::current_dir().context("failed to resolve current directory")?;
     let repo_root = detect_repo_root(&current_dir)?;
-    let request = build_publish_request(
+    let submission = build_publish_request(
         config,
         repo.clone(),
         base.map(ToString::to_string),
@@ -863,8 +863,13 @@ pub(super) async fn publish_pr(
         draft,
         &repo_root,
     )?;
-    let response =
-        submit_publish_request(Path::new(&config.publisher_socket_path), &request).await?;
+    let response = submit_publish_request(
+        Path::new(&config.publisher_socket_path),
+        config.publisher_max_bundle_bytes,
+        &submission.request,
+        submission.bundle.path(),
+    )
+    .await?;
 
     println!("publish-pr: created");
     println!("repo: {repo}");

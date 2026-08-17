@@ -10,7 +10,6 @@ pub struct PublishPrRequest {
     pub body: String,
     #[serde(default)]
     pub draft: bool,
-    pub bundle_base64: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -20,8 +19,6 @@ pub struct DirectPushRequest {
     pub dst: String,
     #[serde(default)]
     pub force: bool,
-    #[serde(default)]
-    pub bundle_base64: Option<String>,
     #[serde(default)]
     pub src_oid: Option<String>,
     #[serde(default)]
@@ -46,7 +43,8 @@ pub(super) struct PublishPrError {
     pub(super) error: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub(super) enum PublisherRequest {
     PublishPr(PublishPrRequest),
     DirectPush(DirectPushRequest),

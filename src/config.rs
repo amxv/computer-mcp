@@ -9,7 +9,7 @@ pub const DEFAULT_CONFIG_PATH: &str = "/etc/zodex/config.toml";
 const MIN_YIELD_MS: u64 = 50;
 const MAX_YIELD_MS: u64 = 60_000;
 const MIN_EXEC_TIMEOUT_MS: u64 = 1_000;
-pub const DEFAULT_PUBLISHER_MAX_BUNDLE_BYTES: usize = 32 * 1024 * 1024;
+pub const DEFAULT_PUBLISHER_MAX_BUNDLE_BYTES: usize = 128 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]

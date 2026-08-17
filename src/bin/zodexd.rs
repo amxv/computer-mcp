@@ -25,7 +25,7 @@ use tls::ensure_tls_artifacts;
 
 #[cfg(test)]
 use git_remote::{
-    create_direct_push_bundle_base64_from_dir, git_remote_zodex_push_dst, git_remote_zodex_repo,
+    create_direct_push_bundle_from_dir, git_remote_zodex_push_dst, git_remote_zodex_repo,
     resolve_git_object_id, resolve_git_object_type, sanitize_remote_helper_error,
 };
 #[cfg(test)]
@@ -195,13 +195,10 @@ async fn run_hidden_command(config_path: &Path, command: Commands) -> Result<()>
 
 #[cfg(test)]
 mod tests {
-    use base64::Engine as _;
-
     use super::{
-        Args, PushGrantRecord, create_direct_push_bundle_base64_from_dir,
-        git_remote_zodex_push_dst, git_remote_zodex_repo, parse_push_grants,
-        resolve_active_push_grant, resolve_git_object_id, resolve_git_object_type,
-        sanitize_remote_helper_error,
+        Args, PushGrantRecord, create_direct_push_bundle_from_dir, git_remote_zodex_push_dst,
+        git_remote_zodex_repo, parse_push_grants, resolve_active_push_grant, resolve_git_object_id,
+        resolve_git_object_type, sanitize_remote_helper_error,
     };
     use clap::CommandFactory;
     use std::fs;
@@ -348,16 +345,10 @@ mod tests {
             ])
         ));
 
-        let bundle_base64 = create_direct_push_bundle_base64_from_dir(&repo, "refs/heads/smoke")
+        let bundle = create_direct_push_bundle_from_dir(&repo, "refs/heads/smoke")
             .expect("create bundle")
             .expect("branch push should have bundle contents");
-        fs::write(
-            &bundle_path,
-            base64::engine::general_purpose::STANDARD
-                .decode(bundle_base64)
-                .expect("decode bundle"),
-        )
-        .expect("write bundle");
+        fs::copy(bundle.path(), &bundle_path).expect("copy bundle");
 
         assert!(git_test_status(Command::new("git").args([
             "clone",
@@ -436,18 +427,12 @@ mod tests {
                 .args(["tag", "-a", "v1.0.0", "-m", "v1.0.0"])
         ));
 
-        let bundle_base64 = create_direct_push_bundle_base64_from_dir(&repo, "refs/tags/v1.0.0")
+        let bundle = create_direct_push_bundle_from_dir(&repo, "refs/tags/v1.0.0")
             .expect("create tag bundle")
             .expect(
                 "annotated tag object should produce a bundle even when target commit is remote",
             );
-        fs::write(
-            &bundle_path,
-            base64::engine::general_purpose::STANDARD
-                .decode(bundle_base64)
-                .expect("decode bundle"),
-        )
-        .expect("write bundle");
+        fs::copy(bundle.path(), &bundle_path).expect("copy bundle");
 
         assert!(git_test_status(Command::new("git").args([
             "clone",
@@ -527,10 +512,10 @@ mod tests {
                 .args(["tag", "v1.0.0"])
         ));
 
-        let bundle_base64 = create_direct_push_bundle_base64_from_dir(&repo, "refs/tags/v1.0.0")
+        let bundle = create_direct_push_bundle_from_dir(&repo, "refs/tags/v1.0.0")
             .expect("lightweight tag bundle attempt should not hard fail");
         assert!(
-            bundle_base64.is_none(),
+            bundle.is_none(),
             "lightweight tag on an already-remote commit has no new bundle objects"
         );
         let tag_oid = resolve_git_object_id(&repo, "refs/tags/v1.0.0").expect("tag oid");
