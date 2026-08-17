@@ -46,7 +46,7 @@ fn github_app_docs_and_scripts_include_expected_permissions_and_flow() {
     assert!(docs.contains("publisher_client_id"));
     assert!(docs.contains("plain `git clone https://github.com/amxv/zodex.git` works"));
     assert!(docs.contains("zodex-agent github request-push"));
-    assert!(docs.contains("zodex github grant-push"));
+    assert!(docs.contains("zodex sprite github grant-push"));
     assert!(docs.contains("zodex-agent github revoke-push"));
     assert!(docs.contains("--forget-local-auth"));
     assert!(docs.contains("list-grants"));

@@ -1,7 +1,4 @@
-fn resolve_publisher_client_id(
-    config: &Config,
-    publisher_client_id: Option<&str>,
-) -> Option<String> {
+fn resolve_publisher_client_id(publisher_client_id: Option<&str>) -> Option<String> {
     publisher_client_id
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -12,7 +9,6 @@ fn resolve_publisher_client_id(
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty())
         })
-        .or_else(|| config.publisher_client_id.clone())
 }
 
 fn push_grant_cache_path(repo: &str) -> Result<PathBuf> {
@@ -192,27 +188,8 @@ async fn github_repo_id(repo: &str, bearer_token: Option<&str>) -> Result<Option
     Ok(Some(payload.id))
 }
 
-async fn try_resolve_repo_id_for_device_flow(config: &Config, repo: &str) -> Result<Option<u64>> {
-    if let Some(repo_id) = github_repo_id(repo, None).await? {
-        return Ok(Some(repo_id));
-    }
-
-    if let (Some(app_id), Some(installation_id)) =
-        (config.reader_app_id, config.reader_installation_id)
-        && Path::new(&config.reader_private_key_path).exists()
-    {
-        let token = mint_reader_installation_token(
-            app_id,
-            Path::new(&config.reader_private_key_path),
-            installation_id,
-        )
-        .await?;
-        if let Some(repo_id) = github_repo_id(repo, Some(&token)).await? {
-            return Ok(Some(repo_id));
-        }
-    }
-
-    Ok(None)
+async fn try_resolve_repo_id_for_device_flow(repo: &str) -> Result<Option<u64>> {
+    github_repo_id(repo, None).await
 }
 
 async fn request_device_flow_code(client_id: &str) -> Result<GitHubDeviceCodeResponse> {
@@ -433,7 +410,6 @@ async fn mint_user_access_token_via_device_flow(
 }
 
 async fn mint_device_flow_push_grant(
-    config: &Config,
     repo: &str,
     client_id: &str,
     persist_refresh_token: bool,
@@ -502,7 +478,7 @@ async fn mint_device_flow_push_grant(
         }
     }
 
-    let repository_id = try_resolve_repo_id_for_device_flow(config, repo).await?;
+    let repository_id = try_resolve_repo_id_for_device_flow(repo).await?;
     let grant = mint_user_access_token_via_device_flow(client_id, repo, repository_id).await?;
     if persist_refresh_token && let Some(refresh_token) = grant.refresh_token.clone() {
         save_cached_device_flow_grant(
@@ -531,59 +507,7 @@ async fn mint_device_flow_push_grant(
     })
 }
 
-async fn request_push_access(
-    config: &Config,
-    repo: &str,
-    publisher_client_id: Option<&str>,
-    active_ttl: Option<Duration>,
-    cache_refresh_token: bool,
-) -> Result<()> {
-    let repo =
-        normalize_github_repo(repo).ok_or_else(|| anyhow!("repo must be in owner/repo form"))?;
-    let client_id = resolve_publisher_client_id(config, publisher_client_id).ok_or_else(|| {
-        anyhow!(
-            "publisher client id is required for device-flow push grants; set `publisher_client_id`, pass `--publisher-client-id`, or export {GITHUB_PUSH_GRANT_CLIENT_ID_ENV}"
-        )
-    })?;
-    let grant =
-        mint_device_flow_push_grant(config, &repo, &client_id, cache_refresh_token, active_ttl)
-            .await?;
-    write_local_push_grant(&repo, &grant)?;
-
-    println!("push-grant: active");
-    println!("repo: {repo}");
-    println!("grant-location: local");
-    println!(
-        "ttl: {}",
-        if active_ttl.is_some() {
-            "enabled"
-        } else {
-            "disabled"
-        }
-    );
-    println!(
-        "refresh-token-cache: {}",
-        if cache_refresh_token {
-            "enabled"
-        } else {
-            "disabled"
-        }
-    );
-    println!(
-        "token-source: {}",
-        grant
-            .token_source
-            .clone()
-            .unwrap_or_else(|| "unknown".to_string())
-    );
-    if let Some(expires_at) = grant.expires_at.as_deref() {
-        println!("expires-at: {expires_at}");
-    }
-    Ok(())
-}
-
 async fn grant_push_access(
-    config: &Config,
     sprite: &str,
     org: Option<&str>,
     repo: &str,
@@ -591,12 +515,12 @@ async fn grant_push_access(
 ) -> Result<()> {
     let repo =
         normalize_github_repo(repo).ok_or_else(|| anyhow!("repo must be in owner/repo form"))?;
-    let client_id = resolve_publisher_client_id(config, publisher_client_id).ok_or_else(|| {
+    let client_id = resolve_publisher_client_id(publisher_client_id).ok_or_else(|| {
         anyhow!(
-            "publisher client id is required for device-flow push grants; set `publisher_client_id`, pass `--publisher-client-id`, or export {GITHUB_PUSH_GRANT_CLIENT_ID_ENV}"
+            "publisher client id is required for device-flow push grants; pass `--publisher-client-id` or export {GITHUB_PUSH_GRANT_CLIENT_ID_ENV}"
         )
     })?;
-    let grant = mint_device_flow_push_grant(config, &repo, &client_id, true, None).await?;
+    let grant = mint_device_flow_push_grant(&repo, &client_id, true, None).await?;
     let raw = serde_json::to_string(&grant).context("failed to serialize push grant")?;
     let mut grant_file = NamedTempFile::new().context("failed to create grant temp file")?;
     use std::io::Write as _;
@@ -637,50 +561,21 @@ async fn grant_push_access(
 }
 
 fn revoke_push_access(
-    sprite: Option<&str>,
+    sprite: &str,
     org: Option<&str>,
     repo: &str,
     forget_local_auth: bool,
 ) -> Result<()> {
     let repo =
         normalize_github_repo(repo).ok_or_else(|| anyhow!("repo must be in owner/repo form"))?;
-    match sprite {
-        Some(sprite) => {
-            let exec_args = vec![
-                "bash".to_string(),
-                "-lc".to_string(),
-                format!("sudo rm -f {}", push_grant_path(&repo).display()),
-            ];
-            run_sprite_exec(sprite, org, &exec_args, &[])?;
-            println!("grant-location: sprite");
-        }
-        None if sprite_runtime_detected() => {
-            let path = push_grant_path(&repo);
-            let removed = if path.exists() {
-                fs::remove_file(&path)
-                    .with_context(|| format!("failed to remove {}", path.display()))?;
-                true
-            } else {
-                false
-            };
-            println!("grant-location: local");
-            println!(
-                "push-grant-file: {}",
-                if removed { "removed" } else { "not-found" }
-            );
-        }
-        None => {
-            let resolved = resolve_remote_sprite(None, org)?;
-            let exec_args = vec![
-                "bash".to_string(),
-                "-lc".to_string(),
-                format!("sudo rm -f {}", push_grant_path(&repo).display()),
-            ];
-            run_sprite_exec(&resolved.name, resolved.org.as_deref(), &exec_args, &[])?;
-            println!("grant-location: sprite");
-            println!("sprite: {}", resolved.name);
-        }
-    }
+    let exec_args = vec![
+        "bash".to_string(),
+        "-lc".to_string(),
+        format!("sudo rm -f {}", push_grant_path(&repo).display()),
+    ];
+    run_sprite_exec(sprite, org, &exec_args, &[])?;
+    println!("grant-location: sprite");
+    println!("sprite: {sprite}");
     println!("push-grant: revoked");
     println!("repo: {repo}");
     if forget_local_auth {
@@ -700,64 +595,18 @@ fn revoke_push_access(
     Ok(())
 }
 
-fn list_push_grants(sprite: Option<&str>, org: Option<&str>) -> Result<()> {
-    let raw = match sprite {
-        Some(sprite) => {
-            let exec_args = vec![
-                "bash".to_string(),
-                "-lc".to_string(),
-                format!(
-                    "if [[ -d {dir} ]]; then shopt -s nullglob; for file in {dir}/*.json; do cat \"$file\"; echo; done; fi",
-                    dir = PUSH_GRANTS_DIR
-                ),
-            ];
-            println!("grant-location: sprite");
-            run_sprite_exec(sprite, org, &exec_args, &[])?
-        }
-        None if !sprite_runtime_detected() => {
-            let resolved = resolve_remote_sprite(None, org)?;
-            let exec_args = vec![
-                "bash".to_string(),
-                "-lc".to_string(),
-                format!(
-                    "if [[ -d {dir} ]]; then shopt -s nullglob; for file in {dir}/*.json; do cat \"$file\"; echo; done; fi",
-                    dir = PUSH_GRANTS_DIR
-                ),
-            ];
-            println!("grant-location: sprite");
-            println!("sprite: {}", resolved.name);
-            run_sprite_exec(&resolved.name, resolved.org.as_deref(), &exec_args, &[])?
-        }
-        None if sprite_runtime_detected() => {
-            println!("grant-location: local");
-            let grants_dir = Path::new(PUSH_GRANTS_DIR);
-            if !grants_dir.is_dir() {
-                String::new()
-            } else {
-                let mut blobs = Vec::new();
-                for entry in fs::read_dir(grants_dir)
-                    .with_context(|| format!("failed to read {}", grants_dir.display()))?
-                {
-                    let entry = entry
-                        .with_context(|| format!("failed to read {}", grants_dir.display()))?;
-                    let path = entry.path();
-                    if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-                        continue;
-                    }
-                    blobs.push(
-                        fs::read_to_string(&path)
-                            .with_context(|| format!("failed to read {}", path.display()))?,
-                    );
-                }
-                blobs.join("\n")
-            }
-        }
-        None => {
-            bail!(
-                "pass `--sprite <name>` to inspect a remote Sprite grant set, or run this command on the Sprite to inspect local grants"
-            );
-        }
-    };
+fn list_push_grants(sprite: &str, org: Option<&str>) -> Result<()> {
+    let exec_args = vec![
+        "bash".to_string(),
+        "-lc".to_string(),
+        format!(
+            "if [[ -d {dir} ]]; then shopt -s nullglob; for file in {dir}/*.json; do cat \"$file\"; echo; done; fi",
+            dir = PUSH_GRANTS_DIR
+        ),
+    ];
+    println!("grant-location: sprite");
+    println!("sprite: {sprite}");
+    let raw = run_sprite_exec(sprite, org, &exec_args, &[])?;
     let mut grants = Vec::new();
     for grant in parse_push_grants(&raw)? {
         if push_grant_expired(&grant, current_epoch_seconds()?) {

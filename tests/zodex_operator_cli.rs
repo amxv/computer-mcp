@@ -11,7 +11,7 @@ use zodex::invocation::{
 use zodex::local::{LocalHistoryRuntime, LocalHistoryRuntimeConfig, PRESENTATION_SCHEMA_VERSION};
 
 #[test]
-fn zodex_root_help_is_mode_first_while_legacy_aliases_remain_invokable() {
+fn zodex_root_help_exposes_only_first_class_modes_and_upgrade() {
     let output = Command::new(env!("CARGO_BIN_EXE_zodex"))
         .arg("--help")
         .output()
@@ -19,17 +19,64 @@ fn zodex_root_help_is_mode_first_while_legacy_aliases_remain_invokable() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("local"));
-    assert!(stdout.contains("sprite"));
-    assert!(stdout.contains("upgrade"));
-    for hidden in [
-        "install", "start", "stop", "proxy", "github", "tls", "set-key",
+    for command in ["local", "sprite", "upgrade"] {
+        assert!(
+            stdout
+                .lines()
+                .any(|line| line.trim_start().starts_with(command)),
+            "missing root command {command}: {stdout}"
+        );
+    }
+    for removed in [
+        "install",
+        "start",
+        "stop",
+        "restart",
+        "status",
+        "logs",
+        "set-key",
+        "rotate-key",
+        "git-credential-helper",
+        "show-url",
+        "tls",
+        "publisher",
+        "proxy",
+        "github",
     ] {
         assert!(
             !stdout
                 .lines()
-                .any(|line| line.trim_start().starts_with(hidden)),
-            "legacy root command {hidden} should be hidden from mode-first help: {stdout}"
+                .any(|line| line.trim_start().starts_with(removed)),
+            "removed root command {removed} leaked into help: {stdout}"
+        );
+    }
+}
+
+#[test]
+fn zodex_root_rejects_removed_commands_and_global_config() {
+    for args in [
+        vec!["install"],
+        vec!["start"],
+        vec!["stop"],
+        vec!["restart"],
+        vec!["status"],
+        vec!["logs"],
+        vec!["set-key", "secret"],
+        vec!["rotate-key"],
+        vec!["show-url"],
+        vec!["tls", "setup"],
+        vec!["publisher", "status"],
+        vec!["proxy", "status"],
+        vec!["github", "status"],
+        vec!["--config", "/etc/zodex/config.toml", "sprite", "status"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_zodex"))
+            .args(&args)
+            .output()
+            .unwrap_or_else(|error| panic!("run zodex {args:?}: {error}"));
+        assert!(
+            !output.status.success(),
+            "removed root syntax unexpectedly succeeded: zodex {args:?}"
         );
     }
 }
@@ -138,55 +185,6 @@ fn zodex_sprite_setup_help_exposes_writer_device_flow_and_public_edge_contract()
     assert!(stdout.contains("--publisher-pem"));
     assert!(stdout.contains("--url-auth"));
     assert!(stdout.contains("[default: public]"));
-}
-
-#[test]
-fn zodex_github_help_exposes_mode_commands() {
-    let output = Command::new(env!("CARGO_BIN_EXE_zodex"))
-        .args(["github", "--help"])
-        .output()
-        .expect("run zodex github --help");
-
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    assert!(stdout.contains("request-push"));
-    assert!(stdout.contains("grant-push"));
-    assert!(stdout.contains("revoke-push"));
-    assert!(stdout.contains("list-grants"));
-    assert!(stdout.contains("mode"));
-}
-
-#[test]
-fn zodex_github_mode_help_exposes_yolo_default_and_status() {
-    let output = Command::new(env!("CARGO_BIN_EXE_zodex"))
-        .args(["github", "mode", "--help"])
-        .output()
-        .expect("run zodex github mode --help");
-
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    assert!(stdout.contains("yolo"));
-    assert!(stdout.contains("default"));
-    assert!(stdout.contains("status"));
-}
-
-#[test]
-fn zodex_github_mode_yolo_help_exposes_expected_flags() {
-    let output = Command::new(env!("CARGO_BIN_EXE_zodex"))
-        .args(["github", "mode", "yolo", "--help"])
-        .output()
-        .expect("run zodex github mode yolo --help");
-
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    assert!(stdout.contains("--sprite"));
-    assert!(stdout.contains("--repo"));
-    assert!(stdout.contains("--ttl"));
-    assert!(stdout.contains("--no-ttl"));
-    assert!(stdout.contains("[default: 2h]"));
 }
 
 #[test]

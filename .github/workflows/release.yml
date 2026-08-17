@@ -84,7 +84,6 @@ jobs:
             exit 1
           fi
 
-          ZODEX_INSTALL_MODE=operator \
           ZODEX_ASSET_URL="file://${GITHUB_WORKSPACE}/dist/${{ matrix.archive_name }}.tar.gz" \
           ZODEX_INSTALL_DIR="$install_dir" \
             bash scripts/install.sh

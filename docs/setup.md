@@ -187,8 +187,8 @@ The setup command:
 zodex sprite status --sprite zodex-dev
 zodex sprite logs --sprite zodex-dev --service zodexd --lines 100
 zodex sprite health --sprite zodex-dev
-zodex proxy inspect --sprite zodex-dev
-zodex proxy verify-origin --sprite zodex-dev
+zodex sprite proxy status --sprite zodex-dev
+zodex sprite proxy verify --sprite zodex-dev
 ```
 
 Expected signs:
@@ -201,8 +201,8 @@ Expected signs:
 If you use the Cloudflare proxy front door, deploy or update it after verifying the Sprite origin:
 
 ```bash
-zodex proxy inspect --sprite zodex-dev
-zodex proxy verify-origin --sprite zodex-dev
+zodex sprite proxy status --sprite zodex-dev
+zodex sprite proxy verify --sprite zodex-dev
 cd proxy/cloudflare-worker
 # set vars.SPRITE_ORIGIN in wrangler.jsonc first
 npx wrangler deploy
@@ -216,11 +216,11 @@ Get the public Sprite URL:
 sprite url
 ```
 
-Get the API key from the Sprite config or ask the Sprite-side helper to print the redacted shape:
+Get the API key from the Sprite config, or have the operator CLI prepare the registered capability URL:
 
 ```bash
 sprite exec -- sudo cat /etc/zodex/config.toml
-sprite exec -- sudo -u zodex-agent env HOME=/home/zodex-agent zodex-agent show-url --host <sprite-host>
+zodex sprite connect --sprite zodex-dev --show-url
 ```
 
 The ChatGPT connector URL should look like:
@@ -281,16 +281,16 @@ zodex-agent github revoke-push --repo owner/repo --forget-local-auth
 Remote operator grant alternative:
 
 ```bash
-zodex github grant-push --sprite zodex-dev --repo owner/repo
-zodex github revoke-push --sprite zodex-dev --repo owner/repo
+zodex sprite github grant-push --sprite zodex-dev --repo owner/repo
+zodex sprite github revoke-push --sprite zodex-dev --repo owner/repo
 ```
 
 Trusted YOLO session:
 
 ```bash
-zodex github mode yolo --sprite zodex-dev --repo owner/repo --ttl 4h
-zodex github mode status --sprite zodex-dev
-zodex github mode default --sprite zodex-dev
+zodex sprite github yolo --sprite zodex-dev --repo owner/repo --ttl 4h
+zodex sprite github status --sprite zodex-dev
+zodex sprite github default --sprite zodex-dev
 ```
 
 The default active grant TTL is `30m`. `request-push` defaults to a `30m` TTL and does not persist refresh-token state unless `--cache-refresh-token` is explicitly requested. `mode yolo` defaults to a `2h` TTL and all installed repositories unless one or more `--repo` entries are provided. Change either window with `--ttl <duration>`. Repo-scoped YOLO grants merge with other active repo grants and expire independently. Expired grants stop working in the credential-helper path. Both flows can use `--no-ttl` when the operator intentionally wants an indefinite window.
@@ -306,7 +306,7 @@ zodex sprite sync --sprite zodex-dev --force-recreate
 zodex sprite upgrade --sprite zodex-dev
 zodex-agent github list-grants
 zodex-agent github publish-pr --repo owner/repo --title "Title"
-zodex github mode status --sprite zodex-dev
+zodex sprite github status --sprite zodex-dev
 ```
 
 ## Migration notes

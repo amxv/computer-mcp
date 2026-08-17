@@ -6,7 +6,6 @@ use clap::{Parser, Subcommand};
 use tracing::warn;
 use zodex::config::{Config, DEFAULT_CONFIG_PATH};
 use zodex::install_rustls_crypto_provider;
-use zodex::redaction::redact_api_key_query_params;
 use zodex::server::run_server;
 
 #[path = "zodexd/git_remote.rs"]
@@ -45,11 +44,6 @@ enum Commands {
     GitCredentialHelper { operation: String },
     #[command(hide = true)]
     GitRemoteZodex { remote: String, url: String },
-    #[command(hide = true)]
-    ShowUrl {
-        #[arg(long, default_value = "127.0.0.1")]
-        host: String,
-    },
     #[command(hide = true)]
     Github {
         #[command(subcommand)]
@@ -125,14 +119,6 @@ async fn run_hidden_command(config_path: &Path, command: Commands) -> Result<()>
         Commands::GitRemoteZodex { remote: _, url } => {
             let config = Config::load(Some(config_path))?;
             handle_git_remote_zodex(&config, &url).await?;
-        }
-        Commands::ShowUrl { host } => {
-            let config = Config::load(Some(config_path))?;
-            let raw_url = format!("https://{host}/mcp?key={}", config.api_key);
-            println!(
-                "{} (key redacted in CLI output)",
-                redact_api_key_query_params(&raw_url)
-            );
         }
         Commands::Github { command } => {
             let config = Config::load(Some(config_path))?;

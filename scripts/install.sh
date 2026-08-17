@@ -10,7 +10,6 @@ ZODEX_ASSET_URL="${ZODEX_ASSET_URL:-}"
 ZODEX_SOURCE_REF="${ZODEX_SOURCE_REF:-main}"
 ZODEX_BINARY_SOURCE_DIR="${ZODEX_BINARY_SOURCE_DIR:-}"
 ZODEX_INSTALL_DIR="${ZODEX_INSTALL_DIR:-/usr/local/bin}"
-ZODEX_INSTALL_OPERATOR_CLI="${ZODEX_INSTALL_OPERATOR_CLI:-1}"
 ZODEX_CONFIG_PATH="${ZODEX_CONFIG_PATH:-/etc/zodex/config.toml}"
 ZODEX_STATE_DIR="${ZODEX_STATE_DIR:-/var/lib/zodex}"
 ZODEX_SERVICE_PORT="${ZODEX_SERVICE_PORT:-8080}"
@@ -33,7 +32,6 @@ ZODEX_GIT_USER_NAME="${ZODEX_GIT_USER_NAME:-Zodex Agent}"
 ZODEX_GIT_USER_EMAIL="${ZODEX_GIT_USER_EMAIL:-zodex-agent@local.invalid}"
 ZODEX_READER_KEY_DIR="${ZODEX_READER_KEY_DIR:-/etc/zodex/reader}"
 ZODEX_PUBLISHER_KEY_DIR="${ZODEX_PUBLISHER_KEY_DIR:-/etc/zodex/publisher}"
-ZODEX_PUBLIC_HOST="${ZODEX_PUBLIC_HOST:-}"
 
 DISTRO_ID="unknown"
 DISTRO_LIKE=""
@@ -69,11 +67,7 @@ is_root() {
 resolved_install_mode() {
   case "${ZODEX_INSTALL_MODE}" in
     auto)
-      if is_root && [[ "$(uname -s)" == "Linux" ]]; then
-        printf 'runtime\n'
-      else
-        printf 'operator\n'
-      fi
+      printf 'operator\n'
       ;;
     operator|runtime)
       printf '%s\n' "${ZODEX_INSTALL_MODE}"
@@ -349,15 +343,6 @@ detect_platform() {
   log "detected distro=${DISTRO_ID} arch=${ARCH} target=${TARGET_TRIPLE}"
 }
 
-resolved_public_host() {
-  if [[ -n "${ZODEX_PUBLIC_HOST}" ]]; then
-    printf '%s\n' "${ZODEX_PUBLIC_HOST}"
-    return
-  fi
-
-  detect_public_ip
-}
-
 install_runtime_prerequisites() {
   if command_exists apt-get; then
     export DEBIAN_FRONTEND=noninteractive
@@ -442,7 +427,6 @@ resolve_release_asset_url() {
 
 install_binaries_from_dir() {
   local src_dir="$1"
-  local cli_src="${src_dir}/zodex"
   local daemon_src="${src_dir}/zodexd"
   if [[ ! -x "${daemon_src}" && -x "${src_dir}/zodexd" ]]; then
     daemon_src="${src_dir}/zodexd"
@@ -452,16 +436,9 @@ install_binaries_from_dir() {
   [[ -x "${src_dir}/git-remote-zodex" ]] || die "missing executable ${src_dir}/git-remote-zodex"
   [[ -x "${daemon_src}" ]] || die "missing executable ${src_dir}/zodexd or ${src_dir}/zodexd"
   [[ -x "${src_dir}/zodex-prd" ]] || die "missing executable ${src_dir}/zodex-prd"
-  if [[ "${ZODEX_INSTALL_OPERATOR_CLI}" == "1" ]]; then
-    [[ -x "${cli_src}" ]] || die "missing executable ${src_dir}/zodex or ${src_dir}/zodex"
-  fi
 
   install -d -m 0755 "${ZODEX_INSTALL_DIR}"
-  if [[ "${ZODEX_INSTALL_OPERATOR_CLI}" == "1" ]]; then
-    install -m 0755 "${cli_src}" "${ZODEX_INSTALL_DIR}/zodex"
-  else
-    /bin/rm -f "${ZODEX_INSTALL_DIR}/zodex"
-  fi
+  /bin/rm -f "${ZODEX_INSTALL_DIR}/zodex"
   install -m 0755 "${src_dir}/zodex-agent" "${ZODEX_INSTALL_DIR}/zodex-agent"
   install -m 0755 "${src_dir}/git-remote-zodex" "${ZODEX_INSTALL_DIR}/git-remote-zodex"
   install -m 0755 "${daemon_src}" "${ZODEX_INSTALL_DIR}/zodexd"
@@ -512,9 +489,6 @@ install_binaries_from_source() {
   (
     cd "${src_dir}"
     local cargo_args=(build --release --bin zodex-agent --bin git-remote-zodex --bin zodexd --bin zodex-prd)
-    if [[ "${ZODEX_INSTALL_OPERATOR_CLI}" == "1" ]]; then
-      cargo_args+=(--bin zodex)
-    fi
     if cargo "${cargo_args[@]}"; then
       :
     else
@@ -577,12 +551,6 @@ EOF
 
   chgrp "${ZODEX_SERVICE_GROUP}" "${ZODEX_CONFIG_PATH}"
   chmod 0640 "${ZODEX_CONFIG_PATH}"
-}
-
-run_cli_install() {
-  local cli="${ZODEX_INSTALL_DIR}/zodex"
-  [[ -x "${cli}" ]] || die "zodex not installed at ${cli}"
-  "${cli}" --config "${ZODEX_CONFIG_PATH}" install
 }
 
 run_as_agent_user() {
@@ -683,47 +651,21 @@ EOF
   chmod 0644 "${profile_path}"
 }
 
-detect_public_ip() {
-  local ip=""
-  ip="$(curl -fsS --max-time 5 https://api.ipify.org || true)"
-  if [[ -z "${ip}" ]]; then
-    ip="<public_ip>"
-  fi
-  printf '%s\n' "${ip}"
-}
-
-print_next_steps() {
-  local public_host
-  public_host="$(resolved_public_host)"
-
+print_runtime_summary() {
   cat <<EOF
 
-Install complete.
+Zodex Sprite runtime installed.
 
 Config file:
   ${ZODEX_CONFIG_PATH}
 
-The commands below assume the default config path. If you changed it, add:
-  --config "${ZODEX_CONFIG_PATH}"
+Installed runtime binaries:
+  ${ZODEX_INSTALL_DIR}/zodex-agent
+  ${ZODEX_INSTALL_DIR}/git-remote-zodex
+  ${ZODEX_INSTALL_DIR}/zodexd
+  ${ZODEX_INSTALL_DIR}/zodex-prd
 
-Next steps:
-  1. review "${ZODEX_CONFIG_PATH}" and add reader_app_id / reader_installation_id / publisher_client_id
-  2. enable Device Flow on the push-grant GitHub App
-  3. place the reader GitHub App key at "${ZODEX_READER_KEY_DIR}/private-key.pem"
-  4. if you want the internal publish daemon, also add publisher_app_id / publisher_targets and place the publisher GitHub App key at "${ZODEX_PUBLISHER_KEY_DIR}/private-key.pem" with owner ${ZODEX_PUBLISHER_USER}
-  5. ensure your Sprite Service exposes zodexd HTTP port ${ZODEX_SERVICE_PORT}
-  6. zodex-agent show-url --host "${public_host}"
-
-Verify:
-  - zodex status
-  - curl "https://${public_host}/health"
-  - MCP URL shape: https://${public_host}/mcp?key=<redacted>
-
-Optional:
-  - rotate the installer-generated API key with: zodex set-key "<strong-random-key>"
-  - private GitHub HTTPS clones by ${ZODEX_AGENT_USER} will use the built-in reader credential helper once reader_app_id, reader_installation_id, and the reader PEM are in place
-  - agent-facing GitHub auth is restricted to zodex-agent: request push with 'zodex-agent github request-push --repo <owner/repo>' and revoke with 'zodex-agent github revoke-push --repo <owner/repo>'
-  - agent commits default to ${ZODEX_GIT_USER_NAME} <${ZODEX_GIT_USER_EMAIL}> unless you override ZODEX_GIT_USER_NAME / ZODEX_GIT_USER_EMAIL during install
+Runtime lifecycle is managed from the operator machine with zodex sprite commands.
 EOF
 }
 
@@ -745,13 +687,10 @@ run_runtime_install() {
   fi
 
   ensure_dirs_and_config
-  if [[ "${ZODEX_INSTALL_OPERATOR_CLI}" == "1" ]]; then
-    run_cli_install
-  fi
   configure_agent_git_identity
   configure_agent_git_reader_helper
   configure_agent_build_environment
-  print_next_steps
+  print_runtime_summary
 }
 
 main() {

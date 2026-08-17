@@ -12,8 +12,8 @@ fn zodex_agent_help_only_exposes_restricted_surface() {
 
     assert!(stdout.contains("Restricted Zodex agent CLI"));
     assert!(stdout.contains("git-credential-helper"));
-    assert!(stdout.contains("show-url"));
     assert!(stdout.contains("github"));
+    assert!(!stdout.contains("show-url"));
     assert!(!stdout.contains("install"));
     assert!(!stdout.contains("sprite"));
     assert!(!stdout.contains("proxy"));

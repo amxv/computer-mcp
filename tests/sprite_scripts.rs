@@ -21,7 +21,7 @@ fn setup_doc_describes_sprite_first_zodex_flow() {
     assert!(setup.contains("npx wrangler deploy"));
     assert!(setup.contains("vars.SPRITE_ORIGIN"));
     assert!(setup.contains("zodex-agent github request-push"));
-    assert!(setup.contains("zodex github grant-push"));
+    assert!(setup.contains("zodex sprite github grant-push"));
     assert!(setup.contains("zodex-agent github revoke-push"));
     assert!(setup.contains("--forget-local-auth"));
     assert!(setup.contains("--ttl <duration>"));

@@ -1,76 +1,10 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ProcessModeState {
-    Running(i32),
-    Stale(i32),
-    Stopped,
-}
-
-fn process_mode_state(config: &Config) -> Result<ProcessModeState> {
-    match read_process_pid(config)? {
-        Some(pid) if pid_is_running(pid) => Ok(ProcessModeState::Running(pid)),
-        Some(pid) => Ok(ProcessModeState::Stale(pid)),
-        None => Ok(ProcessModeState::Stopped),
-    }
-}
-
-fn print_stack_status_summary(config: &Config) -> Result<()> {
-    let main_lines = build_main_status_lines(config)?;
-    for line in main_lines {
-        println!("{line}");
-    }
-
-    println!();
-    for line in build_publisher_status_lines(config, publisher_process_mode_state(config))? {
-        println!("{line}");
-    }
-
-    println!();
-    for line in build_reader_status_lines(config) {
-        println!("{line}");
-    }
-
-    Ok(())
-}
-
-fn build_main_status_lines(config: &Config) -> Result<Vec<String>> {
-    match detect_service_manager() {
-        ServiceManager::Systemd => {
-            let raw = run_systemctl(&build_systemctl_args(SystemctlAction::ShowStatus))?;
-            Ok(build_status_summary_lines(&raw, config, detect_public_ip()))
-        }
-        ServiceManager::Process => {
-            build_process_status_lines(config, detect_public_ip(), process_mode_state(config))
-        }
-    }
-}
-
-fn publisher_process_mode_state(config: &Config) -> Result<ProcessModeState> {
-    match read_publisher_pid(config)? {
-        Some(pid) if pid_is_running(pid) => Ok(ProcessModeState::Running(pid)),
-        Some(pid) => Ok(ProcessModeState::Stale(pid)),
-        None => Ok(ProcessModeState::Stopped),
-    }
-}
-
-fn print_publisher_status_summary(config: &Config) {
-    match build_publisher_status_lines(config, publisher_process_mode_state(config)) {
-        Ok(lines) => {
-            for line in lines {
-                println!("{line}");
-            }
-        }
-        Err(err) => eprintln!("warning: failed to build publisher status: {err}"),
-    }
-}
-
 fn print_sprite_services_status_summary(
-    config: &Config,
     config_path: &Path,
     sprite: &str,
     org: Option<&str>,
 ) -> Result<()> {
     let services = fetch_sprite_services(sprite, org)?;
-    let lines = build_sprite_services_status_lines(config, config_path, sprite, &services);
+    let lines = build_sprite_services_status_lines(config_path, sprite, &services);
     for line in lines {
         println!("{line}");
     }
@@ -105,7 +39,6 @@ fn fetch_sprite_services(sprite: &str, org: Option<&str>) -> Result<Vec<SpriteSe
 }
 
 fn build_sprite_services_status_lines(
-    config: &Config,
     config_path: &Path,
     sprite: &str,
     services: &[SpriteServiceStatus],
@@ -117,11 +50,9 @@ fn build_sprite_services_status_lines(
         .collect();
 
     let mut lines = vec![
-        format!("service-mode: sprite-services"),
+        "service-mode: sprite-services".to_string(),
         format!("sprite: {sprite}"),
         format!("config: {}", config_path.display()),
-        format!("agent-home: {}", config.agent_home),
-        format!("default-workdir: {}", config.default_workdir),
         format!("source-of-truth: sprite api -s {sprite} /services"),
     ];
 
@@ -129,7 +60,6 @@ fn build_sprite_services_status_lines(
         lines.push(String::new());
         lines.extend(build_single_sprite_service_status_lines(
             service_name,
-            config,
             sprite,
             service_map.get(service_name).copied(),
             expected.get(service_name),
@@ -141,7 +71,6 @@ fn build_sprite_services_status_lines(
 
 fn build_single_sprite_service_status_lines(
     service_name: &str,
-    config: &Config,
     sprite: &str,
     actual: Option<&SpriteServiceStatus>,
     expected: Option<&SpriteServiceDefinition>,
@@ -149,9 +78,9 @@ fn build_single_sprite_service_status_lines(
     let mut lines = vec![format!("service: {service_name}")];
 
     let expected_run_user = if service_name == PUBLISHER_SERVICE_LABEL {
-        config.publisher_user.as_str()
+        ZODEX_PUBLISHER_USER
     } else {
-        config.agent_user.as_str()
+        ZODEX_AGENT_USER
     };
     lines.push(format!("expected-run-user: {expected_run_user}"));
 
@@ -216,7 +145,7 @@ fn build_single_sprite_service_status_lines(
 
     if status != "running" {
         lines.push(format!(
-                    "hint: inspect logs with `{PRIMARY_OPERATOR_BINARY} sprite logs --sprite {sprite} --service {service_name}`"
+            "hint: inspect logs with `{PRIMARY_OPERATOR_BINARY} sprite logs --sprite {sprite} --service {service_name}`"
         ));
     }
 
@@ -235,7 +164,7 @@ fn expected_sprite_service_definitions(
                 args: vec![
                     "-n".to_string(),
                     "-u".to_string(),
-                    "zodex-publisher".to_string(),
+                    ZODEX_PUBLISHER_USER.to_string(),
                     format!("/usr/local/bin/{PUBLISHER_SERVICE_LABEL}"),
                     "--config".to_string(),
                     config_arg.clone(),
@@ -251,7 +180,7 @@ fn expected_sprite_service_definitions(
                 args: vec![
                     "-n".to_string(),
                     "-u".to_string(),
-                    "zodex-agent".to_string(),
+                    ZODEX_AGENT_USER.to_string(),
                     format!("/usr/local/bin/{SPRITE_MAIN_SERVICE_LABEL}"),
                     "--config".to_string(),
                     config_arg,
@@ -344,223 +273,4 @@ fn strip_sprite_api_prelude(raw: &str) -> String {
     }
 
     raw.to_string()
-}
-
-fn build_reader_status_lines(config: &Config) -> Vec<String> {
-    let app_id = config
-        .reader_app_id
-        .map(|id| id.to_string())
-        .unwrap_or_else(|| "<unset>".to_string());
-    let installation_id = config
-        .reader_installation_id
-        .map(|id| id.to_string())
-        .unwrap_or_else(|| "<unset>".to_string());
-    let ready = ensure_reader_ready_for_start(config).is_ok();
-
-    let mut lines = vec![
-        "service: zodex-reader".to_string(),
-        "service-mode: config-only".to_string(),
-        format!("active: {}", if ready { "ready" } else { "not-ready" }),
-        format!("reader-app-id: {app_id}"),
-        format!("reader-installation-id: {installation_id}"),
-        format!("reader-key: {}", config.reader_private_key_path),
-    ];
-
-    if config.reader_app_id.is_none() {
-        lines.push("hint: set `reader_app_id` in config".to_string());
-    }
-    if config.reader_installation_id.is_none() {
-        lines.push("hint: set `reader_installation_id` in config".to_string());
-    }
-    if !Path::new(&config.reader_private_key_path).exists() {
-        lines.push("hint: place the reader private key at the configured path".to_string());
-    }
-
-    lines
-}
-
-fn sprite_runtime_note_lines() -> Vec<String> {
-    if !Path::new("/.sprite").exists() {
-        return Vec::new();
-    }
-
-    vec![
-        "note: Sprite runtime detected; detached pid files are not authoritative across sleep/wake"
-            .to_string(),
-        "hint: use Sprite Services for lifecycle and inspect them from a machine with Sprite CLI access"
-            .to_string(),
-    ]
-}
-
-fn build_process_status_lines(
-    config: &Config,
-    public_ip: Option<IpAddr>,
-    state: Result<ProcessModeState>,
-) -> Result<Vec<String>> {
-    let state = state?;
-    let host_hint = status_host_hint(&config.bind_host, public_ip);
-    let url_hint =
-        redact_api_key_query_params(&format!("https://{host_hint}/mcp?key={}", config.api_key));
-    let health_hint = format!("https://{host_hint}/health");
-    let active = match state {
-        ProcessModeState::Running(_) => "active (running)",
-        ProcessModeState::Stale(_) => "inactive (stale pid file)",
-        ProcessModeState::Stopped => "inactive (dead)",
-    };
-    let exec_status = match state {
-        ProcessModeState::Running(pid) => format!("running pid {pid}"),
-        ProcessModeState::Stale(pid) => format!("stale pid file {pid}"),
-        ProcessModeState::Stopped => "not running".to_string(),
-    };
-
-    let mut lines = vec![
-        format!("service: {SERVICE_NAME}"),
-        "service-mode: process".to_string(),
-        format!("active: {active}"),
-        "enabled: n/a (process mode)".to_string(),
-        "unit-file: n/a (process mode)".to_string(),
-        format!("exec-main-status: {exec_status}"),
-        format!("pid-file: {}", process_pid_path(config).display()),
-        format!("log-file: {}", process_log_path(config).display()),
-        format!("run-user: {}", config.agent_user),
-        format!("agent-home: {}", config.agent_home),
-        format!("default-workdir: {}", config.default_workdir),
-        format!("listen: {}:{}", config.bind_host, config.bind_port),
-        format!("tls-mode: {}", config.tls_mode),
-        format!("tls-cert: {}", config.tls_cert_path),
-        format!("tls-key: {}", config.tls_key_path),
-        format!("url-hint: {url_hint}"),
-        format!("health-hint: {health_hint}"),
-    ];
-
-    if !matches!(state, ProcessModeState::Running(_)) {
-        lines.push(format!("hint: run `{PRIMARY_OPERATOR_BINARY} start`"));
-    }
-    if let Some(port) = config.http_bind_port {
-        lines.push(format!("http-proxy-listen: {}:{port}", config.bind_host));
-    }
-    if !tls_artifacts_exist(config) {
-        lines.push(format!(
-            "note: `{PRIMARY_OPERATOR_BINARY} start` will create TLS artifacts automatically"
-        ));
-    }
-    if matches!(state, ProcessModeState::Stale(_)) {
-        lines.push(
-            format!(
-                "hint: stale pid file detected; `{PRIMARY_OPERATOR_BINARY} restart` will cleanly recover"
-            )
-                .to_string(),
-        );
-    }
-    lines.extend(sprite_runtime_note_lines());
-
-    Ok(lines)
-}
-
-fn build_publisher_status_lines(
-    config: &Config,
-    state: Result<ProcessModeState>,
-) -> Result<Vec<String>> {
-    let state = state?;
-    let active = match state {
-        ProcessModeState::Running(_) => "active (running)",
-        ProcessModeState::Stale(_) => "inactive (stale pid file)",
-        ProcessModeState::Stopped => "inactive (dead)",
-    };
-    let exec_status = match state {
-        ProcessModeState::Running(pid) => format!("running pid {pid}"),
-        ProcessModeState::Stale(pid) => format!("stale pid file {pid}"),
-        ProcessModeState::Stopped => "not running".to_string(),
-    };
-
-    let mut lines = vec![
-        format!("service: {PUBLISHER_SERVICE_LABEL}"),
-        "service-mode: process".to_string(),
-        format!("active: {active}"),
-        format!("exec-main-status: {exec_status}"),
-        format!("pid-file: {}", publisher_process_pid_path(config).display()),
-        format!("log-file: {}", publisher_process_log_path(config).display()),
-        format!("run-user: {}", config.publisher_user),
-        format!("socket: {}", config.publisher_socket_path),
-        format!(
-            "publisher-app-id: {}",
-            config
-                .publisher_app_id
-                .map(|id| id.to_string())
-                .unwrap_or_else(|| "<unset>".to_string())
-        ),
-        format!("publisher-key: {}", config.publisher_private_key_path),
-        format!("allowed-repos: {}", config.publisher_targets.len()),
-        format!(
-            "allowed-installation-accounts: {}",
-            config.publisher_installations.len()
-        ),
-    ];
-
-    if !matches!(state, ProcessModeState::Running(_)) {
-        lines.push(format!("hint: run `{PRIMARY_OPERATOR_BINARY} start`"));
-    }
-    if config.publisher_app_id.is_none() {
-        lines.push("hint: set `publisher_app_id` in config".to_string());
-    }
-    if !Path::new(&config.publisher_private_key_path).exists() {
-        lines.push("hint: place the publisher private key at the configured path".to_string());
-    }
-    if config.publisher_targets.is_empty() && config.publisher_installations.is_empty() {
-        lines.push(
-            "hint: add at least one `publisher_targets` or `publisher_installations` entry to config"
-                .to_string(),
-        );
-    }
-    lines.extend(sprite_runtime_note_lines());
-
-    Ok(lines)
-}
-
-fn render_systemd_unit(daemon_path: &Path, config_path: &Path) -> String {
-    let daemon_arg = quote_unit_arg(daemon_path);
-    let config_arg = quote_unit_arg(config_path);
-
-    format!(
-        "[Unit]
-Description=zodex daemon
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-ExecStart={daemon_arg} --config {config_arg}
-Restart=always
-RestartSec=2
-NoNewPrivileges=true
-Environment=RUST_LOG=zodex=info,zodexd=info
-
-[Install]
-WantedBy=multi-user.target
-"
-    )
-}
-
-fn quote_unit_arg(path: &Path) -> String {
-    let escaped = path
-        .display()
-        .to_string()
-        .replace('\\', r"\\")
-        .replace('"', r#"\""#);
-    format!("\"{escaped}\"")
-}
-
-fn write_if_changed(path: &Path, content: &str) -> Result<bool> {
-    if let Ok(existing) = fs::read_to_string(path)
-        && existing == content
-    {
-        return Ok(false);
-    }
-
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create directory {}", parent.display()))?;
-    }
-    fs::write(path, content).with_context(|| format!("failed to write {}", path.display()))?;
-    Ok(true)
 }

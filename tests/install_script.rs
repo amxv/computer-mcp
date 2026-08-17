@@ -43,17 +43,14 @@ fn install_script_has_expected_structure() {
         "ZODEX_GIT_USER_EMAIL",
         "ZODEX_READER_KEY_DIR",
         "ZODEX_SERVICE_PORT",
-        "ZODEX_PUBLIC_HOST",
         "ensure_service_accounts()",
         "detect_platform()",
-        "resolved_public_host()",
         "install_runtime_prerequisites()",
         "install_build_prerequisites()",
         "resolve_release_asset_url()",
         "server_archive_name=\"zodex-${TARGET_TRIPLE}.tar.gz\"",
         "install_binaries_from_release()",
         "install_binaries_from_source()",
-        "run_cli_install()",
         "configure_agent_git_identity()",
         "configure_agent_git_reader_helper()",
         "configure_agent_build_environment()",
@@ -78,28 +75,22 @@ fn install_script_has_expected_structure() {
         "git-credential-helper",
         "git-remote-zodex",
         "zodex-agent",
-        "print_next_steps()",
+        "print_runtime_summary()",
         "apt-get install -y --no-install-recommends",
         "build-essential pkg-config libssl-dev git",
         "zodex-prd",
         "service_port = ${ZODEX_SERVICE_PORT}",
         "agent_home = \"${ZODEX_AGENT_HOME}\"",
         "default_workdir = \"${ZODEX_DEFAULT_WORKDIR}\"",
-        "The commands below assume the default config path",
         "Most installs can keep the built-in defaults.",
         "reader_app_id",
         "reader_installation_id",
         "publisher_client_id",
-        "enable Device Flow on the push-grant GitHub App",
         "# id = \"amxv/zodex\"",
         "# repo = \"amxv/zodex\"",
-        "rotate the installer-generated API key",
-        "curl \"https://${public_host}/health\"",
-        "MCP URL shape: https://${public_host}/mcp?key=<redacted>",
         "credential.https://github.com.useHttpPath true",
         "url.\"zodex::https://github.com/\".pushInsteadOf",
-        "zodex-agent github request-push --repo <owner/repo>",
-        "zodex-agent github revoke-push --repo <owner/repo>",
+        "Runtime lifecycle is managed from the operator machine with zodex sprite commands.",
     ];
 
     for snippet in required_snippets {
@@ -114,6 +105,111 @@ fn install_script_has_expected_structure() {
             .all(|line| !line.trim_start().starts_with("rm -")),
         "installer cleanup must bypass user PATH wrappers with /bin/rm"
     );
+    for removed in [
+        "ZODEX_INSTALL_OPERATOR_CLI",
+        "ZODEX_PUBLIC_HOST",
+        "run_cli_install()",
+        "resolved_public_host()",
+        "print_next_steps()",
+        "certbot",
+        "tls_cert_path",
+        "tls_key_path",
+    ] {
+        assert!(
+            !script.contains(removed),
+            "legacy runtime installer surface still present: {removed}"
+        );
+    }
+}
+
+#[test]
+fn installer_auto_mode_is_always_operator_and_runtime_is_explicit() {
+    let command = r#"
+eval "$(sed -n '/^resolved_install_mode()/,/^}/p' "${INSTALL_SCRIPT}")"
+ZODEX_INSTALL_MODE=auto
+printf 'auto=%s\n' "$(resolved_install_mode)"
+ZODEX_INSTALL_MODE=operator
+printf 'operator=%s\n' "$(resolved_install_mode)"
+ZODEX_INSTALL_MODE=runtime
+printf 'runtime=%s\n' "$(resolved_install_mode)"
+"#;
+    let output = Command::new("bash")
+        .arg("-c")
+        .arg(command)
+        .env("INSTALL_SCRIPT", install_script_path())
+        .output()
+        .expect("resolve installer modes");
+
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "auto=operator\noperator=operator\nruntime=runtime\n"
+    );
+}
+
+#[test]
+fn runtime_binary_install_never_installs_operator_cli() {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock before Unix epoch")
+        .as_nanos();
+    let test_dir = std::env::temp_dir().join(format!(
+        "zodex-runtime-install-test-{}-{unique}",
+        std::process::id()
+    ));
+    let source_dir = test_dir.join("source");
+    let install_dir = test_dir.join("install");
+    std::fs::create_dir_all(&source_dir).expect("create source directory");
+    std::fs::create_dir_all(&install_dir).expect("create install directory");
+
+    for binary in [
+        "zodex",
+        "zodex-agent",
+        "git-remote-zodex",
+        "zodexd",
+        "zodex-prd",
+    ] {
+        let path = source_dir.join(binary);
+        std::fs::write(&path, "#!/bin/sh\nexit 0\n").expect("write fixture binary");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(&path)
+                .expect("read fixture metadata")
+                .permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&path, permissions).expect("make fixture executable");
+        }
+    }
+    std::fs::write(install_dir.join("zodex"), "stale operator\n")
+        .expect("write stale operator binary");
+
+    let command = r#"
+eval "$(sed -n '/^install_binaries_from_dir()/,/^}/p' "${INSTALL_SCRIPT}")"
+die() { printf '%s\n' "$*" >&2; exit 1; }
+install_binaries_from_dir "${SOURCE_DIR}"
+"#;
+    let output = Command::new("bash")
+        .arg("-c")
+        .arg(command)
+        .env("INSTALL_SCRIPT", install_script_path())
+        .env("SOURCE_DIR", &source_dir)
+        .env("ZODEX_INSTALL_DIR", &install_dir)
+        .output()
+        .expect("install runtime fixture binaries");
+    if !output.status.success() {
+        panic!(
+            "runtime fixture install failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    assert!(!install_dir.join("zodex").exists());
+    for binary in ["zodex-agent", "git-remote-zodex", "zodexd", "zodex-prd"] {
+        assert!(install_dir.join(binary).is_file(), "missing {binary}");
+    }
+
+    std::fs::remove_dir_all(&test_dir).expect("remove runtime install test directory");
 }
 
 #[test]
@@ -393,7 +489,6 @@ fn operator_release_dir_install_proves_local_needs_only_zodex_binary() {
     let output = Command::new("bash")
         .arg(install_script_path())
         .env("ZODEX_ASSET_URL", &asset_url)
-        .env("ZODEX_INSTALL_MODE", "operator")
         .env("ZODEX_INSTALL_DIR", &install_dir)
         .output()
         .expect("run operator release-dir install");

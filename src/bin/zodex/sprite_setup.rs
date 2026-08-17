@@ -387,7 +387,6 @@ TMP_INSTALLER="$(mktemp)"
 curl -fsSL https://zodex.ashray.xyz/install.sh -o "$TMP_INSTALLER"
 sudo env \
   ZODEX_INSTALL_MODE=runtime \
-  ZODEX_INSTALL_OPERATOR_CLI=0 \
   ZODEX_CONFIG_PATH="$CFG" \
   ZODEX_SERVICE_PORT=8080 \
   ZODEX_AGENT_HOME=/home/zodex-agent \
@@ -540,7 +539,7 @@ sudo env \
   ZODEX_REPO="$REPO_FOR_INSTALL" \
   ZODEX_VERSION="$VERSION" \
   ZODEX_SOURCE_REF="$VERSION" \
-  ZODEX_INSTALL_OPERATOR_CLI=0 \
+  ZODEX_INSTALL_MODE=runtime \
   ZODEX_CONFIG_PATH="$CFG" \
   bash "$TMP_INSTALLER"
 rm -f "$TMP_INSTALLER"

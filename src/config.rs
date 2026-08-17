@@ -16,14 +16,7 @@ pub const DEFAULT_PUBLISHER_MAX_BUNDLE_BYTES: usize = 128 * 1024 * 1024;
 pub struct Config {
     pub bind_host: String,
     pub service_port: u16,
-    // Legacy generic-server fields retained temporarily for hidden root migration aliases.
-    // The Sprite daemon ignores them and serves plain HTTP on `service_port`.
-    pub bind_port: u16,
-    pub http_bind_port: Option<u16>,
     pub api_key: String,
-    pub tls_mode: String,
-    pub tls_cert_path: String,
-    pub tls_key_path: String,
     pub max_sessions: usize,
     pub default_exec_timeout_ms: u64,
     pub max_exec_timeout_ms: u64,
@@ -93,12 +86,7 @@ impl Default for Config {
         Self {
             bind_host: "0.0.0.0".to_string(),
             service_port: 8080,
-            bind_port: 443,
-            http_bind_port: None,
             api_key: "change-me".to_string(),
-            tls_mode: "auto".to_string(),
-            tls_cert_path: "/var/lib/zodex/tls/cert.pem".to_string(),
-            tls_key_path: "/var/lib/zodex/tls/key.pem".to_string(),
             max_sessions: 64,
             default_exec_timeout_ms: 7_200_000,
             max_exec_timeout_ms: 7_200_000,
@@ -192,7 +180,6 @@ mod tests {
         let cfg = Config::default();
 
         assert_eq!(cfg.service_port, 8080);
-        assert_eq!(cfg.http_bind_port, None);
         assert_eq!(cfg.reader_app_id, None);
         assert_eq!(cfg.reader_installation_id, None);
         assert!(
@@ -240,7 +227,6 @@ max_output_chars = 200000
         assert_eq!(parsed.reader_app_id, None);
         assert_eq!(parsed.reader_installation_id, None);
         assert_eq!(parsed.service_port, 8080);
-        assert_eq!(parsed.http_bind_port, Some(8080));
         assert_eq!(
             parsed.reader_private_key_path,
             "/etc/zodex/reader/private-key.pem"
@@ -258,7 +244,7 @@ max_output_chars = 200000
     }
 
     #[test]
-    fn legacy_tls_dual_listener_config_defaults_sprite_service_port_to_8080() {
+    fn legacy_tls_dual_listener_fields_are_ignored_while_service_port_defaults_to_8080() {
         let parsed: Config = toml::from_str(
             r#"
 bind_host = "0.0.0.0"
@@ -273,9 +259,7 @@ tls_key_path = "/var/lib/zodex/tls/key.pem"
         .expect("legacy TLS config should remain loadable during migration");
 
         assert_eq!(parsed.service_port, 8080);
-        assert_eq!(parsed.bind_port, 8443);
-        assert_eq!(parsed.http_bind_port, Some(8080));
-        assert_eq!(parsed.tls_mode, "self_signed");
+        assert_eq!(parsed.bind_host, "0.0.0.0");
     }
 
     #[test]

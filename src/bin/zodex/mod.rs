@@ -1,4 +1,6 @@
 include!("prelude.rs");
+include!("command.rs");
+include!("operator_upgrade.rs");
 include!("local.rs");
 include!("dispatch.rs");
 include!("credentials.rs");
@@ -11,10 +13,7 @@ include!("sprite_health.rs");
 include!("sprite_setup.rs");
 include!("github_device.rs");
 include!("github_mode.rs");
-include!("lifecycle.rs");
-include!("process.rs");
 include!("status.rs");
-include!("system_tls.rs");
 
 #[cfg(test)]
 mod tests {

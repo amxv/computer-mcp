@@ -69,7 +69,7 @@ fn portable_contract_script_pins_modern_legacy_workdir_and_local_operator_proofs
 }
 
 #[test]
-fn release_keeps_asset_names_and_smokes_local_from_operator_only_macos_install() {
+fn release_keeps_asset_names_and_smokes_local_from_default_operator_install() {
     let workflow = read(".github/workflows/release.yml");
 
     for target in [
@@ -86,7 +86,6 @@ fn release_keeps_asset_names_and_smokes_local_from_operator_only_macos_install()
     for required in [
         "archive_name: zodex-aarch64-apple-darwin",
         "Smoke test packaged macOS Local operator",
-        "ZODEX_INSTALL_MODE=operator",
         "ZODEX_ASSET_URL=\"file://${GITHUB_WORKSPACE}/dist/${{ matrix.archive_name }}.tar.gz\"",
         "test ! -e \"$install_dir/zodexd\"",
         "test ! -e \"$install_dir/zodex-agent\"",
@@ -99,6 +98,10 @@ fn release_keeps_asset_names_and_smokes_local_from_operator_only_macos_install()
             "release workflow missing `{required}`"
         );
     }
+    assert!(
+        !workflow.contains("ZODEX_INSTALL_MODE=operator"),
+        "release smoke must exercise the installer's default operator path rather than force the mode"
+    );
     assert!(workflow.contains("os: macos-15"));
     assert!(workflow.contains("targets: ${{ matrix.target }}"));
 }
