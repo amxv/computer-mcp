@@ -201,6 +201,20 @@ Stopping Local:
 
 Persistent configuration, history, and the managed setup survive for the next `start`.
 
+## Upgrade the operator CLI
+
+Stop Local before replacing the macOS operator binary, then upgrade to the latest release or pin a release explicitly:
+
+```bash
+zodex local stop
+zodex upgrade
+
+# Optional pinned form; the leading v is optional.
+zodex upgrade --version 0.3.4
+```
+
+The upgrade uses the same public, checksum-verified operator installer as a fresh install. Your Local configuration, Keychain credential, durable history, and Liveboard preferences are not part of the operator archive and are left in place.
+
 ## What happens on logout or reboot?
 
 Local is not an auto-start login service. A later login/reboot requires another explicit:

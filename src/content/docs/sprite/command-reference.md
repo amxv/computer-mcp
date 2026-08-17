@@ -18,6 +18,16 @@ zodex upgrade
 
 Root `upgrade` upgrades only the local operator CLI.
 
+```bash
+zodex upgrade
+zodex upgrade --version 0.3.4
+zodex upgrade --version v0.3.4
+```
+
+`latest`, `0.3.4`, and `v0.3.4`-style release selectors are accepted; numeric versions are normalized to the repository's `v...` release tags.
+
+On macOS, stop an active Local runtime with `zodex local stop` before replacing the operator binary.
+
 ## Sprite lifecycle and setup
 
 ```bash

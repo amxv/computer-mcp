@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_VERSION="0.2.0"
+SCRIPT_VERSION="0.2.1"
 
 ZODEX_VERSION="${ZODEX_VERSION:-latest}"
 ZODEX_INSTALL_MODE="${ZODEX_INSTALL_MODE:-auto}"
@@ -89,6 +89,53 @@ command_exists() {
   command -v "$1" >/dev/null 2>&1
 }
 
+normalize_release_version() {
+  local version="$1"
+  case "${version}" in
+    latest|v*)
+      printf '%s\n' "${version}"
+      ;;
+    [0-9]*)
+      printf 'v%s\n' "${version}"
+      ;;
+    *)
+      printf '%s\n' "${version}"
+      ;;
+  esac
+}
+
+download_file() {
+  local url="$1"
+  local destination="$2"
+  local attempt=1
+  local max_attempts=3
+
+  while true; do
+    /bin/rm -f "${destination}"
+    if curl \
+      --fail \
+      --location \
+      --silent \
+      --show-error \
+      --connect-timeout 15 \
+      --speed-limit 1024 \
+      --speed-time 20 \
+      --max-time 600 \
+      "${url}" \
+      -o "${destination}"
+    then
+      return 0
+    fi
+
+    if (( attempt >= max_attempts )); then
+      return 1
+    fi
+    warn "download failed (attempt ${attempt}/${max_attempts}); retrying ${url}"
+    sleep $((attempt * 2))
+    attempt=$((attempt + 1))
+  done
+}
+
 resolve_nologin_shell() {
   if [[ -x /usr/sbin/nologin ]]; then
     printf '/usr/sbin/nologin\n'
@@ -172,8 +219,7 @@ detect_operator_platform() {
     Darwin)
       case "$(uname -m)" in
         x86_64|amd64)
-          ARCH="x86_64"
-          TARGET_TRIPLE="x86_64-apple-darwin"
+          die "Zodex operator releases support Apple Silicon macOS only; Intel macOS is unsupported"
           ;;
         aarch64|arm64)
           ARCH="aarch64"
@@ -280,11 +326,24 @@ Installed:
   ${install_dir}/zodex
 
 Verify:
-  zodex --version
-
-If zodex is not found, add this to your shell profile:
-  export PATH="${install_dir}:\$PATH"
+  ${install_dir}/zodex --version
 EOF
+
+  case ":${PATH}:" in
+    *":${install_dir}:"*)
+      ;;
+    *)
+      cat <<EOF
+
+${install_dir} is not currently on PATH.
+
+For this shell:
+  export PATH="${install_dir}:\$PATH"
+
+Add the same line to your shell profile to keep it available in new terminals.
+EOF
+      ;;
+  esac
 }
 
 install_operator_from_release() {
@@ -294,8 +353,10 @@ install_operator_from_release() {
 
   local archive="${TMP_DIR}/release.tar.gz"
   local checksum="${TMP_DIR}/release.tar.gz.sha256"
-  curl -fL "${asset_url}" -o "${archive}"
-  curl -fL "$(resolve_release_checksum_url "${asset_url}")" -o "${checksum}"
+  download_file "${asset_url}" "${archive}" \
+    || die "failed to download release artifact after retries: ${asset_url}"
+  download_file "$(resolve_release_checksum_url "${asset_url}")" "${checksum}" \
+    || die "failed to download release checksum after retries"
   sha256_verify "${checksum}" "${archive}"
   tar -xzf "${archive}" -C "${TMP_DIR}"
 
@@ -389,41 +450,22 @@ install_build_prerequisites() {
   die "unsupported package manager for source builds (expected apt-get, dnf, or yum)"
 }
 
-resolve_release_api_url() {
-  if [[ "${ZODEX_VERSION}" == "latest" ]]; then
-    printf 'https://api.github.com/repos/%s/releases/latest\n' "${ZODEX_REPO}"
-  else
-    printf 'https://api.github.com/repos/%s/releases/tags/%s\n' \
-      "${ZODEX_REPO}" "${ZODEX_VERSION}"
-  fi
-}
-
-resolve_release_asset_url_by_name() {
-  local metadata="$1"
-  local archive_name="$2"
-  printf '%s' "${metadata}" \
-    | tr '\n' ' ' \
-    | sed 's/},{/},\n{/g' \
-    | grep -Eo "\"browser_download_url\"[[:space:]]*:[[:space:]]*\"[^\"]*/${archive_name}\"" \
-    | head -n1 \
-      | sed -E 's/"browser_download_url"[[:space:]]*:[[:space:]]*"([^"]+)"/\1/'
-}
-
 resolve_release_asset_url() {
   if [[ -n "${ZODEX_ASSET_URL}" ]]; then
     printf '%s\n' "${ZODEX_ASSET_URL}"
     return
   fi
 
-  local metadata
-  metadata="$(curl -fsSL "$(resolve_release_api_url)")" || return 1
-
-  local server_archive_name="zodex-${TARGET_TRIPLE}.tar.gz"
-  local asset_url=""
-  asset_url="$(resolve_release_asset_url_by_name "${metadata}" "${server_archive_name}")"
-
-  [[ -n "${asset_url}" ]] || return 1
-  printf '%s\n' "${asset_url}"
+  local archive_name="zodex-${TARGET_TRIPLE}.tar.gz"
+  local version
+  version="$(normalize_release_version "${ZODEX_VERSION}")"
+  if [[ "${version}" == "latest" ]]; then
+    printf 'https://github.com/%s/releases/latest/download/%s\n' \
+      "${ZODEX_REPO}" "${archive_name}"
+  else
+    printf 'https://github.com/%s/releases/download/%s/%s\n' \
+      "${ZODEX_REPO}" "${version}" "${archive_name}"
+  fi
 }
 
 install_binaries_from_dir() {
@@ -453,8 +495,8 @@ install_binaries_from_release() {
 
   local archive="${TMP_DIR}/release.tar.gz"
   local checksum="${TMP_DIR}/release.tar.gz.sha256"
-  curl -fL "${asset_url}" -o "${archive}"
-  curl -fL "$(resolve_release_checksum_url "${asset_url}")" -o "${checksum}"
+  download_file "${asset_url}" "${archive}" || return 1
+  download_file "$(resolve_release_checksum_url "${asset_url}")" "${checksum}" || return 1
   sha256_verify "${checksum}" "${archive}"
   tar -xzf "${archive}" -C "${TMP_DIR}"
 

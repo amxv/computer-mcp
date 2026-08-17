@@ -15,11 +15,14 @@ Zodex has two first-class execution modes. They share the same tool contract and
 
 ## Install
 
-Install the operator CLI on macOS or Linux:
+Install the operator CLI on Apple Silicon macOS or Linux (x86_64/aarch64):
 
 ```bash
-curl -fsSL https://zodex.ashray.xyz/install.sh | sh
+curl -fsSL https://zodex.ashray.xyz/install.sh | bash
+export PATH="$HOME/.local/bin:$PATH"
 ```
+
+The normal non-root install uses `~/.local/bin`; add that PATH line to your shell profile to keep it available in new terminals. An explicitly root-run install uses `/usr/local/bin` instead.
 
 Then choose a mode:
 

@@ -36,6 +36,166 @@ printf 'runtime=%s\n' "$(resolved_install_mode)"
 }
 
 #[test]
+fn operator_platform_supports_apple_silicon_macos_and_rejects_intel_macos() {
+    let script_path = install_script_path();
+    let arm64 = Command::new("bash")
+        .arg("-c")
+        .arg(
+            r#"
+eval "$(sed -n '/^detect_operator_platform()/,/^}/p' "${INSTALL_SCRIPT}")"
+log() { :; }
+die() { printf '%s\n' "$*" >&2; exit 1; }
+uname() {
+  case "$1" in
+    -s) printf 'Darwin\n' ;;
+    -m) printf 'arm64\n' ;;
+  esac
+}
+detect_operator_platform
+printf '%s\n' "${TARGET_TRIPLE}"
+"#,
+        )
+        .env("INSTALL_SCRIPT", &script_path)
+        .output()
+        .expect("detect Apple Silicon macOS operator platform");
+    assert!(arm64.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&arm64.stdout),
+        "aarch64-apple-darwin\n"
+    );
+
+    let intel = Command::new("bash")
+        .arg("-c")
+        .arg(
+            r#"
+eval "$(sed -n '/^detect_operator_platform()/,/^}/p' "${INSTALL_SCRIPT}")"
+log() { :; }
+die() { printf '%s\n' "$*" >&2; exit 1; }
+uname() {
+  case "$1" in
+    -s) printf 'Darwin\n' ;;
+    -m) printf 'x86_64\n' ;;
+  esac
+}
+detect_operator_platform
+"#,
+        )
+        .env("INSTALL_SCRIPT", &script_path)
+        .output()
+        .expect("reject Intel macOS operator platform");
+    assert!(!intel.status.success());
+    assert!(
+        String::from_utf8_lossy(&intel.stderr)
+            .contains("Apple Silicon macOS only; Intel macOS is unsupported")
+    );
+}
+
+#[test]
+fn operator_release_urls_are_deterministic_and_versions_accept_optional_v_prefix() {
+    let command = r#"
+eval "$(sed -n '/^normalize_release_version()/,/^}/p' "${INSTALL_SCRIPT}")"
+eval "$(sed -n '/^resolve_release_asset_url()/,/^}/p' "${INSTALL_SCRIPT}")"
+ZODEX_REPO=amxv/zodex
+ZODEX_ASSET_URL=
+TARGET_TRIPLE=aarch64-apple-darwin
+for version in latest 0.3.4 v0.3.4; do
+  ZODEX_VERSION="$version"
+  resolve_release_asset_url
+done
+"#;
+    let output = Command::new("bash")
+        .arg("-c")
+        .arg(command)
+        .env("INSTALL_SCRIPT", install_script_path())
+        .output()
+        .expect("resolve deterministic operator release URLs");
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        concat!(
+            "https://github.com/amxv/zodex/releases/latest/download/zodex-aarch64-apple-darwin.tar.gz\n",
+            "https://github.com/amxv/zodex/releases/download/v0.3.4/zodex-aarch64-apple-darwin.tar.gz\n",
+            "https://github.com/amxv/zodex/releases/download/v0.3.4/zodex-aarch64-apple-darwin.tar.gz\n",
+        )
+    );
+}
+
+#[test]
+fn release_downloads_retry_and_abort_stalled_transfers() {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock before Unix epoch")
+        .as_nanos();
+    let test_dir = std::env::temp_dir().join(format!(
+        "zodex-download-retry-test-{}-{unique}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&test_dir).expect("create download retry directory");
+    let count_file = test_dir.join("count");
+    let args_file = test_dir.join("args");
+    let destination = test_dir.join("archive");
+    std::fs::write(&count_file, "0\n").expect("seed download retry count");
+
+    let command = r#"
+eval "$(sed -n '/^download_file()/,/^}/p' "${INSTALL_SCRIPT}")"
+warn() { :; }
+sleep() { :; }
+curl() {
+  local count
+  count="$(cat "${COUNT_FILE}")"
+  count=$((count + 1))
+  printf '%s\n' "$count" > "${COUNT_FILE}"
+  printf '%s\n' "$*" >> "${ARGS_FILE}"
+  local destination=""
+  while (($#)); do
+    if [[ "$1" == "-o" ]]; then
+      shift
+      destination="$1"
+    fi
+    shift
+  done
+  if (( count < 3 )); then
+    return 28
+  fi
+  printf 'downloaded\n' > "$destination"
+}
+download_file 'https://example.invalid/archive' "${DESTINATION}"
+"#;
+    let output = Command::new("bash")
+        .arg("-c")
+        .arg(command)
+        .env("INSTALL_SCRIPT", install_script_path())
+        .env("COUNT_FILE", &count_file)
+        .env("ARGS_FILE", &args_file)
+        .env("DESTINATION", &destination)
+        .output()
+        .expect("exercise bounded release download retries");
+    assert!(output.status.success());
+    assert_eq!(
+        std::fs::read_to_string(&count_file).expect("read retry count"),
+        "3\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&destination).expect("read downloaded fixture"),
+        "downloaded\n"
+    );
+    let args = std::fs::read_to_string(&args_file).expect("read curl arguments");
+    for expected in [
+        "--connect-timeout 15",
+        "--speed-limit 1024",
+        "--speed-time 20",
+        "--max-time 600",
+    ] {
+        assert!(
+            args.contains(expected),
+            "missing curl guard {expected}: {args}"
+        );
+    }
+
+    std::fs::remove_dir_all(&test_dir).expect("remove download retry directory");
+}
+
+#[test]
 fn runtime_config_migration_updates_only_the_known_legacy_bundle_default() {
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -215,6 +375,27 @@ fn install_script_is_valid_bash_syntax() {
 }
 
 #[test]
+fn public_install_docs_invoke_the_bash_installer() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    for relative in [
+        "README.md",
+        "src/content/docs/local.md",
+        "src/content/docs/local/setup.md",
+        "src/content/docs/sprite.md",
+    ] {
+        let text = std::fs::read_to_string(root.join(relative)).expect("read public install docs");
+        assert!(
+            text.contains("curl -fsSL https://zodex.ashray.xyz/install.sh | bash"),
+            "{relative} should invoke the Bash installer"
+        );
+        assert!(
+            !text.contains("curl -fsSL https://zodex.ashray.xyz/install.sh | sh"),
+            "{relative} must not invoke a Bash script through generic sh"
+        );
+    }
+}
+
+#[test]
 fn operator_install_falls_back_to_user_local_bin_without_root() {
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -274,6 +455,13 @@ install_operator_binaries_from_dir "${SOURCE_DIR}"
         "operator install should fall back to {}",
         installed_binary.display()
     );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(&format!("{} --version", installed_binary.display())),
+        "installer should print an absolute verification command: {stdout}"
+    );
+    assert!(stdout.contains("is not currently on PATH"));
+    assert!(stdout.contains("export PATH="));
 
     std::fs::remove_dir_all(&test_dir).expect("remove test directory");
 }

@@ -29,7 +29,8 @@ OpenAI Platform tunnel permissions and ChatGPT developer-mode permissions are se
 ## Install the operator CLI
 
 ```bash
-curl -fsSL https://zodex.ashray.xyz/install.sh | sh
+curl -fsSL https://zodex.ashray.xyz/install.sh | bash
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
 Verify:
@@ -38,6 +39,8 @@ Verify:
 zodex --help
 zodex local --help
 ```
+
+The normal non-root install uses `~/.local/bin`; add the PATH line above to your shell profile to keep it available in new terminals. An explicitly root-run install uses `/usr/local/bin` instead.
 
 The Local runtime is part of the `zodex` operator binary. You do not install a separate `zodexd` service on the Mac.
 

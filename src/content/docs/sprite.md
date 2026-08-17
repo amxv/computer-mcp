@@ -22,7 +22,7 @@ The Worker is the supported ChatGPT front door. The raw Sprite URL is kept publi
 
 You need:
 
-- the Zodex operator CLI on macOS or Linux;
+- the Zodex operator CLI on Apple Silicon macOS or Linux (x86_64/aarch64);
 - the Sprite CLI, authenticated to the account/org that will own the Sprite;
 - two user-owned GitHub Apps for the repositories ChatGPT should access;
 - a Wrangler-capable operator environment (`wrangler`, `bunx`, or `npx`) for the Cloudflare Worker.
@@ -32,13 +32,16 @@ Most OpenAI paid plans support custom MCP servers.
 ## 1. Install the operator and Sprite CLI
 
 ```bash
-curl -fsSL https://zodex.ashray.xyz/install.sh | sh
+curl -fsSL https://zodex.ashray.xyz/install.sh | bash
+export PATH="$HOME/.local/bin:$PATH"
 curl -fsSL https://sprites.dev/install.sh | sh
 
 sprite login
 zodex --version
 sprite --version
 ```
+
+The normal non-root Zodex install uses `~/.local/bin`; add the PATH line above to your shell profile to keep it available in new terminals. An explicitly root-run Zodex install uses `/usr/local/bin` instead.
 
 Create the remote workspace:
 

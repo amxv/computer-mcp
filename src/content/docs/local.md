@@ -17,12 +17,15 @@ If you want an isolated remote Linux workspace with scoped GitHub write permissi
 ### 1. Install the Zodex operator CLI
 
 ```bash
-curl -fsSL https://zodex.ashray.xyz/install.sh | sh
+curl -fsSL https://zodex.ashray.xyz/install.sh | bash
+export PATH="$HOME/.local/bin:$PATH"
 zodex --help
 zodex local --help
 ```
 
 Local is supported on Apple Silicon macOS.
+
+The normal non-root install uses `~/.local/bin`; add the PATH line above to your shell profile to keep it available in new terminals. An explicitly root-run install uses `/usr/local/bin` instead.
 
 ### 2. Create an OpenAI Secure MCP Tunnel
 
