@@ -1,4 +1,5 @@
 import type { LiveboardPreferences, ThemePreference } from '../api/client'
+import type { RuntimeConnectionState } from '../streams/runtime'
 import { AgentsIcon } from './icons'
 
 interface ToolbarProps {
@@ -7,6 +8,8 @@ interface ToolbarProps {
   activeProcessCount: number
   saving: boolean
   error?: string
+  connectionState?: RuntimeConnectionState
+  connectionError?: string
   onOpenAgents: () => void
   onMaximumChange: (maximum: number) => void
   onThemeChange: (theme: ThemePreference) => void
@@ -15,16 +18,37 @@ interface ToolbarProps {
 }
 
 export function Toolbar(props: ToolbarProps) {
+  const connectionState = () => props.connectionState ?? 'connected'
+  const connectionLabel = () => {
+    switch (connectionState()) {
+      case 'connected':
+        return 'Connected'
+      case 'connecting':
+        return 'Connecting'
+      case 'recovering':
+        return 'Recovering'
+      case 'disconnected':
+        return 'Disconnected'
+      case 'incompatible':
+        return 'Version mismatch'
+    }
+  }
   return (
     <header class="toolbar">
       <div class="toolbar-brand-group">
         <strong class="brand">Zodex Liveboard</strong>
-        <span class="connection-detail" aria-label="Local observer connected">
-          <span class="connection-dot" aria-hidden="true" />
-          {props.currentAgentCount} {props.currentAgentCount === 1 ? 'Agent' : 'Agents'}
-          {props.activeProcessCount > 0
-            ? ` · ${props.activeProcessCount} active`
-            : ''}
+        <span
+          class="connection-detail"
+          aria-label={`Local observer ${connectionLabel().toLowerCase()}`}
+          title={props.connectionError}
+        >
+          <span
+            class={`connection-dot connection-${connectionState()}`}
+            aria-hidden="true"
+          />
+          {connectionState() === 'connected'
+            ? `${props.currentAgentCount} ${props.currentAgentCount === 1 ? 'Agent' : 'Agents'}${props.activeProcessCount > 0 ? ` · ${props.activeProcessCount} active` : ''}`
+            : connectionLabel()}
         </span>
       </div>
       <div class="toolbar-controls">

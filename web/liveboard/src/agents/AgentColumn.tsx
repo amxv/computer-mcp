@@ -1,4 +1,4 @@
-import { Show, createEffect, createSignal } from 'solid-js'
+import { Show, createEffect, createSignal, type JSX } from 'solid-js'
 
 import type { ApiAgent } from '../api/client'
 import {
@@ -29,6 +29,7 @@ interface AgentColumnProps {
   onMove: (direction: -1 | 1) => void
   onReorderPointerDown: (event: PointerEvent) => void
   onResizePointerDown?: (event: PointerEvent) => void
+  children?: JSX.Element
 }
 
 export function AgentColumn(props: AgentColumnProps) {
@@ -180,10 +181,17 @@ export function AgentColumn(props: AgentColumnProps) {
           </Show>
         </div>
       </header>
-      <div class="agent-timeline-placeholder">
-        <span class="timeline-placeholder-line" />
-        <p>Live timeline attaches in the next phase.</p>
-      </div>
+      <Show
+        when={props.children}
+        fallback={
+          <div class="agent-timeline-placeholder">
+            <span class="timeline-placeholder-line" />
+            <p>Waiting for live activity.</p>
+          </div>
+        }
+      >
+        {props.children}
+      </Show>
       <Show when={props.onResizePointerDown}>
         {(handler) => (
           <button

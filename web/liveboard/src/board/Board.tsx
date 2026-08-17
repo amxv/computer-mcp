@@ -1,10 +1,19 @@
-import { For, Show, createEffect, createMemo, createSignal, on } from 'solid-js'
+import {
+  For,
+  Show,
+  createEffect,
+  createMemo,
+  createSignal,
+  on,
+  type JSX,
+} from 'solid-js'
 
 import type {
   ApiAgent,
   LiveboardPreferences,
   LiveboardPreferencesPatch,
 } from '../api/client'
+import type { RuntimeConnectionState } from '../streams/runtime'
 import { AgentColumn } from '../agents/AgentColumn'
 import { AgentDrawer } from '../agents/AgentDrawer'
 import { Toolbar } from '../ui/Toolbar'
@@ -27,7 +36,11 @@ interface BoardProps {
   nowMs: number
   saving: boolean
   error?: string
+  connectionState?: RuntimeConnectionState
+  connectionError?: string
   onPatch: (patch: LiveboardPreferencesPatch) => void
+  onVisibleAgentsChange?: (agentIds: readonly string[]) => void
+  renderTimeline?: (agentId: string) => JSX.Element
 }
 
 export function Board(props: BoardProps) {
@@ -86,6 +99,7 @@ export function Board(props: BoardProps) {
         }
         return next
       })
+      props.onVisibleAgentsChange?.(ids)
     }),
   )
 
@@ -277,6 +291,8 @@ export function Board(props: BoardProps) {
         activeProcessCount={activeProcessCount()}
         saving={props.saving}
         error={props.error}
+        connectionState={props.connectionState}
+        connectionError={props.connectionError}
         onOpenAgents={() => setDrawerOpen(true)}
         onMaximumChange={setMaximum}
         onThemeChange={(theme) => props.onPatch({ theme })}
@@ -331,7 +347,9 @@ export function Board(props: BoardProps) {
                             ? (event) => beginResize(agentId, nextId()!, event)
                             : undefined
                         }
-                      />
+                      >
+                        {props.renderTimeline?.(agentId)}
+                      </AgentColumn>
                     )}
                   </Show>
                 )

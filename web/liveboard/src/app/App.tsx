@@ -4,6 +4,8 @@ import {
   createEffect,
   createResource,
   createSignal,
+  onCleanup,
+  onMount,
 } from 'solid-js'
 
 import {
@@ -12,19 +14,36 @@ import {
   type LiveboardPreferencesPatch,
 } from '../api/client'
 import { Board } from '../board/Board'
+import { initialVisibleAgentIds } from '../board/model'
+import { createRuntimeConnection } from '../streams/runtime'
+import { AgentTimeline } from '../timeline/AgentTimeline'
 import { applyTheme } from './bootstrap'
 import { createCoarseClock } from './clock'
 
 type Bootstrap = Awaited<ReturnType<typeof loadBootstrap>>
 
-function LiveboardWorkspace(props: { bootstrap: Bootstrap }) {
+function LiveboardWorkspace(props: {
+  bootstrap: Bootstrap
+  viewerAttachWatermarkMs: number
+}) {
   const [preferences, setPreferences] = createSignal(props.bootstrap.preferences)
   const [pendingSaves, setPendingSaves] = createSignal(0)
   const [saveError, setSaveError] = createSignal<string>()
   const now = createCoarseClock()
+  const runtime = createRuntimeConnection({
+    initialStatus: props.bootstrap.status,
+    initialAgents: props.bootstrap.agents.agents,
+    initialVisibleAgentIds: initialVisibleAgentIds(
+      props.bootstrap.agents.agents,
+      props.bootstrap.preferences,
+    ),
+    viewerAttachWatermarkMs: props.viewerAttachWatermarkMs,
+  })
   let mutationQueue: Promise<void> = Promise.resolve()
 
   createEffect(() => applyTheme(preferences().theme))
+  onMount(() => runtime.start())
+  onCleanup(() => runtime.dispose())
 
   const persistPreferences = (patch: LiveboardPreferencesPatch) => {
     setPendingSaves((count) => count + 1)
@@ -43,18 +62,25 @@ function LiveboardWorkspace(props: { bootstrap: Bootstrap }) {
   return (
     <div class="app-shell">
       <Board
-        agents={props.bootstrap.agents.agents}
+        agents={runtime.agents()}
         preferences={preferences()}
         nowMs={now()}
         saving={pendingSaves() > 0}
         error={saveError()}
+        connectionState={runtime.connectionState()}
+        connectionError={runtime.connectionError()}
         onPatch={persistPreferences}
+        onVisibleAgentsChange={runtime.setVisibleAgentIds}
+        renderTimeline={(agentId) => (
+          <AgentTimeline controller={runtime.controllerFor(agentId)} />
+        )}
       />
     </div>
   )
 }
 
 export function App() {
+  const viewerAttachWatermarkMs = Date.now()
   const [bootstrap] = createResource(loadBootstrap)
 
   return (
@@ -73,7 +99,12 @@ export function App() {
         </main>
       </Match>
       <Match when={bootstrap()}>
-        {(value) => <LiveboardWorkspace bootstrap={value()} />}
+        {(value) => (
+          <LiveboardWorkspace
+            bootstrap={value()}
+            viewerAttachWatermarkMs={viewerAttachWatermarkMs}
+          />
+        )}
       </Match>
     </Switch>
   )
