@@ -8,7 +8,7 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
-## Unreleased
+## 0.3.2 — 2026-08-17
 
 - Made `zodex local watch` open the read-only browser Liveboard by default while preserving the terminal viewer behind explicit `--tui` / TUI-only Agent filters.
 - Added a multi-Agent Liveboard with persistent UI-only aliases/order/column sizing, independent virtualized Agent timelines, bounded live command output, canonical structured file diffs, theme-aware local syntax highlighting, and lazy audit drill-down.
