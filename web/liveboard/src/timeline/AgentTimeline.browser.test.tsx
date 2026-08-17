@@ -93,6 +93,42 @@ function fileChange(id: number, agentId: string): PresentationRecord {
   }
 }
 
+function command(id: number, agentId: string): PresentationRecord {
+  return {
+    presentation_id: `command-${id}`,
+    primary_invocation_id: id,
+    raw_evidence_count: 1,
+    raw_invocation_ids: [id],
+    raw_invocation_ids_truncated: false,
+    agent_id: agentId,
+    declared_workdir: '/repo',
+    normalized_workdir: '/repo',
+    new_workdir: null,
+    started_at_ms: id * 100,
+    duration_ms: null,
+    evidence: {
+      evidence_state: 'complete',
+      capture_state: 'complete',
+      degraded: false,
+      reason: null,
+    },
+    kind: 'command',
+    command: `cargo test -p fixture-${agentId}`,
+    status: 'running',
+    effective_cwd: '/repo',
+    exit_code: null,
+    termination_reason: null,
+    output: null,
+    output_truncated: false,
+    polls: {
+      count: 40,
+      final_status: 'running',
+      caller_agent_ids: [agentId],
+      cross_agent: false,
+    },
+  }
+}
+
 class CountingHighlighter implements DiffHighlighter {
   readonly calls: DiffHighlightInput[] = []
   isReady = () => true
@@ -109,12 +145,29 @@ class CountingHighlighter implements DiffHighlighter {
 }
 
 const outputLoaders = {
-  loadOutputMetadata: async () => {
-    throw new Error('output metadata not expected in timeline geometry test')
-  },
-  loadDisplayOutputPage: async () => {
-    throw new Error('output page not expected in timeline geometry test')
-  },
+  loadOutputMetadata: async (invocationId: number) => ({
+    schema_version: 1,
+    runtime_id: 'runtime-browser',
+    invocation_id: invocationId,
+    output: {
+      available: false,
+      chunk_count: 0,
+      size_bytes: 0,
+      capture_state: 'complete',
+      capture_reason: null,
+      first_cursor: null,
+      last_cursor: null,
+    },
+  }),
+  loadDisplayOutputPage: async (invocationId: number) => ({
+    schema_version: 1,
+    runtime_id: 'runtime-browser',
+    invocation_id: invocationId,
+    view: 'display' as const,
+    chunks: [],
+    next_cursor: null,
+    display_state: 'available' as const,
+  }),
 }
 
 function distanceFromEnd(element: HTMLElement) {
@@ -291,6 +344,160 @@ describe('independent virtualized Agent timeline', () => {
     await vi.waitFor(() => expect(controllerA.unseenCount()).toBe(1))
     await vi.waitFor(() => expect(distanceFromEnd(scrollB)).toBeLessThanOrEqual(3))
     expect(controllerB.unseenCount()).toBe(0)
+  })
+
+  it('keeps four simultaneous collapsed PTY streams bounded without output DOM work', async () => {
+    const agentIds = ['a111', 'b222', 'c333', 'd444'] as const
+    const controllers = agentIds.map((agentId, index) => {
+      const controller = createAgentStreamController({
+        agentId,
+        attachWatermarkMs: 10_000,
+        loadHistoryPage: async () => page([]),
+        ...outputLoaders,
+      })
+      controller.upsert(command(300 + index, agentId), false)
+      return controller
+    })
+    const container = document.createElement('div')
+    container.style.display = 'flex'
+    container.style.width = '1360px'
+    container.style.height = '360px'
+    document.body.append(container)
+    containers.push(container)
+    disposers.push(
+      render(
+        () => (
+          <>
+            {controllers.map((controller) => (
+              <div style={{ width: '340px', height: '360px' }}>
+                <AgentTimeline controller={controller} />
+              </div>
+            ))}
+          </>
+        ),
+        container,
+      ),
+    )
+
+    await vi.waitFor(() =>
+      expect(container.querySelectorAll('.command-card')).toHaveLength(4),
+    )
+    let timelineMutations = 0
+    const observer = new MutationObserver((records) => {
+      timelineMutations += records.length
+    })
+    observer.observe(container, { childList: true, characterData: true, subtree: true })
+
+    for (let sequence = 1; sequence <= 2_000; sequence += 1) {
+      for (let index = 0; index < controllers.length; index += 1) {
+        controllers[index]!.appendLiveOutput({
+          presentationId: `command-${300 + index}`,
+          invocationId: 300 + index,
+          sequence,
+          text: `${sequence}\n`,
+          displayState: 'available',
+        })
+      }
+    }
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+    observer.disconnect()
+
+    expect(container.querySelector('[aria-label="Command output"]')).toBeNull()
+    expect(timelineMutations).toBe(0)
+    for (let index = 0; index < controllers.length; index += 1) {
+      const controller = controllers[index]!
+      expect(controller.lastLiveOutputSequence(`command-${300 + index}`)).toBe(2_000)
+      expect(
+        controller.outputState(`command-${300 + index}`, 300 + index).materialize().length,
+      ).toBeLessThan(96 * 1024)
+    }
+  })
+
+  it('keeps one Agent PTY firehose isolated from three unrelated visible columns', async () => {
+    const agentIds = ['a111', 'b222', 'c333', 'd444'] as const
+    const controllers = agentIds.map((agentId, index) => {
+      const controller = createAgentStreamController({
+        agentId,
+        attachWatermarkMs: 10_000,
+        loadHistoryPage: async () => page([]),
+        ...outputLoaders,
+      })
+      controller.upsert(command(200 + index, agentId), false)
+      return controller
+    })
+    const activeController = controllers[0]!
+    const container = document.createElement('div')
+    container.style.display = 'flex'
+    container.style.width = '1360px'
+    container.style.height = '360px'
+    document.body.append(container)
+    containers.push(container)
+    disposers.push(
+      render(
+        () => (
+          <>
+            {controllers.map((controller) => (
+              <div style={{ width: '340px', height: '360px' }}>
+                <AgentTimeline controller={controller} />
+              </div>
+            ))}
+          </>
+        ),
+        container,
+      ),
+    )
+
+    await vi.waitFor(() =>
+      expect(container.querySelectorAll('.command-card')).toHaveLength(4),
+    )
+    activeController.toggleCommandExpansion('command-200')
+    await vi.waitFor(() =>
+      expect(
+        container.querySelector('[data-agent-timeline="a111"] [aria-label="Command output"]'),
+      ).not.toBeNull(),
+    )
+
+    const unrelatedMutationCounts = new Map<string, number>()
+    const observers = agentIds.slice(1).map((agentId) => {
+      const timeline = container.querySelector<HTMLElement>(
+        `[data-agent-timeline="${agentId}"]`,
+      )!
+      unrelatedMutationCounts.set(agentId, 0)
+      const observer = new MutationObserver((records) => {
+        unrelatedMutationCounts.set(
+          agentId,
+          (unrelatedMutationCounts.get(agentId) ?? 0) + records.length,
+        )
+      })
+      observer.observe(timeline, { childList: true, characterData: true, subtree: true })
+      return observer
+    })
+
+    const output = container.querySelector<HTMLPreElement>(
+      '[data-agent-timeline="a111"] [aria-label="Command output"]',
+    )!
+    let outputMutations = 0
+    const outputObserver = new MutationObserver((records) => {
+      outputMutations += records.length
+    })
+    outputObserver.observe(output, { childList: true, characterData: true, subtree: true })
+
+    for (let sequence = 1; sequence <= 2_000; sequence += 1) {
+      activeController.appendLiveOutput({
+        presentationId: 'command-200',
+        invocationId: 200,
+        sequence,
+        text: `${sequence}\n`,
+        displayState: 'available',
+      })
+    }
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+
+    outputObserver.disconnect()
+    for (const observer of observers) observer.disconnect()
+    expect(output.textContent).toContain('2000\n')
+    expect(outputMutations).toBeLessThanOrEqual(2)
+    expect([...unrelatedMutationCounts.values()]).toEqual([0, 0, 0])
   })
 
   it('highlights only expanded file diffs that the Agent virtualizer actually mounts', async () => {
