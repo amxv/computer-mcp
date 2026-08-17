@@ -68,6 +68,10 @@ fn validate_sprite_service_operation_stream(
     action: SpriteServiceAction,
     raw: &str,
 ) -> Result<()> {
+    if action == SpriteServiceAction::Stop && raw.trim() == "service is not running" {
+        return Ok(());
+    }
+
     let events = parse_sprite_service_event_values(raw)?;
     let mut terminal_type = None;
 

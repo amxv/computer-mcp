@@ -251,6 +251,23 @@
         )
         .expect_err("missing terminal complete must fail");
         assert!(incomplete.to_string().contains("terminal `complete`"));
+
+        validate_sprite_service_operation_stream(
+            SPRITE_MAIN_SERVICE_LABEL,
+            SpriteServiceAction::Stop,
+            "service is not running\n",
+        )
+        .expect("stopping an already-stopped service should be idempotent");
+
+        let start_plaintext = validate_sprite_service_operation_stream(
+            SPRITE_MAIN_SERVICE_LABEL,
+            SpriteServiceAction::Start,
+            "service is not running\n",
+        )
+        .expect_err("plain-text not-running response is only valid for stop");
+        assert!(start_plaintext
+            .to_string()
+            .contains("failed to parse Sprite Service NDJSON event"));
     }
 
     #[test]
