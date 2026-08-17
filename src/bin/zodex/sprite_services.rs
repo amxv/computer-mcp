@@ -19,6 +19,172 @@ fn sprite_service_delete_order() -> [&'static str; 2] {
     [SPRITE_MAIN_SERVICE_LABEL, PUBLISHER_SERVICE_LABEL]
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SpriteServiceAction {
+    Start,
+    Stop,
+    Restart,
+}
+
+impl SpriteServiceAction {
+    fn endpoint_suffix(self) -> &'static str {
+        match self {
+            Self::Start => "start",
+            Self::Stop => "stop",
+            Self::Restart => "restart",
+        }
+    }
+}
+
+fn sprite_service_post_args() -> Vec<String> {
+    vec!["-sS".to_string(), "-X".to_string(), "POST".to_string()]
+}
+
+fn parse_sprite_service_event_values(raw: &str) -> Result<Vec<serde_json::Value>> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        bail!("Sprite Service operation returned an empty event stream");
+    }
+
+    if trimmed.starts_with('[') {
+        return serde_json::from_str(trimmed)
+            .context("failed to parse Sprite Service event stream JSON array");
+    }
+
+    trimmed
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| !line.trim().is_empty())
+        .map(|(index, line)| {
+            serde_json::from_str(line).with_context(|| {
+                format!("failed to parse Sprite Service NDJSON event at line {}", index + 1)
+            })
+        })
+        .collect()
+}
+
+fn validate_sprite_service_operation_stream(
+    service_name: &str,
+    action: SpriteServiceAction,
+    raw: &str,
+) -> Result<()> {
+    let events = parse_sprite_service_event_values(raw)?;
+    let mut terminal_type = None;
+
+    for event in &events {
+        let event_type = event
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| anyhow!("Sprite Service event is missing a string `type` field"))?;
+        terminal_type = Some(event_type);
+
+        if event_type == "error" {
+            let detail = event
+                .get("data")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("provider returned an unspecified service error");
+            bail!(
+                "Sprite Service {service_name} {} failed: {detail}",
+                action.endpoint_suffix()
+            );
+        }
+    }
+
+    if terminal_type != Some("complete") {
+        bail!(
+            "Sprite Service {service_name} {} did not end with a terminal `complete` event",
+            action.endpoint_suffix()
+        );
+    }
+
+    Ok(())
+}
+
+fn parse_sprite_services_response(raw: &str) -> Result<Vec<SpriteServiceStatus>> {
+    serde_json::from_str(raw).context("failed to parse Sprite Services response")
+}
+
+fn ensure_sprite_services_running(
+    services: &[SpriteServiceStatus],
+    expected_running: &[&str],
+) -> Result<()> {
+    for service_name in expected_running {
+        let service = services
+            .iter()
+            .find(|service| service.name == *service_name)
+            .ok_or_else(|| anyhow!("Sprite Service {service_name} is missing after restart"))?;
+        let status = service
+            .state
+            .as_ref()
+            .and_then(|state| state.status.as_deref())
+            .unwrap_or("unknown");
+        if status != "running" {
+            bail!("Sprite Service {service_name} is {status} after restart, expected running");
+        }
+    }
+    Ok(())
+}
+
+fn run_sprite_service_action_with_api<F>(
+    api: &mut F,
+    service_name: &str,
+    action: SpriteServiceAction,
+) -> Result<()>
+where
+    F: FnMut(&str, &[String]) -> Result<String>,
+{
+    let path = format!(
+        "/services/{service_name}/{}",
+        action.endpoint_suffix()
+    );
+    let raw = api(&path, &sprite_service_post_args())?;
+    validate_sprite_service_operation_stream(service_name, action, &raw)
+}
+
+fn restart_sprite_service_stack_with<F>(mut api: F) -> Result<()>
+where
+    F: FnMut(&str, &[String]) -> Result<String>,
+{
+    // Stop the dependent admission path before disrupting the publisher dependency.
+    run_sprite_service_action_with_api(
+        &mut api,
+        SPRITE_MAIN_SERVICE_LABEL,
+        SpriteServiceAction::Stop,
+    )?;
+
+    run_sprite_service_action_with_api(
+        &mut api,
+        PUBLISHER_SERVICE_LABEL,
+        SpriteServiceAction::Restart,
+    )?;
+    let services = parse_sprite_services_response(&api(
+        "/services",
+        &["-sS".to_string()],
+    )?)?;
+    ensure_sprite_services_running(&services, &[PUBLISHER_SERVICE_LABEL])?;
+
+    run_sprite_service_action_with_api(
+        &mut api,
+        SPRITE_MAIN_SERVICE_LABEL,
+        SpriteServiceAction::Start,
+    )?;
+    let services = parse_sprite_services_response(&api(
+        "/services",
+        &["-sS".to_string()],
+    )?)?;
+    ensure_sprite_services_running(
+        &services,
+        &[PUBLISHER_SERVICE_LABEL, SPRITE_MAIN_SERVICE_LABEL],
+    )?;
+    Ok(())
+}
+
+fn restart_sprite_services(sprite: &str, org: Option<&str>) -> Result<()> {
+    restart_sprite_service_stack_with(|path, args| run_sprite_api(sprite, org, path, args))?;
+    println!("sprite services restarted for {sprite}");
+    Ok(())
+}
+
 fn local_sprite_health_probe_script() -> &'static str {
     r#"set -euo pipefail
 for attempt in $(seq 1 20); do

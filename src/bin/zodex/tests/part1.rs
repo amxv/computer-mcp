@@ -1,7 +1,8 @@
     use super::{
-        DEFAULT_LOG_LINES, GithubYoloAgentGitStatus, OperatorSpriteRecord, OperatorSpriteRegistry,
-        PUBLISHER_SERVICE_LABEL, ProcessModeState, PushGrantRecord, SERVICE_NAME,
-        SPRITE_MAIN_SERVICE_LABEL, ServiceManager, SpriteServiceState, SpriteServiceStatus,
+        Commands, DEFAULT_LOG_LINES, GithubYoloAgentGitStatus, OperatorSpriteRecord,
+        OperatorSpriteRegistry, PUBLISHER_SERVICE_LABEL, ProcessModeState, ProxyCommand,
+        PushGrantRecord, SERVICE_NAME, SPRITE_MAIN_SERVICE_LABEL, ServiceManager, SpriteCommand,
+        SpriteGithubCommand, SpriteServiceAction, SpriteServiceState, SpriteServiceStatus,
         SystemctlAction, browser_open_attempts, build_certbot_args,
         build_github_yolo_agent_git_status_lines, build_github_yolo_mode_record,
         build_github_yolo_mode_record_at, build_journalctl_args, build_operator_upgrade_shell_args,
@@ -22,12 +23,14 @@
         operator_sprites_registry_path_from_home, parse_git_credential_request,
         parse_github_yolo_agent_git_status, parse_push_grant_ttl, parse_push_grants,
         parse_systemctl_show, process_log_path, process_pid_path, proxy_mcp_status_looks_healthy,
-        push_grant_expired, read_tail_lines, render_proxy_wrangler_config, render_systemd_unit,
-        resolve_publisher_client_id, resolve_remote_sprite_from_registry, select_tls_san_ip,
-        service_manager_from_pid1, shell_escape_single_quotes, sprite_service_logs_api_path,
-        sprite_service_delete_order, sprite_service_supervisor_pids_from_ps,
+        push_grant_expired, read_tail_lines, render_proxy_wrangler_config,
+        restart_sprite_service_stack_with, render_systemd_unit, resolve_publisher_client_id,
+        resolve_remote_sprite_from_registry, select_tls_san_ip, service_manager_from_pid1,
+        shell_escape_single_quotes, sprite_service_logs_api_path, sprite_service_delete_order,
+        sprite_service_supervisor_pids_from_ps,
         state_root_for_config, status_host_hint, strip_sprite_api_prelude, tls_artifacts_exist,
-        upsert_operator_sprite_record, validate_installed_sprite_release, write_if_changed,
+        upsert_operator_sprite_record, validate_installed_sprite_release,
+        validate_sprite_service_operation_stream, write_if_changed,
     };
     use crate::operator_cli::Cli;
     use clap::{CommandFactory, Parser};
@@ -55,9 +58,66 @@
             vec!["zodex", "sprite", "status"],
             vec!["zodex", "sprite", "logs", "--service", "zodexd"],
             vec!["zodex", "sprite", "health"],
+            vec!["zodex", "sprite", "restart"],
+            vec!["zodex", "sprite", "proxy", "inspect"],
+            vec!["zodex", "sprite", "github", "status"],
         ] {
             Cli::try_parse_from(args).expect("safe sprite operation should parse without --sprite");
         }
+    }
+
+    #[test]
+    fn canonical_sprite_namespaces_parse_to_shared_command_types() {
+        let proxy = Cli::try_parse_from([
+            "zodex",
+            "sprite",
+            "proxy",
+            "deploy",
+            "--sprite",
+            "dev",
+            "--skip-verify-origin",
+        ])
+        .expect("nested Sprite proxy syntax should parse");
+        assert!(matches!(
+            proxy.command,
+            Commands::Sprite {
+                command: SpriteCommand::Proxy {
+                    command: ProxyCommand::Deploy {
+                        sprite: Some(ref sprite),
+                        skip_verify_origin: true,
+                        ..
+                    }
+                }
+            } if sprite == "dev"
+        ));
+
+        let github = Cli::try_parse_from([
+            "zodex",
+            "sprite",
+            "github",
+            "yolo",
+            "--sprite",
+            "dev",
+            "--repo",
+            "amxv/zodex",
+            "--ttl",
+            "45m",
+        ])
+        .expect("flattened nested Sprite GitHub syntax should parse");
+        assert!(matches!(
+            github.command,
+            Commands::Sprite {
+                command: SpriteCommand::Github {
+                    command: SpriteGithubCommand::Yolo {
+                        sprite: Some(ref sprite),
+                        ref repos,
+                        ref ttl,
+                        no_ttl: false,
+                        ..
+                    }
+                }
+            } if sprite == "dev" && repos == &["amxv/zodex"] && ttl == "45m"
+        ));
     }
 
     #[test]
@@ -467,6 +527,109 @@
             sprite_service_delete_order(),
             [SPRITE_MAIN_SERVICE_LABEL, PUBLISHER_SERVICE_LABEL]
         );
+    }
+
+    #[test]
+    fn sprite_service_operation_stream_requires_terminal_complete_and_rejects_error() {
+        validate_sprite_service_operation_stream(
+            SPRITE_MAIN_SERVICE_LABEL,
+            SpriteServiceAction::Start,
+            r#"{"type":"started"}
+{"type":"stdout","data":"ready\n"}
+{"type":"complete"}
+"#,
+        )
+        .expect("complete NDJSON stream should pass");
+
+        let error = validate_sprite_service_operation_stream(
+            PUBLISHER_SERVICE_LABEL,
+            SpriteServiceAction::Restart,
+            r#"{"type":"stopping"}
+{"type":"error","data":"publisher failed"}
+{"type":"complete"}
+"#,
+        )
+        .expect_err("streamed error must fail even if complete follows");
+        assert!(error.to_string().contains("publisher failed"));
+
+        let incomplete = validate_sprite_service_operation_stream(
+            SPRITE_MAIN_SERVICE_LABEL,
+            SpriteServiceAction::Stop,
+            r#"{"type":"stopping"}
+{"type":"stopped"}
+"#,
+        )
+        .expect_err("missing terminal complete must fail");
+        assert!(incomplete.to_string().contains("terminal `complete`"));
+    }
+
+    #[test]
+    fn sprite_restart_stops_dependent_restarts_publisher_then_starts_and_verifies_daemon() {
+        let publisher_running = r#"[
+            {"name":"zodex-prd","cmd":"sudo","args":[],"needs":[],"http_port":null,"state":{"status":"running"}},
+            {"name":"zodexd","cmd":"sudo","args":[],"needs":["zodex-prd"],"http_port":8080,"state":{"status":"stopped"}}
+        ]"#;
+        let all_running = r#"[
+            {"name":"zodex-prd","cmd":"sudo","args":[],"needs":[],"http_port":null,"state":{"status":"running"}},
+            {"name":"zodexd","cmd":"sudo","args":[],"needs":["zodex-prd"],"http_port":8080,"state":{"status":"running"}}
+        ]"#;
+        let mut calls = Vec::new();
+
+        restart_sprite_service_stack_with(|path, args| {
+            calls.push((path.to_string(), args.to_vec()));
+            match calls.len() {
+                1 => Ok("{\"type\":\"stopping\"}\n{\"type\":\"stopped\"}\n{\"type\":\"complete\"}\n".to_string()),
+                2 => Ok("{\"type\":\"stopping\"}\n{\"type\":\"started\"}\n{\"type\":\"complete\"}\n".to_string()),
+                3 => Ok(publisher_running.to_string()),
+                4 => Ok("{\"type\":\"started\"}\n{\"type\":\"complete\"}\n".to_string()),
+                5 => Ok(all_running.to_string()),
+                _ => panic!("unexpected Sprite API call {path}"),
+            }
+        })
+        .expect("dependency-safe restart should succeed");
+
+        assert_eq!(
+            calls.iter().map(|(path, _)| path.as_str()).collect::<Vec<_>>(),
+            vec![
+                "/services/zodexd/stop",
+                "/services/zodex-prd/restart",
+                "/services",
+                "/services/zodexd/start",
+                "/services",
+            ]
+        );
+        assert_eq!(calls[0].1, vec!["-sS", "-X", "POST"]);
+        assert_eq!(calls[1].1, vec!["-sS", "-X", "POST"]);
+        assert_eq!(calls[2].1, vec!["-sS"]);
+        assert_eq!(calls[3].1, vec!["-sS", "-X", "POST"]);
+        assert_eq!(calls[4].1, vec!["-sS"]);
+    }
+
+    #[test]
+    fn sprite_restart_rejects_non_running_final_service_state() {
+        let publisher_running = r#"[
+            {"name":"zodex-prd","cmd":"sudo","args":[],"needs":[],"http_port":null,"state":{"status":"running"}},
+            {"name":"zodexd","cmd":"sudo","args":[],"needs":["zodex-prd"],"http_port":8080,"state":{"status":"stopped"}}
+        ]"#;
+        let daemon_failed = r#"[
+            {"name":"zodex-prd","cmd":"sudo","args":[],"needs":[],"http_port":null,"state":{"status":"running"}},
+            {"name":"zodexd","cmd":"sudo","args":[],"needs":["zodex-prd"],"http_port":8080,"state":{"status":"failed"}}
+        ]"#;
+        let mut call = 0usize;
+        let error = restart_sprite_service_stack_with(|_, _| {
+            call += 1;
+            match call {
+                1 => Ok("{\"type\":\"stopped\"}\n{\"type\":\"complete\"}\n".to_string()),
+                2 => Ok("{\"type\":\"started\"}\n{\"type\":\"complete\"}\n".to_string()),
+                3 => Ok(publisher_running.to_string()),
+                4 => Ok("{\"type\":\"started\"}\n{\"type\":\"complete\"}\n".to_string()),
+                5 => Ok(daemon_failed.to_string()),
+                _ => unreachable!(),
+            }
+        })
+        .expect_err("final failed service must reject restart");
+
+        assert!(error.to_string().contains("zodexd is failed"));
     }
 
     #[test]

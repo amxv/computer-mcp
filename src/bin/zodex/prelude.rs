@@ -123,27 +123,38 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
+    #[command(hide = true)]
     Install,
     Upgrade {
         #[arg(long, default_value = "latest")]
         version: String,
     },
+    #[command(hide = true)]
     Start,
+    #[command(hide = true)]
     Stop,
+    #[command(hide = true)]
     Restart,
+    #[command(hide = true)]
     Status,
+    #[command(hide = true)]
     Logs,
+    #[command(hide = true)]
     SetKey {
         value: String,
     },
+    #[command(hide = true)]
     RotateKey,
+    #[command(hide = true)]
     GitCredentialHelper {
         operation: String,
     },
+    #[command(hide = true)]
     ShowUrl {
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
     },
+    #[command(hide = true)]
     Tls {
         #[command(subcommand)]
         command: TlsCommand,
@@ -153,14 +164,17 @@ enum Commands {
         #[command(subcommand)]
         command: PublisherCommand,
     },
+    /// Manage Zodex on a wake-on-demand remote Linux Sprite.
     Sprite {
         #[command(subcommand)]
         command: SpriteCommand,
     },
+    #[command(hide = true)]
     Proxy {
         #[command(subcommand)]
         command: ProxyCommand,
     },
+    #[command(hide = true)]
     Github {
         #[command(subcommand)]
         command: GithubCommand,
@@ -265,6 +279,23 @@ enum SpriteCommand {
         #[arg(long)]
         url_auth: Option<String>,
     },
+    /// Restart the managed Zodex service stack without changing Sprite power state.
+    Restart {
+        #[arg(long)]
+        sprite: Option<String>,
+        #[arg(long)]
+        org: Option<String>,
+    },
+    /// Manage the canonical Cloudflare front door for this Sprite.
+    Proxy {
+        #[command(subcommand)]
+        command: ProxyCommand,
+    },
+    /// Manage operator-side GitHub push policy for this Sprite.
+    Github {
+        #[command(subcommand)]
+        command: SpriteGithubCommand,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -346,6 +377,60 @@ enum GithubCommand {
 
 #[derive(Debug, Subcommand)]
 enum GithubModeCommand {
+    Yolo {
+        #[arg(long)]
+        sprite: Option<String>,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long = "repo")]
+        repos: Vec<String>,
+        #[arg(long, default_value = "2h")]
+        ttl: String,
+        #[arg(long, default_value_t = false)]
+        no_ttl: bool,
+    },
+    Default {
+        #[arg(long)]
+        sprite: Option<String>,
+        #[arg(long)]
+        org: Option<String>,
+    },
+    Status {
+        #[arg(long)]
+        sprite: Option<String>,
+        #[arg(long)]
+        org: Option<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum SpriteGithubCommand {
+    GrantPush {
+        #[arg(long)]
+        sprite: Option<String>,
+        #[arg(long)]
+        repo: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long)]
+        publisher_client_id: Option<String>,
+    },
+    RevokePush {
+        #[arg(long)]
+        sprite: Option<String>,
+        #[arg(long)]
+        repo: String,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long, default_value_t = false)]
+        forget_local_auth: bool,
+    },
+    ListGrants {
+        #[arg(long)]
+        sprite: Option<String>,
+        #[arg(long)]
+        org: Option<String>,
+    },
     Yolo {
         #[arg(long)]
         sprite: Option<String>,

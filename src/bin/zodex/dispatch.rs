@@ -210,37 +210,19 @@ pub(crate) async fn run() -> Result<()> {
                         url_auth.as_deref(),
                     )?;
                 }
+                SpriteCommand::Restart { sprite, org } => {
+                    let resolved = resolve_remote_sprite(sprite.as_deref(), org.as_deref())?;
+                    restart_sprite_services(&resolved.name, resolved.org.as_deref())?;
+                }
+                SpriteCommand::Proxy { command } => {
+                    handle_proxy_command(command)?;
+                }
+                SpriteCommand::Github { command } => {
+                    handle_sprite_github_command(&config, command).await?;
+                }
             }
         }
-        Commands::Proxy { command } => match command {
-            ProxyCommand::Inspect {
-                sprite,
-                org,
-                origin,
-            } => {
-                inspect_proxy_component(sprite.as_deref(), org.as_deref(), origin.as_deref())?;
-            }
-            ProxyCommand::Deploy {
-                sprite,
-                org,
-                origin,
-                skip_verify_origin,
-            } => {
-                deploy_proxy_component(
-                    sprite.as_deref(),
-                    org.as_deref(),
-                    origin.as_deref(),
-                    skip_verify_origin,
-                )?;
-            }
-            ProxyCommand::VerifyOrigin {
-                sprite,
-                org,
-                origin,
-            } => {
-                verify_proxy_origin_command(sprite.as_deref(), org.as_deref(), origin.as_deref())?;
-            }
-        },
+        Commands::Proxy { command } => handle_proxy_command(command)?,
         Commands::Github { command } => {
             let config = Config::load(Some(Path::new(&config_path)))?;
             match command {
@@ -273,13 +255,14 @@ pub(crate) async fn run() -> Result<()> {
                     org,
                     publisher_client_id,
                 } => {
-                    let resolved = resolve_remote_sprite(sprite.as_deref(), org.as_deref())?;
-                    grant_push_access(
+                    handle_sprite_github_command(
                         &config,
-                        &resolved.name,
-                        resolved.org.as_deref(),
-                        &repo,
-                        publisher_client_id.as_deref(),
+                        SpriteGithubCommand::GrantPush {
+                            sprite,
+                            repo,
+                            org,
+                            publisher_client_id,
+                        },
                     )
                     .await?;
                 }
@@ -289,15 +272,23 @@ pub(crate) async fn run() -> Result<()> {
                     org,
                     forget_local_auth,
                 } => {
-                    revoke_push_access(
-                        sprite.as_deref(),
-                        org.as_deref(),
-                        &repo,
-                        forget_local_auth,
-                    )?;
+                    handle_sprite_github_command(
+                        &config,
+                        SpriteGithubCommand::RevokePush {
+                            sprite,
+                            repo,
+                            org,
+                            forget_local_auth,
+                        },
+                    )
+                    .await?;
                 }
                 GithubCommand::ListGrants { sprite, org } => {
-                    list_push_grants(sprite.as_deref(), org.as_deref())?;
+                    handle_sprite_github_command(
+                        &config,
+                        SpriteGithubCommand::ListGrants { sprite, org },
+                    )
+                    .await?;
                 }
                 GithubCommand::Mode { command } => match command {
                     GithubModeCommand::Yolo {
@@ -307,23 +298,31 @@ pub(crate) async fn run() -> Result<()> {
                         ttl,
                         no_ttl,
                     } => {
-                        let resolved = resolve_remote_sprite(sprite.as_deref(), org.as_deref())?;
-                        let ttl = if no_ttl {
-                            None
-                        } else if ttl == "2h" {
-                            Some(Duration::from_secs(DEFAULT_YOLO_TTL_SECONDS))
-                        } else {
-                            Some(parse_push_grant_ttl(&ttl)?)
-                        };
-                        enable_github_yolo_mode(&resolved, &repos, ttl)?;
+                        handle_sprite_github_command(
+                            &config,
+                            SpriteGithubCommand::Yolo {
+                                sprite,
+                                org,
+                                repos,
+                                ttl,
+                                no_ttl,
+                            },
+                        )
+                        .await?;
                     }
                     GithubModeCommand::Default { sprite, org } => {
-                        let resolved = resolve_remote_sprite(sprite.as_deref(), org.as_deref())?;
-                        disable_github_yolo_mode(&resolved)?;
+                        handle_sprite_github_command(
+                            &config,
+                            SpriteGithubCommand::Default { sprite, org },
+                        )
+                        .await?;
                     }
                     GithubModeCommand::Status { sprite, org } => {
-                        let resolved = resolve_remote_sprite(sprite.as_deref(), org.as_deref())?;
-                        print_github_mode_status(&resolved)?;
+                        handle_sprite_github_command(
+                            &config,
+                            SpriteGithubCommand::Status { sprite, org },
+                        )
+                        .await?;
                     }
                 },
             }
@@ -334,4 +333,93 @@ pub(crate) async fn run() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn handle_proxy_command(command: ProxyCommand) -> Result<()> {
+    match command {
+        ProxyCommand::Inspect {
+            sprite,
+            org,
+            origin,
+        } => inspect_proxy_component(sprite.as_deref(), org.as_deref(), origin.as_deref()),
+        ProxyCommand::Deploy {
+            sprite,
+            org,
+            origin,
+            skip_verify_origin,
+        } => deploy_proxy_component(
+            sprite.as_deref(),
+            org.as_deref(),
+            origin.as_deref(),
+            skip_verify_origin,
+        ),
+        ProxyCommand::VerifyOrigin {
+            sprite,
+            org,
+            origin,
+        } => verify_proxy_origin_command(sprite.as_deref(), org.as_deref(), origin.as_deref()),
+    }
+}
+
+async fn handle_sprite_github_command(
+    config: &Config,
+    command: SpriteGithubCommand,
+) -> Result<()> {
+    match command {
+        SpriteGithubCommand::GrantPush {
+            sprite,
+            repo,
+            org,
+            publisher_client_id,
+        } => {
+            let resolved = resolve_remote_sprite(sprite.as_deref(), org.as_deref())?;
+            grant_push_access(
+                config,
+                &resolved.name,
+                resolved.org.as_deref(),
+                &repo,
+                publisher_client_id.as_deref(),
+            )
+            .await
+        }
+        SpriteGithubCommand::RevokePush {
+            sprite,
+            repo,
+            org,
+            forget_local_auth,
+        } => revoke_push_access(
+            sprite.as_deref(),
+            org.as_deref(),
+            &repo,
+            forget_local_auth,
+        ),
+        SpriteGithubCommand::ListGrants { sprite, org } => {
+            list_push_grants(sprite.as_deref(), org.as_deref())
+        }
+        SpriteGithubCommand::Yolo {
+            sprite,
+            org,
+            repos,
+            ttl,
+            no_ttl,
+        } => {
+            let resolved = resolve_remote_sprite(sprite.as_deref(), org.as_deref())?;
+            let ttl = if no_ttl {
+                None
+            } else if ttl == "2h" {
+                Some(Duration::from_secs(DEFAULT_YOLO_TTL_SECONDS))
+            } else {
+                Some(parse_push_grant_ttl(&ttl)?)
+            };
+            enable_github_yolo_mode(&resolved, &repos, ttl)
+        }
+        SpriteGithubCommand::Default { sprite, org } => {
+            let resolved = resolve_remote_sprite(sprite.as_deref(), org.as_deref())?;
+            disable_github_yolo_mode(&resolved)
+        }
+        SpriteGithubCommand::Status { sprite, org } => {
+            let resolved = resolve_remote_sprite(sprite.as_deref(), org.as_deref())?;
+            print_github_mode_status(&resolved)
+        }
+    }
 }

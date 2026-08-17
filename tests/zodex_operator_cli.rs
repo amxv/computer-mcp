@@ -11,6 +11,109 @@ use zodex::invocation::{
 use zodex::local::{LocalHistoryRuntime, LocalHistoryRuntimeConfig, PRESENTATION_SCHEMA_VERSION};
 
 #[test]
+fn zodex_root_help_is_mode_first_while_legacy_aliases_remain_invokable() {
+    let output = Command::new(env!("CARGO_BIN_EXE_zodex"))
+        .arg("--help")
+        .output()
+        .expect("run zodex --help");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("local"));
+    assert!(stdout.contains("sprite"));
+    assert!(stdout.contains("upgrade"));
+    for hidden in [
+        "install", "start", "stop", "proxy", "github", "tls", "set-key",
+    ] {
+        assert!(
+            !stdout
+                .lines()
+                .any(|line| line.trim_start().starts_with(hidden)),
+            "legacy root command {hidden} should be hidden from mode-first help: {stdout}"
+        );
+    }
+}
+
+#[test]
+fn zodex_sprite_help_exposes_nested_operator_families_and_restart_without_vm_start_stop() {
+    let output = Command::new(env!("CARGO_BIN_EXE_zodex"))
+        .args(["sprite", "--help"])
+        .output()
+        .expect("run zodex sprite --help");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for command in [
+        "setup", "upgrade", "sync", "status", "logs", "health", "restart", "proxy", "github",
+    ] {
+        assert!(
+            stdout
+                .lines()
+                .any(|line| line.trim_start().starts_with(command)),
+            "missing Sprite command {command}: {stdout}"
+        );
+    }
+    assert!(
+        !stdout
+            .lines()
+            .any(|line| line.trim_start().starts_with("start"))
+    );
+    assert!(
+        !stdout
+            .lines()
+            .any(|line| line.trim_start().starts_with("stop"))
+    );
+    assert!(stdout.contains("wake-on-demand"));
+}
+
+#[test]
+fn zodex_sprite_github_help_exposes_flattened_operator_verbs() {
+    let output = Command::new(env!("CARGO_BIN_EXE_zodex"))
+        .args(["sprite", "github", "--help"])
+        .output()
+        .expect("run zodex sprite github --help");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for command in [
+        "grant-push",
+        "revoke-push",
+        "list-grants",
+        "yolo",
+        "default",
+        "status",
+    ] {
+        assert!(
+            stdout.contains(command),
+            "missing Sprite GitHub verb {command}: {stdout}"
+        );
+    }
+    assert!(!stdout.contains("request-push"));
+    assert!(
+        !stdout
+            .lines()
+            .any(|line| line.trim_start().starts_with("mode"))
+    );
+}
+
+#[test]
+fn zodex_sprite_proxy_help_is_canonical_namespace_for_existing_proxy_handlers() {
+    let output = Command::new(env!("CARGO_BIN_EXE_zodex"))
+        .args(["sprite", "proxy", "--help"])
+        .output()
+        .expect("run zodex sprite proxy --help");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for command in ["inspect", "deploy", "verify-origin"] {
+        assert!(
+            stdout.contains(command),
+            "missing Sprite proxy verb {command}: {stdout}"
+        );
+    }
+}
+
+#[test]
 fn zodex_github_help_exposes_mode_commands() {
     let output = Command::new(env!("CARGO_BIN_EXE_zodex"))
         .args(["github", "--help"])
