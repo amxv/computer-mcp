@@ -208,6 +208,7 @@ fn render_record(output: &mut String, record: &PresentationRecord) {
         }
         PresentationKind::Kill {
             target_session_handle,
+            target_command,
             creator_agent_id,
             cross_agent,
             result_status,
@@ -222,6 +223,9 @@ fn render_record(output: &mut String, record: &PresentationRecord) {
                 "- `{id}` `{agent}` killed {}{status}{relation}{degraded}",
                 markdown_code_span(target_session_handle)
             );
+            if let Some(command) = target_command {
+                write_indented(output, command, "    ");
+            }
         }
         PresentationKind::PollAggregate {
             target_session_handle,

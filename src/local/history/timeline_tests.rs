@@ -67,6 +67,68 @@ fn history_query(limit: usize, cursor: Option<HistoryTimelineCursor>) -> History
 }
 
 #[test]
+fn kill_presentation_resolves_exact_parent_command_from_invocation_link() {
+    let dir = tempdir().unwrap();
+    let database = dir.path().join("history.sqlite3");
+    let history = open_history(&database, "runtime-kill-command");
+    let command_text = "cargo test --workspace --all-targets";
+    let command = history
+        .begin(
+            provider_context("kill-command-agent"),
+            InvocationStart::new(
+                "exec_command",
+                json!({"cmd": command_text, "workdir": dir.path().display().to_string()}),
+            ),
+        )
+        .unwrap();
+    let command_id = command.invocation_id.unwrap();
+    let handle = "kill-command-handle";
+    complete(
+        &history,
+        &command,
+        json!({"status":"running","session_handle":handle,"cwd":dir.path()}),
+    );
+
+    let kill = history
+        .begin(
+            provider_context("kill-command-agent"),
+            InvocationStart::new(
+                "write_stdin",
+                json!({"session_handle":handle,"chars":"","kill_process":true}),
+            )
+            .with_target_created_by_agent_id(command.agent_id.clone())
+            .with_target_created_by_invocation_id(Some(command_id))
+            .with_continuation_kind(InvocationContinuationKind::Kill),
+        )
+        .unwrap();
+    let kill_id = kill.invocation_id.unwrap();
+    complete(
+        &history,
+        &kill,
+        json!({"status":"exited","session_handle":handle}),
+    );
+    history.flush_for_test().unwrap();
+
+    let page = LocalHistoryReader::timeline(&database, &history_query(10, None)).unwrap();
+    let kill_record = page
+        .records
+        .iter()
+        .find(|record| record.primary_invocation_id == kill_id)
+        .expect("kill presentation should remain a separate timeline root");
+    match &kill_record.kind {
+        PresentationKind::Kill {
+            target_command,
+            target_session_handle,
+            ..
+        } => {
+            assert_eq!(target_command.as_deref(), Some(command_text));
+            assert_eq!(target_session_handle, handle);
+        }
+        other => panic!("expected kill presentation, got {other:?}"),
+    }
+}
+
+#[test]
 fn timeline_folds_large_poll_families_keeps_real_stdin_and_bulk_file_evidence() {
     let dir = tempdir().unwrap();
     let database = dir.path().join("history.sqlite3");

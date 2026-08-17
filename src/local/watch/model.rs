@@ -736,11 +736,15 @@ fn sanitize_record_for_terminal(record: &mut PresentationRecord) {
         }
         PresentationKind::Kill {
             target_session_handle,
+            target_command,
             creator_agent_id,
             result_status,
             ..
         } => {
             *target_session_handle = sanitize_display_text(target_session_handle);
+            *target_command = target_command
+                .take()
+                .map(|value| sanitize_display_text(&value));
             *creator_agent_id = creator_agent_id
                 .take()
                 .map(|value| sanitize_display_text(&value));

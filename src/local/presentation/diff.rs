@@ -1,11 +1,16 @@
+use std::time::Duration;
+
 use similar::{ChangeTag, TextDiff};
 
 use super::model::PresentationDiffLine;
 use super::sanitize::sanitize_preview;
 
 const MAX_DIFF_LINES: usize = 500;
-const MAX_DIFF_INPUT_LINES: usize = 2_000;
+const MAX_DIFF_PREVIEW_CHANGED_LINES: usize = 1_000;
 const MAX_DIFF_LINE_CHARS: usize = 2_048;
+const DIFF_CONTEXT_LINES: usize = 3;
+const DIFF_TIMEOUT_INPUT_LINES: usize = 1_000;
+const DIFF_TIMEOUT: Duration = Duration::from_millis(50);
 
 pub(super) struct BuiltDiff {
     pub(super) added: usize,
@@ -14,11 +19,31 @@ pub(super) struct BuiltDiff {
     pub(super) lines: Vec<PresentationDiffLine>,
 }
 
-pub(super) fn build_text_diff(before: &str, after: &str) -> Option<BuiltDiff> {
-    if exceeds_line_limit(before) || exceeds_line_limit(after) {
-        return None;
+pub(super) fn build_text_diff(before: &str, after: &str) -> BuiltDiff {
+    // Strip the unchanged outer file before diffing. This keeps large files
+    // with tiny edits (lockfiles are common) cheap without making file size a
+    // reason to abandon the structured file-change presentation.
+    let before_lines = before.split_inclusive('\n').collect::<Vec<_>>();
+    let after_lines = after.split_inclusive('\n').collect::<Vec<_>>();
+    let prefix = common_prefix_len(&before_lines, &after_lines);
+    let suffix = common_suffix_len(&before_lines[prefix..], &after_lines[prefix..]);
+    let before_changed_end = before_lines.len().saturating_sub(suffix);
+    let after_changed_end = after_lines.len().saturating_sub(suffix);
+    let window_start = prefix.saturating_sub(DIFF_CONTEXT_LINES);
+    let before_window_end = (before_changed_end + DIFF_CONTEXT_LINES).min(before_lines.len());
+    let after_window_end = (after_changed_end + DIFF_CONTEXT_LINES).min(after_lines.len());
+    let before_window = before_lines[window_start..before_window_end].concat();
+    let after_window = after_lines[window_start..after_window_end].concat();
+
+    let mut config = TextDiff::configure();
+    if before_window_end - window_start + after_window_end - window_start > DIFF_TIMEOUT_INPUT_LINES
+    {
+        // `similar` degrades to an approximate edit script at the deadline.
+        // The important invariant here is that pathological diffs remain a
+        // structured file-change card instead of collapsing to generic.
+        config.timeout(DIFF_TIMEOUT);
     }
-    let diff = TextDiff::from_lines(before, after);
+    let diff = config.diff_lines(&before_window, &after_window);
     let mut added = 0;
     let mut removed = 0;
     for change in diff.iter_all_changes() {
@@ -30,7 +55,7 @@ pub(super) fn build_text_diff(before: &str, after: &str) -> Option<BuiltDiff> {
     }
 
     let mut lines = Vec::new();
-    let mut truncated = false;
+    let mut truncated = added + removed > MAX_DIFF_PREVIEW_CHANGED_LINES;
     'groups: for group in diff.grouped_ops(3) {
         for operation in group {
             for change in diff.iter_changes(&operation) {
@@ -49,22 +74,33 @@ pub(super) fn build_text_diff(before: &str, after: &str) -> Option<BuiltDiff> {
                         ChangeTag::Insert => "add",
                     }
                     .to_string(),
-                    old_line: change.old_index().map(|index| index + 1),
-                    new_line: change.new_index().map(|index| index + 1),
+                    old_line: change.old_index().map(|index| window_start + index + 1),
+                    new_line: change.new_index().map(|index| window_start + index + 1),
                     text,
                 });
             }
         }
     }
 
-    Some(BuiltDiff {
+    BuiltDiff {
         added,
         removed,
         truncated,
         lines,
-    })
+    }
 }
 
-fn exceeds_line_limit(value: &str) -> bool {
-    value.lines().take(MAX_DIFF_INPUT_LINES + 1).count() > MAX_DIFF_INPUT_LINES
+fn common_prefix_len<T: PartialEq>(left: &[T], right: &[T]) -> usize {
+    left.iter()
+        .zip(right)
+        .take_while(|(left, right)| left == right)
+        .count()
+}
+
+fn common_suffix_len<T: PartialEq>(left: &[T], right: &[T]) -> usize {
+    left.iter()
+        .rev()
+        .zip(right.iter().rev())
+        .take_while(|(left, right)| left == right)
+        .count()
 }

@@ -338,8 +338,8 @@ describe('file change cards', () => {
     const value: FileChangesRecord = {
       ...record([
       change('edited', '/repo/src/large.rs', {
-        added: 167,
-        removed: 167,
+        added: 1_100,
+        removed: 1_100,
         diff_truncated: true,
         lines,
       }),

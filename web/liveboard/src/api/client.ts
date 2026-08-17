@@ -112,6 +112,7 @@ export type PresentationRecord = PresentationRecordBase &
     | {
         kind: 'kill'
         target_session_handle: string
+        target_command: string | null
         creator_agent_id: string | null
         cross_agent: boolean
         result_status: string | null

@@ -69,14 +69,18 @@ export function TimelineCard(props: {
           >
             <div class="timeline-card-heading">
               <span class="card-kind card-kind-danger">kill</span>
-              <span>Process termination requested</span>
+              <code
+                class="interaction-preview kill-command-preview"
+                title={record().target_command ?? record().target_session_handle}
+              >
+                {record().target_command ?? record().target_session_handle}
+              </code>
             </div>
-            <div class="timeline-card-meta">
-              <span>{record().result_status ?? 'requested'}</span>
-              <Show when={record().cross_agent && record().creator_agent_id}>
+            <Show when={record().cross_agent && record().creator_agent_id}>
+              <div class="timeline-card-meta">
                 <span>targets Agent {record().creator_agent_id}</span>
-              </Show>
-            </div>
+              </div>
+            </Show>
             <EvidenceWarning record={record()} />
           </article>
         )}

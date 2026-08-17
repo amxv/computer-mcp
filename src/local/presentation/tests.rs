@@ -624,7 +624,7 @@ fn orphan_poll_page_still_collapses_without_inventing_a_parent() {
 }
 
 #[test]
-fn file_diff_display_is_bounded_without_losing_full_stats() {
+fn file_diff_display_bounds_preview_above_changed_loc_limit_without_losing_stats() {
     let workdir = "/tmp/presentation";
     let before = (0..900)
         .map(|index| format!("old-{index}\n"))
@@ -658,7 +658,7 @@ fn file_diff_display_is_bounded_without_losing_full_stats() {
 
     let long_before = "a".repeat(10_000);
     let long_after = "b".repeat(10_000);
-    let diff = super::diff::build_text_diff(&long_before, &long_after).unwrap();
+    let diff = super::diff::build_text_diff(&long_before, &long_after);
     assert_eq!(diff.added, 1);
     assert_eq!(diff.removed, 1);
     assert!(diff.truncated);
@@ -670,7 +670,7 @@ fn file_diff_display_is_bounded_without_losing_full_stats() {
 }
 
 #[test]
-fn pathological_many_line_diff_falls_back_before_expensive_diffing() {
+fn pathological_many_line_diff_remains_structured_with_a_bounded_preview() {
     let workdir = "/tmp/presentation";
     let before = (0..2_100).map(|_| "old\n").collect::<String>();
     let after = (0..2_100).map(|_| "new\n").collect::<String>();
@@ -694,10 +694,68 @@ fn pathological_many_line_diff_falls_back_before_expensive_diffing() {
     )];
 
     let document = build_presentation(&[record], &[]);
-    assert!(matches!(
-        document.records[0].kind,
-        PresentationKind::Generic { .. }
-    ));
+    let PresentationKind::FileChanges { changes, .. } = &document.records[0].kind else {
+        panic!("large diff must remain a structured file change");
+    };
+    assert_eq!(changes[0].added, 2_100);
+    assert_eq!(changes[0].removed, 2_100);
+    assert!(changes[0].diff_truncated);
+    assert_eq!(changes[0].lines.len(), 500);
+}
+
+#[test]
+fn large_file_with_tiny_edit_keeps_small_preview_and_absolute_line_numbers() {
+    let workdir = "/tmp/presentation";
+    let before = (0..3_200)
+        .map(|index| {
+            if index == 1_599 {
+                "version = 0.3.3\n".to_string()
+            } else {
+                format!("unchanged-{index}\n")
+            }
+        })
+        .collect::<String>();
+    let after = (0..3_200)
+        .map(|index| {
+            if index == 1_599 {
+                "version = 0.3.4\n".to_string()
+            } else {
+                format!("unchanged-{index}\n")
+            }
+        })
+        .collect::<String>();
+    let mut record = invocation(
+        252,
+        "apply_patch",
+        json!({
+            "workdir":workdir,
+            "patch":"*** Begin Patch\n*** Update File: Cargo.lock\n@@\n-version = 0.3.3\n+version = 0.3.4\n*** End Patch\n"
+        }),
+    );
+    record.file_evidence = vec![evidence(
+        0,
+        "update",
+        (
+            "/tmp/presentation/Cargo.lock",
+            "/tmp/presentation/Cargo.lock",
+        ),
+        ("text", Some(&before)),
+        ("text", Some(&after)),
+    )];
+
+    let document = build_presentation(&[record], &[]);
+    let PresentationKind::FileChanges { changes, .. } = &document.records[0].kind else {
+        panic!("large file with a tiny edit must remain a structured file change");
+    };
+    assert_eq!(changes[0].added, 1);
+    assert_eq!(changes[0].removed, 1);
+    assert!(!changes[0].diff_truncated);
+    assert!(changes[0].lines.iter().any(|line| {
+        line.kind == "remove" && line.old_line == Some(1_600) && line.text == "version = 0.3.3"
+    }));
+    assert!(changes[0].lines.iter().any(|line| {
+        line.kind == "add" && line.new_line == Some(1_600) && line.text == "version = 0.3.4"
+    }));
 }
 
 #[test]

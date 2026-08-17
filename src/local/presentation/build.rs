@@ -349,6 +349,10 @@ fn write_stdin_record(record: &PresentationInput) -> PresentationRecord {
     let kind = match continuation_kind(record) {
         Some("kill") => PresentationKind::Kill {
             target_session_handle: sanitize_display_text(handle),
+            target_command: record
+                .target_command
+                .as_deref()
+                .map(|command| sanitize_preview(command, MAX_COMMAND_PREVIEW_CHARS).0),
             creator_agent_id: record.target_created_by_agent_id.clone(),
             cross_agent: record.cross_agent == Some(true),
             result_status: Some(status_for(record)),
@@ -812,7 +816,7 @@ fn build_file_change(
         }
         _ => return None,
     };
-    let diff = build_text_diff(before, after)?;
+    let diff = build_text_diff(before, after);
     Some(PresentationFileChange {
         operation,
         path: sanitize_display_text(&evidence.path_after),
@@ -878,7 +882,7 @@ fn build_same_path_net_change(
         ),
         _ => return None,
     };
-    let diff = build_text_diff(before, after)?;
+    let diff = build_text_diff(before, after);
     Some(PresentationFileChange {
         operation,
         path: sanitize_display_text(&path.to_string_lossy()),

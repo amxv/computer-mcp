@@ -192,7 +192,10 @@ function FileChangeItem(props: {
       copyFeedbackTimeout = undefined
     }, 2_000)
   }
-  const canExpand = () => !props.change.diff_lines_included || props.change.lines.length > 0
+  const canExpand = () =>
+    !props.change.diff_lines_included ||
+    props.change.lines.length > 0 ||
+    props.change.diff_truncated
   const canOpenFile = () => props.change.operation !== 'deleted'
   const openFile = async () => {
     setOpenError(undefined)

@@ -499,6 +499,7 @@ describe('command card', () => {
       raw_invocation_ids: [21],
       kind: 'kill',
       target_session_handle: 'opaque-session',
+      target_command: 'cargo test --workspace',
       creator_agent_id: 'b222',
       cross_agent: true,
       result_status: 'requested',
@@ -527,7 +528,10 @@ describe('command card', () => {
     )
     expect(container.textContent).toContain('stdin')
     expect(container.textContent).toContain('yes')
-    expect(container.textContent).toContain('Process termination requested')
+    expect(container.textContent).toContain('kill')
+    expect(container.textContent).toContain('cargo test --workspace')
+    expect(container.textContent).not.toContain('Process termination requested')
+    expect(container.textContent).not.toContain('requested')
     expect(container.textContent?.match(/targets Agent b222/g)).toHaveLength(2)
   })
 

@@ -331,11 +331,16 @@ fn compact_card_lines(app: &WatchApp, card: &WatchCard) -> Vec<Line<'static>> {
         ))],
         PresentationKind::Kill {
             target_session_handle,
+            target_command,
             cross_agent,
             creator_agent_id,
             ..
         } => vec![Line::from(format!(
-            "{prefix}■ kill {target_session_handle}{}{}",
+            "{prefix}■ kill {}{}{}",
+            target_command
+                .as_deref()
+                .map(|command| compact_text(command, 80))
+                .unwrap_or_else(|| target_session_handle.clone()),
             if *cross_agent { " · cross-Agent" } else { "" },
             creator_agent_id
                 .as_deref()

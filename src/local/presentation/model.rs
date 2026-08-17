@@ -85,6 +85,7 @@ pub enum PresentationKind {
     },
     Kill {
         target_session_handle: String,
+        target_command: Option<String>,
         creator_agent_id: Option<String>,
         cross_agent: bool,
         result_status: Option<String>,

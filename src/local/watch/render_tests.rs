@@ -244,6 +244,7 @@ fn renders_one_poll_aggregate_and_cross_agent_stdin() {
             Some("k7m2"),
             PresentationKind::Kill {
                 target_session_handle: "proc-3".to_owned(),
+                target_command: Some("cargo test --workspace".to_owned()),
                 creator_agent_id: Some("m4n8".to_owned()),
                 cross_agent: true,
                 result_status: Some("success".to_owned()),
@@ -253,7 +254,7 @@ fn renders_one_poll_aggregate_and_cross_agent_stdin() {
     let text = render_text(&app, 100, 22);
     assert_eq!(text.matches("poll proc-1 ×50").count(), 1);
     assert!(text.contains("stdin proc-2"));
-    assert!(text.contains("kill proc-3"));
+    assert!(text.contains("kill cargo test --workspace"));
     assert!(text.contains("cross-Agent"));
     assert!(text.contains("creator m4n8"));
 }

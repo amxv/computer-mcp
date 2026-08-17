@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
@@ -678,6 +678,7 @@ fn hydrate_roots_uncached(
         .map(|root| root.representative_id)
         .collect::<Vec<_>>();
     let mut inputs = load_lean_inputs(connection, &representative_ids)?;
+    load_target_commands_bulk(connection, &mut inputs)?;
     load_file_evidence_bulk(connection, &representative_ids, &mut inputs)?;
 
     let command_root_ids = roots
@@ -822,6 +823,7 @@ fn map_presentation_input(row: &rusqlite::Row<'_>) -> rusqlite::Result<Presentat
         target_session_handle: row.get(16)?,
         target_created_by_agent_id: row.get(17)?,
         target_created_by_invocation_id: row.get(18)?,
+        target_command: None,
         continuation_kind: row.get(19)?,
         cross_agent: row.get::<_, Option<i64>>(20)?.map(|value| value != 0),
         result_status: row.get(21)?,
@@ -842,6 +844,59 @@ fn map_presentation_input(row: &rusqlite::Row<'_>) -> rusqlite::Result<Presentat
         folded_polls: None,
         orphan_poll_group: None,
     })
+}
+
+fn load_target_commands_bulk(
+    connection: &Connection,
+    inputs: &mut HashMap<i64, PresentationInput>,
+) -> Result<()> {
+    let parent_ids = inputs
+        .values()
+        .filter(|input| input.continuation_kind.as_deref() == Some("kill"))
+        .filter_map(|input| input.target_created_by_invocation_id)
+        .collect::<HashSet<_>>();
+    if parent_ids.is_empty() {
+        return Ok(());
+    }
+    let parent_ids = parent_ids.into_iter().collect::<Vec<_>>();
+    let sql = format!(
+        "SELECT id, args_json FROM invocations WHERE id IN ({}) AND tool_name = 'exec_command'",
+        placeholders(parent_ids.len())
+    );
+    let parameters = parent_ids
+        .iter()
+        .copied()
+        .map(SqlValue::Integer)
+        .collect::<Vec<_>>();
+    let mut statement = connection
+        .prepare(&sql)
+        .context("failed to prepare Local kill target-command query")?;
+    let commands = statement
+        .query_map(params_from_iter(parameters), |row| {
+            let id: i64 = row.get(0)?;
+            let args_json: String = row.get(1)?;
+            let command = serde_json::from_str::<serde_json::Value>(&args_json)
+                .ok()
+                .and_then(|value| {
+                    value
+                        .get("cmd")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned)
+                });
+            Ok((id, command))
+        })
+        .context("failed to query Local kill target commands")?
+        .collect::<rusqlite::Result<HashMap<_, _>>>()
+        .context("failed to decode Local kill target commands")?;
+    for input in inputs.values_mut() {
+        if input.continuation_kind.as_deref() != Some("kill") {
+            continue;
+        }
+        if let Some(parent_id) = input.target_created_by_invocation_id {
+            input.target_command = commands.get(&parent_id).cloned().flatten();
+        }
+    }
+    Ok(())
 }
 
 fn load_file_evidence_bulk(
