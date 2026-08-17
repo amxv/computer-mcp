@@ -166,7 +166,7 @@ Every `exec_command` and `apply_patch` request still has its own explicit absolu
 
 Agents appear after attributed tool activity, not merely because a ChatGPT tab is open.
 
-Trigger a harmless Zodex tool call in the ChatGPT conversation, then reopen or leave running:
+Trigger a harmless Zodex tool call in the ChatGPT conversation, then reopen or leave Liveboard running:
 
 ```bash
 zodex local watch
@@ -184,15 +184,35 @@ Zodex does not guess Agent identity from time or workdir. If the client does not
 
 Confirm you are testing through the intended ChatGPT developer-mode app/tunnel rather than a different MCP client.
 
-## `watch --agent` rejects an ID
+If Liveboard is already open, check **All Agents**: a newly observed Agent can remain off-board when your configured column maximum is already full.
 
-Agent IDs are exactly four lowercase ASCII letters/digits, for example:
+## `watch --agent` or `watch --all` is rejected
+
+Those are terminal-viewer filters. Select the TUI explicitly:
 
 ```bash
-zodex local watch --agent k7m2
+zodex local watch --tui --all
+zodex local watch --tui --agent k7m2
 ```
 
-Find current IDs with plain `zodex local watch` or history/API inspection.
+Agent IDs are exactly four lowercase ASCII letters/digits, for example `k7m2`.
+
+Find current IDs in Liveboard's **All Agents** drawer, `zodex local history`, or the observability API.
+
+## Liveboard opens a URL but the browser cannot connect
+
+Keep the `zodex local watch` process running. The printed capability URL belongs to that foreground process; `Ctrl-C` shuts the temporary host down.
+
+If the browser did not open automatically, copy the `Liveboard: http://127.0.0.1:.../<capability>/` URL printed by the CLI into your browser. Do not reuse an old capability URL from an earlier `watch` process.
+
+If the page reports a version mismatch or observer failure, confirm the running Local runtime and the `zodex` binary you launched agree:
+
+```bash
+zodex local status
+zodex local stop
+zodex local start
+zodex local watch
+```
 
 ## History is over its configured budget
 
@@ -227,6 +247,6 @@ Stop that process using the mechanism that owns it.
 
 ## Building/debugging a custom Local observability client
 
-The built-in TUI uses the same public API as custom clients. If `zodex local watch` works but your client does not, compare your discovery/version/auth flow with [Local observability API](/docs/local/observability-api). For TUI-specific behavior, see [Local watch TUI](/docs/local/watch).
+Liveboard and the built-in TUI use the same public observer model as custom clients. If first-party `watch` works but your direct API client does not, compare your discovery/version/auth flow with [Local observability API](/docs/local/observability-api). For first-party viewer behavior, see [Watch and Liveboard](/docs/local/watch).
 
-The API guide covers Bearer authentication, runtime discovery, Agent/workdir filters, bounded invocation/output queries, live SSE, explicit `gap` events, durable recovery, browser CORS constraints, and version handling.
+The API guide covers API v1 / presentation v2 / event v2, Bearer authentication, runtime discovery, canonical timeline pagination, checkpoints, raw-vs-display output, selective live PTY streams, explicit `gap` events, durable recovery, browser security constraints, and version handling.

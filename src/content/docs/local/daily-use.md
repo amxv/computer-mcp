@@ -82,32 +82,25 @@ Local does not restrict an Agent to its first workdir. A new declared workdir is
 
 ## Watch live activity
 
-`zodex local watch` is the first-party client for Local's public read-only observability API. It discovers the running localhost API, authenticates automatically, subscribes to the live SSE stream, and uses the same Agent/invocation/presentation resources available to your own clients.
+Open the first-party browser Liveboard:
 
 ```bash
 zodex local watch
 ```
 
-Behavior:
+The CLI stays in the foreground while the temporary Liveboard host is running. It prints the capability URL and asks macOS to open it in your default browser. `Ctrl-C` closes the viewer host but does not stop Local.
 
-- zero Agents: wait for activity;
-- one Agent: open it directly;
-- multiple Agents: show a picker;
-- unattributed activity: show it explicitly rather than inventing an Agent.
+Liveboard gives each visible Agent an independent timeline. Use **All Agents** to manage the board, **Columns** for a 1–8 column cap, the Cmd/Diff controls for global expansion defaults, and the Agent headers to alias, reorder, resize, or hide columns. Those preferences are UI-only and do not change Agent identity or permissions.
 
-Watch one Agent in a dedicated terminal:
+For a terminal-only workflow, opt into the TUI:
 
 ```bash
-zodex local watch --agent k7m2
+zodex local watch --tui
+zodex local watch --tui --agent k7m2
+zodex local watch --tui --all
 ```
 
-Watch a combined stream:
-
-```bash
-zodex local watch --all
-```
-
-Useful keys include:
+Useful TUI keys include:
 
 - arrows or `j` / `k` — move;
 - `Enter` — expand/collapse;
@@ -121,7 +114,7 @@ Useful keys include:
 
 Closing `watch` never stops the runtime.
 
-For the complete TUI behavior and keyboard map, see [Local watch TUI](/docs/local/watch). To build another interface on the same API, see [Local observability API](/docs/local/observability-api).
+For Liveboard controls, the TUI keyboard map, output/diff semantics, and recovery behavior, see [Watch and Liveboard](/docs/local/watch). To build another interface on the same API, see [Local observability API](/docs/local/observability-api).
 
 ## Inspect history
 
@@ -220,7 +213,7 @@ That is intentional: access is something you turn on, optionally give a TTL, and
 
 ## Next
 
-- [Local watch TUI](/docs/local/watch)
+- [Watch and Liveboard](/docs/local/watch)
 - [Local observability API](/docs/local/observability-api)
 - [Local command reference](/docs/local/command-reference)
 - [Local configuration](/docs/local/configuration)

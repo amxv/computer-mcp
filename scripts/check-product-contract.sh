@@ -20,3 +20,7 @@ cargo test --locked --lib \
 cargo test --locked --test zodex_operator_cli \
   zodex_root_rejects_removed_commands_and_global_config \
   -- --exact
+
+cargo test --locked --test liveboard_operator_cli \
+  local_watch_agent_filters_require_explicit_tui_mode \
+  -- --exact

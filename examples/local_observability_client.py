@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Minimal read-only client for the Zodex Local observability API."""
+"""Minimal read-only client for the public Zodex Local observability API."""
 
 from __future__ import annotations
 
@@ -14,6 +14,9 @@ import urllib.request
 from pathlib import Path
 
 
+API_VERSION = 1
+PRESENTATION_VERSION = 2
+EVENT_VERSION = 2
 AGENT_ID = re.compile(r"^[a-z0-9]{4}$")
 
 
@@ -27,6 +30,20 @@ def default_discovery_path() -> Path:
 def read_discovery(path: Path) -> tuple[dict, str]:
     discovery = json.loads(path.read_text())
     observer = discovery["observability"]
+    if observer.get("api_version") != API_VERSION:
+        raise RuntimeError(
+            f"unsupported observer API version: {observer.get('api_version')!r}; "
+            f"expected {API_VERSION}"
+        )
+    if observer.get("presentation_version") != PRESENTATION_VERSION:
+        raise RuntimeError(
+            "unsupported presentation version: "
+            f"{observer.get('presentation_version')!r}; expected {PRESENTATION_VERSION}"
+        )
+    runtime_id = discovery.get("runtime_id")
+    if not isinstance(runtime_id, str) or not runtime_id:
+        raise RuntimeError("discovery document has no runtime_id")
+
     token_path = Path(observer["bearer_token_path"])
     token = token_path.read_text().strip()
     if len(token) < 32:
@@ -40,7 +57,7 @@ def authorized_request(url: str, token: str) -> urllib.request.Request:
         headers={
             "Authorization": f"Bearer {token}",
             "Accept": "application/json, text/event-stream",
-            "User-Agent": "zodex-local-observer-example/1",
+            "User-Agent": "zodex-local-observer-example/2",
         },
     )
 
@@ -50,14 +67,55 @@ def get_json(url: str, token: str) -> dict:
         return json.load(response)
 
 
-def print_agents(base_url: str, token: str) -> None:
-    document = get_json(f"{base_url}/v1/agents", token)
-    print(json.dumps(document, indent=2))
+def verify_runtime(document: dict, runtime_id: str, label: str) -> None:
+    if document.get("runtime_id") != runtime_id:
+        raise RuntimeError(
+            f"{label} belongs to runtime {document.get('runtime_id')!r}, "
+            f"expected {runtime_id!r}; reread discovery"
+        )
 
 
-def stream_events(base_url: str, token: str, agent: str | None, max_events: int) -> None:
+def print_initial_state(base_url: str, token: str, runtime_id: str, agent: str | None) -> None:
+    agents_query = urllib.parse.urlencode({"runtime": "current"})
+    agents = get_json(f"{base_url}/v1/agents?{agents_query}", token)
+    verify_runtime(agents, runtime_id, "Agent list")
+
+    timeline_params: dict[str, str | int] = {"limit": 20}
+    if agent:
+        timeline_params["agent_id"] = agent
+    timeline = get_json(
+        f"{base_url}/v1/timeline?{urllib.parse.urlencode(timeline_params)}", token
+    )
+    verify_runtime(timeline, runtime_id, "timeline")
+    if timeline.get("presentation_version") != PRESENTATION_VERSION:
+        raise RuntimeError(
+            f"timeline presentation version is {timeline.get('presentation_version')!r}, "
+            f"expected {PRESENTATION_VERSION}"
+        )
+
+    print(
+        json.dumps(
+            {
+                "runtime_id": runtime_id,
+                "agents": agents.get("agents", []),
+                "timeline": timeline,
+            },
+            indent=2,
+        )
+    )
+
+
+def stream_events(
+    base_url: str,
+    token: str,
+    runtime_id: str,
+    agent: str | None,
+    max_events: int,
+) -> None:
     query = ""
     if agent:
+        # Filter all event types to one Agent. A multi-column UI would normally
+        # keep global metadata and use output_agent_ids for visible PTY streams.
         query = "?" + urllib.parse.urlencode({"agent_id": agent})
     request = authorized_request(f"{base_url}/v1/events{query}", token)
     seen = 0
@@ -70,13 +128,19 @@ def stream_events(base_url: str, token: str, agent: str | None, max_events: int)
             line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
             if not line:
                 if data_lines:
-                    payload = "\n".join(data_lines)
+                    payload = json.loads("\n".join(data_lines))
+                    if payload.get("schema_version") != EVENT_VERSION:
+                        raise RuntimeError(
+                            "unsupported live event version: "
+                            f"{payload.get('schema_version')!r}; expected {EVENT_VERSION}"
+                        )
+                    verify_runtime(payload, runtime_id, "live event")
                     print(
                         json.dumps(
                             {
                                 "id": event_id,
                                 "event": event_name,
-                                "data": json.loads(payload),
+                                "data": payload,
                             },
                             separators=(",", ":"),
                         )
@@ -111,8 +175,10 @@ def main() -> int:
         default=default_discovery_path(),
         help="path to the active Local discovery.json",
     )
-    parser.add_argument("--agent", help="four-character Agent ID for SSE filtering")
-    parser.add_argument("--events", action="store_true", help="stream live SSE after listing Agents")
+    parser.add_argument("--agent", help="four-character Agent ID for timeline/SSE filtering")
+    parser.add_argument(
+        "--events", action="store_true", help="stream live SSE after printing initial state"
+    )
     parser.add_argument(
         "--max-events",
         type=int,
@@ -129,12 +195,11 @@ def main() -> int:
     try:
         discovery, token = read_discovery(args.discovery)
         observer = discovery["observability"]
-        if observer.get("api_version") != 1:
-            raise RuntimeError(f"unsupported observer API version: {observer.get('api_version')!r}")
+        runtime_id = discovery["runtime_id"]
         base_url = observer["base_url"].rstrip("/")
-        print_agents(base_url, token)
+        print_initial_state(base_url, token, runtime_id, args.agent)
         if args.events:
-            stream_events(base_url, token, args.agent, args.max_events)
+            stream_events(base_url, token, runtime_id, args.agent, args.max_events)
     except (OSError, KeyError, ValueError, urllib.error.URLError, RuntimeError) as error:
         print(f"zodex-local-observer: {error}", file=sys.stderr)
         return 1

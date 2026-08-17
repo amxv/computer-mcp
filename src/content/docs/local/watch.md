@@ -1,134 +1,140 @@
 ---
 title: "Watch"
-description: "Use Zodex's first-party terminal observability client to watch ChatGPT Agents, commands, patches, stdin, process state, workdirs, and live output in real time."
+description: "Open the Local Liveboard in your browser, or opt into the terminal viewer with --tui."
 order: 4
 category: Local
-summary: "The first-party client of the Local observability API: Agent picker, filtered live SSE, compact tool timelines, raw drill-down, search, copy, and durable gap recovery."
+summary: "The first-party read-only Local viewer: multi-Agent Liveboard by default, terminal TUI when explicitly requested."
 ---
 
-`zodex local watch` is the first-party real-time observability client for Zodex Local. It shows what ChatGPT is asking the Zodex MCP server to do without giving the viewer any execution authority.
+`zodex local watch` is the first-party real-time viewer for Zodex Local. It shows what ChatGPT is doing through the Local MCP server without giving the viewer command/control authority.
 
-The TUI is built entirely on the public [Local observability API](/docs/local/observability-api). It discovers the localhost API, reads the managed observer bearer, loads Agent state, subscribes to live SSE, and recovers missed activity from the same HTTP endpoints available to your own clients.
+The default viewer is **Liveboard**, a browser UI built on the same public [Local observability API](/docs/local/observability-api) available to custom clients. The terminal viewer is still available with `--tui`.
 
-Opening or closing `watch` never starts Local, stops Local, changes the runtime TTL, or changes what ChatGPT can execute.
-
-## Start watching
-
-Local must already be running:
+## Open Liveboard
 
 ```bash
 zodex local watch
 ```
 
-The default view adapts to current activity:
+Zodex starts a temporary loopback Liveboard host, prints its capability URL, and asks macOS to open that URL in your default browser. Keep the `watch` command running while you use the board.
 
-- **No current Agents** — waits for the first attributed tool call.
-- **One Agent** — opens that Agent directly.
-- **Several Agents** — opens an Agent picker.
-- **Unattributed activity** — shows it explicitly instead of inventing an Agent identity.
+If the browser cannot be opened automatically, the CLI prints the URL so you can open it manually.
 
-To open one Agent directly:
+Press `Ctrl-C` in the `watch` process to stop the temporary Liveboard host. This does **not** stop the Local runtime or revoke ChatGPT access. Use `zodex local stop` for that.
+
+## What Liveboard shows
+
+Liveboard is organized around the canonical four-character Local Agent IDs. Each visible Agent gets an independent column with its own virtualized timeline, follow position, unseen-activity count, recent workdir, and active-process status.
+
+The timeline renders Zodex's server-owned presentation model rather than re-parsing MCP arguments in the browser. It includes:
+
+- shell commands with running/final status, duration, exit state, folded polling, and expandable output;
+- structured Added / Edited / Deleted / Renamed file cards with unified diff rows when evidence is available;
+- explicit stdin and process-kill interactions;
+- cross-Agent process attribution where Local can prove it;
+- degraded/incomplete evidence notices rather than presenting partial capture as complete;
+- stable presentation IDs that remain usable for reconnect recovery and audit drill-down.
+
+Repeated no-input polls are folded into the command presentation. Exact logical invocations remain available through audit/history instead of filling the normal timeline.
+
+## Board controls
+
+Liveboard stores **UI preferences only**. They do not alter Agent identity, MCP permissions, execution routing, or history evidence.
+
+The toolbar provides:
+
+- **All Agents** — open the current-runtime Agent drawer and add hidden Agents to the board;
+- **Columns** — set the maximum visible Agent columns from 1 through 8; the default is 4;
+- **Cmd open / closed** — set the global default for command-output expansion; the default is closed;
+- **Diff open / closed** — set the global default for file-diff expansion; the default is open;
+- **Theme** — follow system appearance or force light/dark.
+
+Each Agent column can also be:
+
+- given a local alias of up to 80 characters;
+- reordered by drag or the left/right controls;
+- resized against an adjacent visible column;
+- removed from the board without deleting the Agent or its history.
+
+Aliases are labels for your browser view. The public Agent ID remains the four-character Zodex identity everywhere else.
+
+A newly observed Agent does not evict an Agent you intentionally kept visible when the board is full. Open **All Agents** to decide what should be on the board.
+
+## Command output
+
+Collapsed command cards do not maintain an unbounded hidden terminal buffer. When output is expanded, Liveboard uses a bounded display-safe live tail and coalesces visible text updates to the browser's animation-frame cadence.
+
+If output was missed, the viewer reconnects, or a final command is expanded later, Liveboard can lazily restore a bounded recent tail from the durable `view=display` output endpoint. It does not replay an entire long PTY stream into the normal card.
+
+The display view is deliberately sanitized for presentation. Exact/raw output remains an explicit evidence surface through the observability API and audit drill-down.
+
+## File diffs and highlighting
+
+File cards render only the canonical operation/path/count/diff rows supplied by Local. The browser does not infer edits from raw patch text or shell arguments.
+
+Common Rust, TypeScript, JavaScript, Go, Bash, Python, JSON, TOML/INI files are syntax-highlighted in one local browser worker. Unknown languages fall back to plain source text. Collapsed or virtualized-offscreen diffs do no highlighting work.
+
+## Live attach, history, and recovery
+
+Liveboard records one viewer attach boundary and joins live activity from there. Each visible Agent hydrates independently, and older history is fetched only when you request it by scrolling/loading backward rather than preloading the full database.
+
+If the SSE connection drops, the board rereads current runtime state and uses durable timeline recovery before resuming live updates. An explicit SSE `gap` is a recovery signal; numeric gaps in a filtered stream are not, because events for other Agents may have been omitted intentionally.
+
+If Local restarts, its `runtime_id` changes. Liveboard treats that as a runtime replacement instead of mixing sequence state from two runtimes.
+
+## Use the terminal viewer
+
+Opt into the terminal UI explicitly:
 
 ```bash
-zodex local watch --agent k7m2
+zodex local watch --tui
 ```
 
-To deliberately combine all Agent activity:
+TUI-only Agent filters require `--tui`:
 
 ```bash
-zodex local watch --all
+zodex local watch --tui --agent k7m2
+zodex local watch --tui --all
 ```
 
-Agent IDs are the same four-character IDs used by `zodex local history` and the observability API.
+`--agent` opens or waits for one four-character Agent ID. `--all` combines current Agent activity in one terminal viewer. They are intentionally not web-Liveboard flags.
 
-## What the TUI shows
-
-The normal view is a compact tool timeline rather than a JSON log or terminal emulator.
-
-For commands, it can show:
-
-- Agent ID;
-- command;
-- declared workdir;
-- effective/current cwd when useful;
-- live output;
-- running/completed/failed state;
-- elapsed time and final exit reason.
-
-For edits and process interaction, it can show:
-
-- structured `apply_patch` file changes and diffs when Zodex can prove them;
-- recognized file writes when evidence is strong enough;
-- explicit stdin writes;
-- explicit process kills;
-- cross-Agent process continuation attribution;
-- new-workdir notices;
-- degraded/incomplete evidence instead of pretending capture was complete.
-
-Repeated no-input `write_stdin` polls are folded into a compact aggregate so a long-running command does not fill the screen with dozens of nearly identical rows. The individual calls remain available in durable raw history.
-
-## Keyboard controls
+### TUI keyboard controls
 
 | Key | Action |
 | --- | --- |
 | `↑` / `k` | Move up |
 | `↓` / `j` | Move down |
-| `Enter` | Expand or collapse selected detail; choose an Agent in the picker |
+| `Enter` | Expand/collapse selected detail; choose an Agent in the picker |
 | `Tab` | Next Agent |
 | `Shift-Tab` | Previous Agent |
 | `a` | Open the Agent picker |
 | `r` | Toggle exact raw logical evidence for the selected invocation |
-| `y` | Copy the selected content |
+| `y` | Copy selected content |
 | `g` | Jump to top |
 | `G` | Jump to bottom |
 | `/` | Search/filter the visible timeline |
 | `q` or `Ctrl-C` | Quit |
 
-Raw mode is an explicit drill-down. The default view uses Zodex's canonical normalized presentation so the same command/file/poll semantics can also be rendered by other API clients.
-
-## Watch separate Agents in separate panes
-
-Because `watch` is only a read-only client, you can run several instances at once:
+You can run several TUI viewers at once, for example one per terminal pane:
 
 ```bash
-zodex local watch --agent k7m2
-zodex local watch --agent m4n8
+zodex local watch --tui --agent k7m2
+zodex local watch --tui --agent m4n8
 ```
 
-This works well with separate Ghostty/Terminal panes. Each Agent-specific client requests a server-side filtered SSE stream, so it does not need to receive and discard unrelated Agent events locally.
+The TUI remains a client of the public observer; it does not receive private execution authority.
 
-You can also use `Tab` / `Shift-Tab` inside one TUI when a single pane is more convenient.
+## Security boundary
 
-## Live means from now
+The observability listener requires a managed Bearer token and deliberately does not enable arbitrary-origin CORS. Liveboard does not weaken that contract.
 
-`watch` does not preload a large page of completed history when it opens. It subscribes to live activity from the point it attaches.
+Instead, `zodex local watch` starts a separate loopback **same-origin capability host**. That host reads discovery and the observer bearer on the native side, proxies only the allowlisted read-only observer resources Liveboard needs, serves the embedded frontend, and keeps the bearer out of browser JavaScript.
 
-If the first event refers to a command that was already running, the TUI can fetch that invocation's current detail so the command has enough context to render correctly without loading unrelated old work.
+The capability URL is local sensitive state while the host is running. Do not publish it or treat it as a permanent bookmark.
 
-Use `zodex local history` when you intentionally want older activity:
+## Build another viewer
 
-```bash
-zodex local history --last 20
-zodex local history --agent k7m2 --since 1h
-```
+Liveboard and the TUI are two presentations of the same Local evidence model. A custom Swift app, menu-bar tool, editor panel, terminal UI, or automation client can use the public API directly.
 
-## Disconnects and gap recovery
-
-The live event stream is designed so a slow viewer cannot backpressure ChatGPT command execution.
-
-If the TUI disconnects, it reconnects. If the server reports an explicit SSE `gap`, the TUI uses durable invocation/history APIs to recover the missing presentation state before continuing live.
-
-The TUI also validates the active runtime ID and API/presentation versions. If Local restarts into a new runtime or the installed client/server versions no longer agree, reopen `watch` with the matching Zodex binary rather than silently mixing incompatible state.
-
-## Build another interface instead
-
-The TUI is only one possible presentation of Local activity. You can build another viewer on exactly the same public API—for example:
-
-- a localhost web dashboard;
-- a Swift or macOS menu-bar app;
-- an editor panel;
-- another terminal interface;
-- a desktop status app;
-- an automation or monitoring process.
-
-You do not need to reuse the TUI code. Start with [Local observability API](/docs/local/observability-api), which documents discovery, authentication, routes, filters, output pagination, SSE events, and recovery.
+Start with [Local observability API](/docs/local/observability-api) for discovery, Bearer auth, canonical timeline pagination, output views, checkpoint/audit resources, selective live output, SSE sequence semantics, and durable gap recovery.

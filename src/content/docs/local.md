@@ -174,31 +174,27 @@ The TTL is wall-clock time. Sleep does not pause it.
 
 ## See what ChatGPT is doing now
 
-Local exposes a **first-class localhost observability API** for viewing ChatGPT tool activity in real time. It is a read-only HTTP API with live SSE, Agent/workdir filters, durable invocation queries, output pagination, and recovery after disconnects. You can build your own dashboard, menu-bar app, terminal UI, editor integration, or other client in any language that can speak HTTP and SSE.
-
-The built-in terminal viewer is the first-party client of that API:
+Local exposes a **first-class localhost observability API** for viewing ChatGPT tool activity in real time. The default first-party viewer is Liveboard:
 
 ```bash
 zodex local watch
 ```
 
-With one Agent, it opens that Agent directly. With several Agents, it shows a picker.
+`watch` starts a temporary loopback capability host and opens the read-only multi-Agent board in your default browser. The board can show up to eight Agent columns, persistent local aliases/order/widths, command lifecycle/output, structured file diffs, stdin/kill interactions, older history on demand, and lazy audit detail.
 
-Watch one known Agent:
-
-```bash
-zodex local watch --agent k7m2
-```
-
-Watch all Agents deliberately:
+The terminal viewer remains available explicitly:
 
 ```bash
-zodex local watch --all
+zodex local watch --tui
+zodex local watch --tui --agent k7m2
+zodex local watch --tui --all
 ```
 
-`watch` is only a viewer. Opening or closing it does not start, stop, or extend Local.
+`--agent` and `--all` are TUI-only filters. Liveboard manages visible Agents through its **All Agents** drawer instead.
 
-See [Local watch TUI](/docs/local/watch) for the full first-party interface, or [Local observability API](/docs/local/observability-api) to build your own client.
+`watch` is only a viewer. Opening or closing it does not start, stop, or extend Local. The browser never receives the observer Bearer: native Zodex proxies an allowlisted read-only surface through the temporary same-origin capability URL.
+
+See [Watch and Liveboard](/docs/local/watch) for the full first-party interface, or [Local observability API](/docs/local/observability-api) to build your own client.
 
 ## Inspect durable history
 
@@ -235,7 +231,7 @@ cd ~/code/my-project
 zodex local start --ttl 4h
 
 # Use one or more ChatGPT conversations.
-# Optional: observe them in another terminal.
+# Optional: open the browser Liveboard.
 zodex local watch
 
 # When finished:
@@ -251,5 +247,5 @@ You only need `zodex local setup` again when you want to replace tunnel credenti
 - [Configuration](/docs/local/configuration) — retention and non-secret Local settings.
 - [Local command reference](/docs/local/command-reference) — every `zodex local` command and flag.
 - [Local troubleshooting](/docs/local/troubleshooting) — tunnel, startup, Keychain, privacy, Agent, and history problems.
-- [Local watch TUI](/docs/local/watch) — the first-party real-time observability client.
+- [Watch and Liveboard](/docs/local/watch) — browser Liveboard by default, explicit terminal TUI, board controls, output/diff behavior, and recovery.
 - [Local observability API](/docs/local/observability-api) — build your own web dashboard, Swift/menu-bar client, terminal UI, editor integration, or other read-only observer.

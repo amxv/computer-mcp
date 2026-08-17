@@ -88,21 +88,23 @@ zodex local watch [OPTIONS]
 Options:
 
 ```text
---agent <AGENT>  watch/wait for one four-character Agent ID
---all            combine all Agents
+--tui            use the terminal viewer instead of the default web Liveboard
+--agent <AGENT>  in TUI mode, watch/wait for one four-character Agent ID
+--all            in TUI mode, combine all Agents
 ```
 
-`--agent` and `--all` cannot be combined.
+`--agent` requires `--tui` and cannot be combined with `--all`. `--all` also requires `--tui`.
 
 Examples:
 
 ```bash
 zodex local watch
-zodex local watch --agent k7m2
-zodex local watch --all
+zodex local watch --tui
+zodex local watch --tui --agent k7m2
+zodex local watch --tui --all
 ```
 
-`watch` is the first-party client of Local's public read-only observability API. See [Local watch TUI](/docs/local/watch) for the interface and [Local observability API](/docs/local/observability-api) to build another client.
+Plain `watch` starts the temporary same-origin Liveboard host and opens the browser UI. The terminal viewer is explicit. See [Watch and Liveboard](/docs/local/watch) for both interfaces and [Local observability API](/docs/local/observability-api) to build another client.
 
 ## `zodex local history`
 

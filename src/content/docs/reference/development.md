@@ -25,7 +25,32 @@ cargo run --quiet --bin zodex-agent -- --help
 cargo run --quiet --bin zodex-agent -- github publish-pr --help
 ```
 
-The tests cover binary manifests, CLI parity, GitHub App scripts, install behavior, Sprite scripts, zodex-agent forwarding, MCP tool registration, session handling, redaction, patch application, mode-first CLI contracts, and public documentation contracts.
+The tests cover binary manifests, CLI behavior, GitHub App scripts, install behavior, Sprite scripts, zodex-agent forwarding, MCP tool registration, session handling, redaction, patch application, and mode-first product contracts.
+
+## Liveboard checks
+
+Liveboard is an isolated frontend package under `web/liveboard`. On macOS its production assets are embedded into the `zodex` binary by `build.rs`; Linux/Sprite builds do not require frontend tooling.
+
+```bash
+cd web/liveboard
+bun install --frozen-lockfile
+bunx playwright install chromium webkit
+bun run typecheck
+bun run test
+bun run test:browser
+bun run test:browser:webkit
+bun run build
+```
+
+Do not commit `web/liveboard/node_modules/` or `web/liveboard/dist/`.
+
+For an embed-required macOS validation, build the frontend first and then run Cargo with:
+
+```bash
+ZODEX_LIVEBOARD_EMBED_REQUIRED=1 cargo test
+```
+
+CI does this only on the native macOS lane. Release builds likewise install Bun/build Liveboard only for the Apple target; Linux/Sprite release targets stay independent of the frontend toolchain.
 
 ## Docs site checks
 
@@ -58,7 +83,7 @@ Keep docs tied to actual zodex behavior:
 - keep MCP as the supported remote coding transport; do not reintroduce deleted legacy transports
 - update command examples when Clap arguments change
 - when Local observability routes, response fields, filters, SSE event types, discovery fields, API/presentation versions, or recovery semantics change, update [Local observability API](/docs/local/observability-api) in the same change
-- when the first-party watch picker, filters, keyboard controls, presentation behavior, or recovery UX changes, update [Local watch TUI](/docs/local/watch) in the same change
+- when Liveboard/TUI controls, board behavior, presentation, or recovery UX changes, update [Watch and Liveboard](/docs/local/watch) in the same change
 
 ## Repository scripts
 
@@ -80,6 +105,6 @@ cargo test --quiet --test github_app_scripts
 
 ## Release awareness
 
-The crate version is defined in `Cargo.toml`. The repository uses tagged releases; at the time this docs site was added, the latest checked-out tag was `v0.2.10`.
+The crate version is defined in `Cargo.toml`. The repository uses tagged releases.
 
-When a release changes CLI arguments, binary names, setup behavior, or service layout, update the docs site in the same change.
+When a release changes CLI arguments, binary names, setup behavior, service layout, Liveboard assets, or public observer contracts, update the docs site in the same change.

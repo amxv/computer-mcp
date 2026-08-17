@@ -8,6 +8,13 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## Unreleased
+
+- Made `zodex local watch` open the read-only browser Liveboard by default while preserving the terminal viewer behind explicit `--tui` / TUI-only Agent filters.
+- Added a multi-Agent Liveboard with persistent UI-only aliases/order/column sizing, independent virtualized Agent timelines, bounded live command output, canonical structured file diffs, theme-aware local syntax highlighting, and lazy audit drill-down.
+- Extended Local observability with presentation schema v2, live event schema v2, canonical timeline/detail/checkpoint routes, output metadata plus raw/display views, selective live PTY output, and durable reconnect/gap recovery.
+- Kept browser credentials behind a temporary same-origin capability host: Liveboard JavaScript never receives the managed observer Bearer.
+
 ## 0.3.1 - 2026-08-17
 
 - Made Sprite daemon cleanup match exact process commands, preventing the cleanup shell from terminating itself during upgrades.

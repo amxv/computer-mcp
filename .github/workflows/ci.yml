@@ -8,6 +8,7 @@ on:
     paths:
       - .github/workflows/ci.yml
       - .github/workflows/release.yml
+      - build.rs
       - Cargo.toml
       - Cargo.lock
       - README.md
@@ -18,12 +19,14 @@ on:
       - scripts/install.sh
       - src/**
       - tests/**
+      - web/liveboard/**
   pull_request:
     branches:
       - main
     paths:
       - .github/workflows/ci.yml
       - .github/workflows/release.yml
+      - build.rs
       - Cargo.toml
       - Cargo.lock
       - README.md
@@ -34,6 +37,7 @@ on:
       - scripts/install.sh
       - src/**
       - tests/**
+      - web/liveboard/**
   workflow_dispatch:
 
 permissions:
@@ -95,11 +99,35 @@ jobs:
         with:
           targets: aarch64-apple-darwin
 
+      - name: Install Bun for Liveboard
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+
+      - name: Install Liveboard dependencies and browsers
+        working-directory: web/liveboard
+        run: |
+          bun install --frozen-lockfile
+          bunx playwright install chromium webkit
+
+      - name: Validate and build Liveboard
+        working-directory: web/liveboard
+        run: |
+          bun run typecheck
+          bun run test
+          bun run test:browser
+          bun run test:browser:webkit
+          bun run build
+
       - name: Validate product and MCP contract
+        env:
+          ZODEX_LIVEBOARD_EMBED_REQUIRED: "1"
         run: bash scripts/check-product-contract.sh
 
       - name: Run repository validation
         shell: bash
+        env:
+          ZODEX_LIVEBOARD_EMBED_REQUIRED: "1"
         run: |
           set -euo pipefail
           log="$(mktemp)"

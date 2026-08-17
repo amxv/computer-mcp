@@ -3,19 +3,40 @@ use std::io::{BufRead as _, BufReader, Write as _};
 use std::net::TcpListener;
 use std::process::Command;
 use std::thread;
+use std::time::{Duration, Instant};
 
 use tempfile::tempdir;
 
 #[test]
 fn documented_python_observer_client_authenticates_and_consumes_sse() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind observer fixture");
+    listener
+        .set_nonblocking(true)
+        .expect("set observer fixture nonblocking");
     let addr = listener.local_addr().unwrap();
     let token = "phase11-observer-fixture-token-0123456789abcdef";
     let server_token = token.to_string();
 
     let server = thread::spawn(move || {
-        for expected_path in ["/v1/agents", "/v1/events?agent_id=k7m2"] {
-            let (mut stream, _) = listener.accept().expect("accept client request");
+        for expected_path in [
+            "/v1/agents?runtime=current",
+            "/v1/timeline?limit=20&agent_id=k7m2",
+            "/v1/events?agent_id=k7m2",
+        ] {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let (mut stream, _) = loop {
+                match listener.accept() {
+                    Ok(connection) => break connection,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(
+                            Instant::now() < deadline,
+                            "timed out waiting for documented client request {expected_path}"
+                        );
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("accept client request {expected_path}: {error}"),
+                }
+            };
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             let mut request_line = String::new();
             reader.read_line(&mut request_line).unwrap();
@@ -37,7 +58,7 @@ fn documented_python_observer_client_authenticates_and_consumes_sse() {
             }
             assert!(authorized, "example client omitted observer bearer");
 
-            if expected_path == "/v1/agents" {
+            if expected_path == "/v1/agents?runtime=current" {
                 let body = r#"{"schema_version":1,"runtime_id":"fixture","agents":[{"id":"k7m2","first_seen_at_ms":1,"last_seen_at_ms":2,"seen_in_current_runtime":true,"active_process_count":0,"workdirs":[]}]}"#;
                 write!(
                     stream,
@@ -46,8 +67,17 @@ fn documented_python_observer_client_authenticates_and_consumes_sse() {
                     body
                 )
                 .unwrap();
+            } else if expected_path.starts_with("/v1/timeline?") {
+                let body = r#"{"schema_version":1,"presentation_version":2,"runtime_id":"fixture","records":[],"has_more":false,"next_cursor":null}"#;
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                )
+                .unwrap();
             } else {
-                let payload = r#"{"schema_version":1,"runtime_id":"fixture","sequence":1,"emitted_at_ms":3,"event_type":"invocation_started","agent_id":"k7m2","invocation_id":7,"presentation_revision":1,"payload":{"tool_name":"exec_command"}}"#;
+                let payload = r#"{"schema_version":2,"runtime_id":"fixture","sequence":1,"emitted_at_ms":3,"event_type":"invocation_started","agent_id":"k7m2","invocation_id":7,"presentation_id":"inv-7","presentation_revision":1,"payload":{"tool_name":"exec_command"}}"#;
                 let body = format!("id: 1\nevent: invocation_started\ndata: {payload}\n\n");
                 write!(
                     stream,
@@ -67,7 +97,7 @@ fn documented_python_observer_client_authenticates_and_consumes_sse() {
     fs::write(
         &discovery,
         format!(
-            r#"{{"schema_version":1,"runtime_id":"fixture","pid":1,"start_directory":"/tmp","started_at":"2026-08-16T00:00:00Z","expires_at":null,"observability":{{"api_version":1,"presentation_version":1,"base_url":"http://{addr}","bearer_token_path":{},"history_available":true,"sse_available":true}}}}"#,
+            r#"{{"schema_version":1,"runtime_id":"fixture","pid":1,"start_directory":"/tmp","started_at":"2026-08-16T00:00:00Z","expires_at":null,"observability":{{"api_version":1,"presentation_version":2,"base_url":"http://{addr}","bearer_token_path":{},"history_available":true,"sse_available":true}}}}"#,
             serde_json::to_string(&bearer).unwrap()
         ),
     )

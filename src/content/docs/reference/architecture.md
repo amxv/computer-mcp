@@ -46,9 +46,11 @@ Local is intentionally **trusted-host execution**, not a sandbox. It inherits yo
 
 One Local runtime can serve several independent ChatGPT conversations. Agent-aware history/observation groups activity for understanding, not for permission isolation.
 
-Local also exposes a separate read-only localhost observability API. The first-party `zodex local watch` client consumes the same public local API available to custom dashboards or desktop integrations.
+Local also exposes a separate authenticated read-only localhost observability API. It owns the canonical Agent/presentation timeline, durable output/audit resources, and live SSE contract independently of the MCP execution listener.
 
-Read [Local](/docs/local), [Daily use](/docs/local/daily-use), and [Local observability API](/docs/local/observability-api).
+`zodex local watch` starts the first-party Liveboard by default. A temporary same-origin loopback capability host serves the embedded browser assets and proxies only allowlisted observer resources, keeping the observer Bearer out of browser JavaScript. `zodex local watch --tui` uses the terminal presentation of the same public observer contract.
+
+Read [Local](/docs/local), [Daily use](/docs/local/daily-use), [Watch and Liveboard](/docs/local/watch), and [Local observability API](/docs/local/observability-api).
 
 ## Sprite
 
