@@ -210,6 +210,56 @@ sudo -u {user} env HOME={home:?} git config --global --replace-all url.{rewrite_
     )
 }
 
+fn github_default_agent_git_repair_script() -> String {
+    let helper = expected_zodex_agent_git_helper();
+    format!(
+        r#"helper_cmd={helper:?}
+sudo -u {user} env HOME={home:?} git config --global --replace-all credential.https://github.com.helper "$helper_cmd"
+sudo -u {user} env HOME={home:?} git config --global credential.https://github.com.useHttpPath true
+sudo -u {user} env HOME={home:?} git config --global --unset-all url.{rewrite_target:?}.pushInsteadOf || true
+"#,
+        user = ZODEX_AGENT_USER,
+        home = ZODEX_AGENT_HOME,
+        rewrite_target = GITHUB_PUSH_REWRITE_TARGET,
+    )
+}
+
+fn reconcile_github_agent_git_for_mode(resolved: &ResolvedSprite) -> Result<()> {
+    let state_args = vec![
+        "bash".to_string(),
+        "-lc".to_string(),
+        format!(
+            "if sudo test -f {GITHUB_MODE_STATE_PATH}; then sudo cat {GITHUB_MODE_STATE_PATH}; fi"
+        ),
+    ];
+    let raw = run_sprite_exec(
+        &resolved.name,
+        resolved.org.as_deref(),
+        &state_args,
+        &[],
+    )?;
+    let yolo_active = if raw.trim().is_empty() {
+        false
+    } else {
+        let record: GithubModeRecord = serde_json::from_str(&raw)
+            .context("failed to parse remote GitHub mode state while reconciling agent Git")?;
+        record.mode == "yolo" && !github_mode_expired(&record, current_epoch_seconds()?)
+    };
+    let repair_script = if yolo_active {
+        github_yolo_agent_git_repair_script()
+    } else {
+        github_default_agent_git_repair_script()
+    };
+    let repair_args = vec!["bash".to_string(), "-lc".to_string(), repair_script];
+    run_sprite_exec(
+        &resolved.name,
+        resolved.org.as_deref(),
+        &repair_args,
+        &[],
+    )?;
+    Ok(())
+}
+
 fn github_yolo_agent_git_inspect_script() -> String {
     format!(
         r#"helper="$(sudo -u {user} env HOME={home:?} git config --global --get credential.https://github.com.helper || true)"
@@ -434,10 +484,11 @@ fn enable_github_yolo_mode(
 }
 
 fn disable_github_yolo_mode(resolved: &ResolvedSprite) -> Result<()> {
+    let repair_agent_git = github_default_agent_git_repair_script();
     let exec_args = vec![
         "bash".to_string(),
         "-lc".to_string(),
-        format!("sudo rm -f {GITHUB_MODE_STATE_PATH}"),
+        format!("sudo rm -f {GITHUB_MODE_STATE_PATH}\n{repair_agent_git}"),
     ];
     run_sprite_exec(&resolved.name, resolved.org.as_deref(), &exec_args, &[])?;
     println!("github-mode: default");

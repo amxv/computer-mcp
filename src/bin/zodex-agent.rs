@@ -28,10 +28,6 @@ enum Commands {
         remote: String,
         url: String,
     },
-    ShowUrl {
-        #[arg(long, default_value = "127.0.0.1")]
-        host: String,
-    },
     Github {
         #[command(subcommand)]
         command: GithubCommand,
@@ -114,11 +110,6 @@ fn build_runtime_args(cli: Cli) -> Vec<String> {
             args.push("git-remote-zodex".to_string());
             args.push(remote);
             args.push(url);
-        }
-        Commands::ShowUrl { host } => {
-            args.push("show-url".to_string());
-            args.push("--host".to_string());
-            args.push(host);
         }
         Commands::Github { command } => {
             args.push("github".to_string());

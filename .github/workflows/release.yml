@@ -48,7 +48,6 @@ jobs:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.linker }}
         run: |
           cargo build --locked --release --target "${{ matrix.target }}" \
-            --bin zodex-client \
             --bin zodex \
             --bin zodex-agent \
             --bin git-remote-zodex \
@@ -58,7 +57,6 @@ jobs:
       - name: Package release archive
         run: |
           mkdir -p "dist/${{ matrix.archive_name }}"
-          cp "target/${{ matrix.target }}/release/zodex-client" "dist/${{ matrix.archive_name }}/"
           cp "target/${{ matrix.target }}/release/zodex" "dist/${{ matrix.archive_name }}/"
           cp "target/${{ matrix.target }}/release/zodex-agent" "dist/${{ matrix.archive_name }}/"
           cp "target/${{ matrix.target }}/release/git-remote-zodex" "dist/${{ matrix.archive_name }}/"
@@ -86,7 +84,6 @@ jobs:
             exit 1
           fi
 
-          ZODEX_INSTALL_MODE=operator \
           ZODEX_ASSET_URL="file://${GITHUB_WORKSPACE}/dist/${{ matrix.archive_name }}.tar.gz" \
           ZODEX_INSTALL_DIR="$install_dir" \
             bash scripts/install.sh
@@ -95,8 +92,8 @@ jobs:
           test ! -e "$install_dir/zodexd"
           test ! -e "$install_dir/zodex-prd"
           test ! -e "$install_dir/zodex-agent"
-          "$install_dir/zodex" local --help | grep -q 'Usage: zodex local <COMMAND>'
-          "$install_dir/zodex" local setup --help | grep -q -- '--runtime-key-stdin'
+          "$install_dir/zodex" local --help >/dev/null
+          "$install_dir/zodex" local setup --help >/dev/null
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4

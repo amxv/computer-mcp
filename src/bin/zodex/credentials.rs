@@ -1,117 +1,3 @@
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-struct GitCredentialRequest {
-    protocol: Option<String>,
-    host: Option<String>,
-    path: Option<String>,
-    url: Option<String>,
-    username: Option<String>,
-}
-
-async fn handle_git_credential_helper(config: &Config, operation: &str) -> Result<()> {
-    let request = read_git_credential_request()?;
-
-    if operation != "get" || !git_credential_request_targets_github(&request) {
-        return Ok(());
-    }
-
-    if let Some(grant) = load_matching_push_grant(&request, Path::new(PUSH_GRANTS_DIR))? {
-        println!("username=x-access-token");
-        println!("password={}", grant.token);
-        println!();
-        return Ok(());
-    }
-
-    ensure_reader_ready_for_start(config)?;
-    let token = mint_reader_installation_token(
-        config.reader_app_id.unwrap_or_default(),
-        Path::new(&config.reader_private_key_path),
-        config.reader_installation_id.unwrap_or_default(),
-    )
-    .await?;
-
-    println!("username=x-access-token");
-    println!("password={token}");
-    println!();
-    Ok(())
-}
-
-fn read_git_credential_request() -> Result<GitCredentialRequest> {
-    let mut raw = String::new();
-    io::stdin()
-        .read_to_string(&mut raw)
-        .context("failed to read git credential request from stdin")?;
-    Ok(parse_git_credential_request(&raw))
-}
-
-fn parse_git_credential_request(raw: &str) -> GitCredentialRequest {
-    let mut request = GitCredentialRequest::default();
-
-    for line in raw.lines().filter(|line| !line.trim().is_empty()) {
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-
-        match key {
-            "protocol" => request.protocol = Some(value.to_string()),
-            "host" => request.host = Some(value.to_string()),
-            "path" => request.path = Some(value.to_string()),
-            "url" => request.url = Some(value.to_string()),
-            "username" => request.username = Some(value.to_string()),
-            _ => {}
-        }
-    }
-
-    request
-}
-
-fn git_credential_request_targets_github(request: &GitCredentialRequest) -> bool {
-    let protocol = request
-        .protocol
-        .as_deref()
-        .or_else(|| request.url.as_deref().and_then(credential_url_protocol));
-    let host = request
-        .host
-        .as_deref()
-        .or_else(|| request.url.as_deref().and_then(credential_url_host));
-
-    matches!(protocol, Some(protocol) if protocol.eq_ignore_ascii_case("https"))
-        && matches!(host, Some(host) if credential_host_is_github(host))
-}
-
-fn credential_url_protocol(url: &str) -> Option<&str> {
-    url.split_once("://").map(|(scheme, _)| scheme)
-}
-
-fn credential_url_host(url: &str) -> Option<&str> {
-    let (_, rest) = url.split_once("://")?;
-    let host = rest.split('/').next()?;
-    Some(host.split('@').next_back().unwrap_or(host))
-}
-
-fn credential_url_path(url: &str) -> Option<&str> {
-    let (_, rest) = url.split_once("://")?;
-    let (_, path) = rest.split_once('/')?;
-    Some(path)
-}
-
-fn credential_host_is_github(host: &str) -> bool {
-    let normalized = host
-        .split(':')
-        .next()
-        .unwrap_or(host)
-        .trim_end_matches('.')
-        .to_ascii_lowercase();
-    normalized == "github.com" || normalized == "www.github.com"
-}
-
-fn git_credential_request_repo(request: &GitCredentialRequest) -> Option<String> {
-    let path = request
-        .path
-        .as_deref()
-        .or_else(|| request.url.as_deref().and_then(credential_url_path))?;
-    normalize_github_repo(path)
-}
-
 fn normalize_github_repo(path: &str) -> Option<String> {
     let trimmed = path.trim_matches('/');
     let trimmed = trimmed.strip_suffix(".git").unwrap_or(trimmed);
@@ -151,14 +37,31 @@ fn load_operator_sprite_registry_from_path(path: &Path) -> Result<OperatorSprite
     }
     let raw = fs::read_to_string(path)
         .with_context(|| format!("failed to read Sprite registry at {}", path.display()))?;
-    serde_json::from_str(&raw)
-        .with_context(|| format!("failed to parse Sprite registry at {}", path.display()))
+    let mut registry: OperatorSpriteRegistry = serde_json::from_str(&raw)
+        .with_context(|| format!("failed to parse Sprite registry at {}", path.display()))?;
+    match registry.version {
+        1 => registry.version = OPERATOR_SPRITES_REGISTRY_VERSION,
+        OPERATOR_SPRITES_REGISTRY_VERSION => {}
+        other => bail!(
+            "unsupported Sprite registry version {other} at {}; expected <= {}",
+            path.display(),
+            OPERATOR_SPRITES_REGISTRY_VERSION
+        ),
+    }
+    Ok(registry)
 }
 
 fn save_operator_sprite_registry_to_path(
     path: &Path,
     registry: &OperatorSpriteRegistry,
 ) -> Result<()> {
+    if registry.version != OPERATOR_SPRITES_REGISTRY_VERSION {
+        bail!(
+            "refusing to write Sprite registry version {}; expected {}",
+            registry.version,
+            OPERATOR_SPRITES_REGISTRY_VERSION
+        );
+    }
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
@@ -189,14 +92,85 @@ fn upsert_operator_sprite_record(
 fn register_operator_sprite(sprite: &str, org: Option<&str>, remote_config: &Path) -> Result<()> {
     let path = operator_sprites_registry_path()?;
     let mut registry = load_operator_sprite_registry_from_path(&path)?;
+    let setup_at = format_epoch_seconds_rfc3339(current_epoch_seconds()?)?;
+    update_operator_sprite_setup_record(&mut registry, sprite, org, remote_config, &setup_at);
+    save_operator_sprite_registry_to_path(&path, &registry)
+}
+
+fn update_operator_sprite_setup_record(
+    registry: &mut OperatorSpriteRegistry,
+    sprite: &str,
+    org: Option<&str>,
+    remote_config: &Path,
+    setup_at: &str,
+) {
+    let existing_proxy = registry
+        .sprites
+        .iter()
+        .find(|candidate| candidate.name == sprite && candidate.org.as_deref() == org)
+        .and_then(|candidate| candidate.proxy.clone());
     let record = OperatorSpriteRecord {
         name: sprite.to_string(),
         org: org.map(str::to_string),
         remote_config: remote_config.display().to_string(),
-        last_setup_at: format_epoch_seconds_rfc3339(current_epoch_seconds()?)?,
+        last_setup_at: setup_at.to_string(),
+        proxy: existing_proxy,
     };
-    upsert_operator_sprite_record(&mut registry, record);
+    upsert_operator_sprite_record(registry, record);
+}
+
+fn operator_sprite_record<'a>(
+    registry: &'a OperatorSpriteRegistry,
+    sprite: &ResolvedSprite,
+) -> Option<&'a OperatorSpriteRecord> {
+    registry.sprites.iter().find(|candidate| {
+        candidate.name == sprite.name && candidate.org.as_deref() == sprite.org.as_deref()
+    })
+}
+
+fn operator_sprite_record_mut<'a>(
+    registry: &'a mut OperatorSpriteRegistry,
+    sprite: &ResolvedSprite,
+) -> Option<&'a mut OperatorSpriteRecord> {
+    registry.sprites.iter_mut().find(|candidate| {
+        candidate.name == sprite.name && candidate.org.as_deref() == sprite.org.as_deref()
+    })
+}
+
+fn load_operator_sprite_record(sprite: &ResolvedSprite) -> Result<Option<OperatorSpriteRecord>> {
+    let registry = load_operator_sprite_registry_from_path(&operator_sprites_registry_path()?)?;
+    Ok(operator_sprite_record(&registry, sprite).cloned())
+}
+
+fn save_operator_sprite_proxy_record(
+    sprite: &ResolvedSprite,
+    proxy: OperatorSpriteProxyRecord,
+) -> Result<()> {
+    let path = operator_sprites_registry_path()?;
+    let mut registry = load_operator_sprite_registry_from_path(&path)?;
+    update_operator_sprite_proxy_record(&mut registry, sprite, proxy);
     save_operator_sprite_registry_to_path(&path, &registry)
+}
+
+fn update_operator_sprite_proxy_record(
+    registry: &mut OperatorSpriteRegistry,
+    sprite: &ResolvedSprite,
+    proxy: OperatorSpriteProxyRecord,
+) {
+    if let Some(record) = operator_sprite_record_mut(registry, sprite) {
+        record.proxy = Some(proxy);
+    } else {
+        registry.sprites.push(OperatorSpriteRecord {
+            name: sprite.name.clone(),
+            org: sprite.org.clone(),
+            remote_config: DEFAULT_CONFIG_PATH.to_string(),
+            last_setup_at: String::new(),
+            proxy: Some(proxy),
+        });
+        registry
+            .sprites
+            .sort_by(|a, b| (&a.org, &a.name).cmp(&(&b.org, &b.name)));
+    }
 }
 
 fn resolve_remote_sprite_from_registry(
@@ -384,49 +358,6 @@ fn parse_push_grant_ttl(raw: &str) -> Result<Duration> {
         .checked_mul(multiplier_seconds)
         .ok_or_else(|| anyhow!("push grant TTL is too large"))?;
     Ok(Duration::from_secs(seconds))
-}
-
-fn write_local_push_grant(repo: &str, grant: &PushGrantRecord) -> Result<()> {
-    let path = push_grant_path(repo);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create {}", parent.display()))?;
-    }
-    let raw = serde_json::to_vec_pretty(grant).context("failed to encode push grant")?;
-    fs::write(&path, raw).with_context(|| format!("failed to write {}", path.display()))?;
-    #[cfg(unix)]
-    {
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o640))
-            .with_context(|| format!("failed to chmod {}", path.display()))?;
-    }
-    Ok(())
-}
-
-fn load_push_grant_from_dir(repo: &str, grants_dir: &Path) -> Result<Option<PushGrantRecord>> {
-    let path = grants_dir.join(push_grant_file_name(repo));
-    if !path.exists() {
-        return Ok(None);
-    }
-
-    let raw =
-        fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
-    let grant: PushGrantRecord = serde_json::from_str(&raw)
-        .with_context(|| format!("failed to parse {}", path.display()))?;
-    if push_grant_expired(&grant, current_epoch_seconds()?) {
-        let _ = fs::remove_file(&path);
-        return Ok(None);
-    }
-    Ok(Some(grant))
-}
-
-fn load_matching_push_grant(
-    request: &GitCredentialRequest,
-    grants_dir: &Path,
-) -> Result<Option<PushGrantRecord>> {
-    let Some(repo) = git_credential_request_repo(request) else {
-        return Ok(None);
-    };
-    load_push_grant_from_dir(&repo, grants_dir)
 }
 
 fn parse_push_grants(raw: &str) -> Result<Vec<PushGrantRecord>> {

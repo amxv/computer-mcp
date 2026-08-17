@@ -1,27 +1,27 @@
 ---
 title: "Architecture"
-description: "Understand the two first-class Zodex deployment paths and the small tool contract they share without diving into repository internals."
+description: "Understand Zodex's two first-class execution modes, their different trust/connection models, and the three-tool MCP contract they share."
 order: 1
 category: Reference
-summary: "Sprite is a remote Linux workspace with scoped GitHub autonomy; Local is trusted direct Mac execution. Both expose the same three MCP tools."
+summary: "Local is trusted direct Mac execution through OpenAI Secure MCP Tunnel; Sprite is wake-on-demand remote Linux through the canonical Cloudflare Worker."
 ---
 
 Zodex has two first-class ways to give ChatGPT a real coding machine:
 
-| | Sprite | Local |
+| | Local | Sprite |
 | --- | --- | --- |
-| Machine | Remote Sprite-backed Linux | Your Apple Silicon Mac |
-| Trust model | Isolated remote workspace + scoped GitHub write policy | Trusted host; commands run as your Mac user |
-| Connection | Public Sprite MCP URL, optionally proxied | OpenAI Secure MCP Tunnel |
-| GitHub permissions | Reader App + publisher/grants/YOLO | Whatever Git/network credentials your Mac user already has |
-| Lifecycle | Remote Sprite services | One explicit Mac runtime, optional TTL |
-| Observability | Normal command/service tooling | Public localhost observability API + first-party TUI + durable history |
+| Machine | Your Apple Silicon Mac | Wake-on-demand remote Linux Sprite |
+| Trust model | Trusted host; commands run as your logged-in user | Restricted agent account plus isolated GitHub writer boundary |
+| ChatGPT connection | OpenAI Secure MCP Tunnel | Canonical Cloudflare Worker → public Sprite wake edge |
+| GitHub permissions | Your existing Mac user/network credentials | Reader App + isolated writer App + grants/YOLO policy |
+| Lifecycle | Explicit local runtime, optional TTL | Automatic sleep/wake; no user start/stop state |
+| Observability | Durable Agent history + live observer/API | Sprite Service/Worker/operator diagnostics |
 
-Choose the machine/trust model first. The ChatGPT-facing coding workflow stays familiar in both cases.
+Choose the host/trust model first. The model-facing coding contract is intentionally the same.
 
-## What both modes share
+## Shared MCP surface
 
-ChatGPT receives only:
+ChatGPT receives exactly:
 
 ```text
 exec_command
@@ -29,92 +29,99 @@ write_stdin
 apply_patch
 ```
 
-That is enough to:
+Every `exec_command` and `apply_patch` call names an explicit absolute existing `workdir`. There is no ambient/default model-visible working-directory fallback.
 
-- inspect repositories;
-- edit files;
-- run builds/tests;
-- keep long-running processes alive;
-- poll or send input to those processes;
-- use normal Git commands appropriate to the deployment's permissions.
+The shared service/session layer provides PTY-backed commands, long-running process handles, bounded output, process-group cleanup, and Codex-style patch application. See [MCP tools](/docs/reference/tools).
 
-See [MCP tools](/docs/reference/tools).
-
-Every command and patch has an explicit absolute workdir. This keeps routing clear when one server is used by more than one conversation/workspace.
-
-## Sprite at a glance
+## Local
 
 ```text
-ChatGPT
-   |
-public MCP URL
-   |
-Sprite Linux workspace
-   |
-reader GitHub App + selected writer policy
+ChatGPT custom app
+  → OpenAI Secure MCP Tunnel
+  → loopback Zodex Local runtime
+  → your logged-in Mac user
 ```
 
-The Sprite itself is the remote working environment. ChatGPT can change files and run arbitrary commands inside that machine, while GitHub network write access is separately controlled.
+Local is intentionally **trusted-host execution**, not a sandbox. It inherits your macOS filesystem permissions, developer tools, shell environment, and user credentials. macOS privacy controls remain authoritative.
 
-Use:
+One Local runtime can serve several independent ChatGPT conversations. Agent-aware history/observation groups activity for understanding, not for permission isolation.
 
-- [Sprite](/docs/sprite) to set it up;
-- [Sprite permissions and autonomy](/docs/sprite/permissions) to understand the boundary;
-- [Sprite write modes](/docs/sprite/write-modes) to choose PR/grant/YOLO behavior.
+Local also exposes a separate read-only localhost observability API. The first-party `zodex local watch` client consumes the same public local API available to custom dashboards or desktop integrations.
 
-## Local at a glance
+Read [Local](/docs/local), [Daily use](/docs/local/daily-use), and [Local observability API](/docs/local/observability-api).
+
+## Sprite
 
 ```text
-ChatGPT
-   |
-OpenAI Secure MCP Tunnel
-   |
-your Mac
-   |
-your shell, files, developer tools, and user credentials
+ChatGPT custom app
+  → Cloudflare Worker
+  → public Sprite HTTPS wake edge
+  → plain-HTTP zodexd Sprite Service
+  → restricted zodex-agent workspace
 ```
 
-Local is intentionally a trusted-host path. It is not a per-repo sandbox. One running Local service can serve several independent ChatGPT conversations at once, and each tool call names the absolute workdir it wants to use.
+The **Cloudflare Worker is the supported ChatGPT front door**. It performs idempotent wake/readiness work before forwarding to the raw Sprite origin. A dispatched MCP request is sent upstream at most once; the Worker never blindly replays a possibly side-effecting tool call.
 
-Use:
+The raw Sprite URL must remain public so the Worker can wake/reach it. That does not make Zodex execution public: `/mcp` still requires the secret Zodex query capability. Users connect with `zodex sprite connect`, which validates the registered Worker and deliberately copies/reveals the capability endpoint.
 
-- [Local](/docs/local) to set it up;
-- [Local daily use](/docs/local/daily-use) for the normal workflow;
-- [Local troubleshooting](/docs/local/troubleshooting) for Mac/tunnel problems.
+Inside the guest, the runtime consists of:
 
-## Local start directory versus command workdir
+- `zodex-agent` — restricted Agent-side GitHub helper;
+- `git-remote-zodex` — direct-push remote helper;
+- `zodexd` — MCP server on the Sprite Service HTTP port;
+- `zodex-prd` — isolated publisher/writer service.
 
-When you run:
+The operator `zodex` binary stays on the user's machine.
 
-```bash
-cd ~/code/project
-zodex local start
+## Sprite wake lifecycle
+
+There is no normal manual Sprite start/stop workflow. Incoming HTTP/operator activity wakes the environment, and the provider can suspend it again when idle.
+
+- `zodex sprite restart` restarts the managed Zodex services only.
+- `zodex sprite sync` reconciles desired Sprite Service definitions.
+- `zodex sprite upgrade` replaces/restarts the remote runtime.
+- root `zodex upgrade` upgrades only the local operator.
+
+## Sprite GitHub boundary
+
+Two user-owned GitHub Apps keep read and write authority separate:
+
+```text
+reader App
+  └─ Contents: Read-only
+
+writer App / zodex-prd
+  ├─ Contents: Read & write
+  ├─ Pull requests: Read & write
+  └─ Workflows: Read & write
 ```
 
-Local publishes that directory to ChatGPT as the **suggested initial explicit workdir**. This makes a fresh chat easy to start without silently changing the execution contract.
+The writer App also has Device Flow enabled for push-grant workflows. Its PEM is private to `zodex-publisher`; writer installation tokens stay inside the publisher boundary.
 
-The actual `exec_command` or `apply_patch` call still contains its own absolute workdir. An Agent can deliberately move to another repo later.
+A direct push still needs exact repository authorization through an explicit grant or active YOLO policy **and** writer installation/target coverage. `default` removes YOLO policy without deleting unrelated explicit grants.
 
-## Local Agents are observation, not permissions
+See [Permissions and autonomy](/docs/sprite/permissions) and [Write modes](/docs/sprite/write-modes).
 
-Zodex can group Local tool activity by ChatGPT conversation and show a short Agent ID such as `k7m2` in `watch` and history.
+## Sprite Worker deployment boundary
 
-That grouping does not create a separate sandbox, user account, or filesystem permission boundary. It exists so you can tell which conversation did what.
+The released operator embeds the tiny Worker source/config and materializes it in a temporary directory for Wrangler. Users do not need a Zodex checkout or a hand-maintained Wrangler project.
 
-## Local observability is a public client surface
+Permanent deployments use explicit Cloudflare account identity recorded as non-secret operator metadata. First unauthenticated setup may use Wrangler's temporary deployment/claim flow; Zodex surfaces the claim URL once but never persists it.
 
-Local exposes a separate read-only localhost HTTP API for runtime state, Agents, invocations, output, and live SSE. It supports server-side Agent filtering, workdir filtering on invocation queries, bounded output pagination, versioned presentation data, and durable recovery after a stream gap or disconnect.
+## Credentials are deliberately separate
 
-The built-in `zodex local watch` TUI is the first client of that API, not a privileged special case. You can build another client in any language against the same contract: a web dashboard, Swift/menu-bar app, terminal UI, editor integration, desktop app, or automation surface.
+Do not conflate these credentials:
 
-See [Local watch TUI](/docs/local/watch) and [Local observability API](/docs/local/observability-api).
+- OpenAI Secure MCP Tunnel runtime key — Local transport;
+- Local loopback/tunnel token — Local private MCP listener;
+- Sprite `?key=` capability — Sprite MCP authorization;
+- Cloudflare auth/claim state — Worker deployment;
+- reader App PEM — GitHub read path;
+- writer App PEM/tokens — publisher path;
+- repo grant/YOLO policy — direct-push authorization.
+
+Each belongs to a different boundary and should stay out of unrelated logs/configuration.
 
 ## Advanced protocol notes
 
-Most users can stop reading here. These details matter mainly when implementing an MCP client or debugging compatibility.
-
-The shared server foundation uses **RMCP 3.x** and accepts modern **MCP `2026-07-28` stateless requests**. Normal modern calls **do not depend on transport-session state**. Provider correlation metadata is consumed **outside the model-visible tool arguments**, so the model never receives bookkeeping fields such as an Agent ID.
-
-Local's managed tunnel authenticates to the private loopback MCP listener using a per-runtime `X-Zodex-Local-Token`. The OpenAI runtime key is stored in **macOS Keychain**, while the **observability server uses its own automatically managed localhost bearer**. These are separate credentials with different jobs.
-
-Those implementation details should not affect the normal Local setup: `zodex local setup`, `start`, `status`, `watch`, `history`, and `stop` manage them for you.
+The shared server foundation uses RMCP 3.x and accepts modern stateless MCP requests. Provider correlation metadata is consumed outside model-visible tool arguments, so bookkeeping does not expand the three-tool schema.

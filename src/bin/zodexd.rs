@@ -6,30 +6,28 @@ use clap::{Parser, Subcommand};
 use tracing::warn;
 use zodex::config::{Config, DEFAULT_CONFIG_PATH};
 use zodex::install_rustls_crypto_provider;
-use zodex::redaction::redact_api_key_query_params;
 use zodex::server::run_server;
 
 #[path = "zodexd/git_remote.rs"]
 mod git_remote;
 #[path = "zodexd/github.rs"]
 mod github;
-#[path = "zodexd/tls.rs"]
-mod tls;
 
 use git_remote::{handle_git_credential_helper, handle_git_remote_zodex};
 use github::{
     DEFAULT_PUSH_GRANT_TTL_SECONDS, list_push_grants, parse_push_grant_ttl, publish_pr,
     request_push_access, revoke_push_access,
 };
-use tls::ensure_tls_artifacts;
 
 #[cfg(test)]
 use git_remote::{
-    create_direct_push_bundle_base64_from_dir, git_remote_zodex_push_dst, git_remote_zodex_repo,
+    create_direct_push_bundle_from_dir, git_remote_zodex_push_dst, git_remote_zodex_repo,
     resolve_git_object_id, resolve_git_object_type, sanitize_remote_helper_error,
 };
 #[cfg(test)]
-use github::{PushGrantRecord, parse_push_grants, resolve_active_push_grant};
+use github::{
+    PushGrantRecord, parse_push_grants, resolve_active_push_grant, summarize_github_error_body,
+};
 
 #[derive(Debug, Parser)]
 #[command(name = "zodexd")]
@@ -49,17 +47,10 @@ enum Commands {
     #[command(hide = true)]
     GitRemoteZodex { remote: String, url: String },
     #[command(hide = true)]
-    ShowUrl {
-        #[arg(long, default_value = "127.0.0.1")]
-        host: String,
-    },
-    #[command(hide = true)]
     Github {
         #[command(subcommand)]
         command: GithubCommand,
     },
-    #[command(hide = true)]
-    EnsureTls,
 }
 
 #[derive(Debug, Subcommand)]
@@ -131,14 +122,6 @@ async fn run_hidden_command(config_path: &Path, command: Commands) -> Result<()>
             let config = Config::load(Some(config_path))?;
             handle_git_remote_zodex(&config, &url).await?;
         }
-        Commands::ShowUrl { host } => {
-            let config = Config::load(Some(config_path))?;
-            let raw_url = format!("https://{host}/mcp?key={}", config.api_key);
-            println!(
-                "{} (key redacted in CLI output)",
-                redact_api_key_query_params(&raw_url)
-            );
-        }
         Commands::Github { command } => {
             let config = Config::load(Some(config_path))?;
             match command {
@@ -185,9 +168,6 @@ async fn run_hidden_command(config_path: &Path, command: Commands) -> Result<()>
                 }
             }
         }
-        Commands::EnsureTls => {
-            ensure_tls_artifacts(config_path)?;
-        }
     }
 
     Ok(())
@@ -195,15 +175,11 @@ async fn run_hidden_command(config_path: &Path, command: Commands) -> Result<()>
 
 #[cfg(test)]
 mod tests {
-    use base64::Engine as _;
-
     use super::{
-        Args, PushGrantRecord, create_direct_push_bundle_base64_from_dir,
-        git_remote_zodex_push_dst, git_remote_zodex_repo, parse_push_grants,
-        resolve_active_push_grant, resolve_git_object_id, resolve_git_object_type,
-        sanitize_remote_helper_error,
+        PushGrantRecord, create_direct_push_bundle_from_dir, git_remote_zodex_push_dst,
+        git_remote_zodex_repo, parse_push_grants, resolve_active_push_grant, resolve_git_object_id,
+        resolve_git_object_type, sanitize_remote_helper_error, summarize_github_error_body,
     };
-    use clap::CommandFactory;
     use std::fs;
     use std::process::Command;
     use tempfile::tempdir;
@@ -218,15 +194,6 @@ mod tests {
     }
 
     #[test]
-    fn clap_help_uses_zodexd_name() {
-        let help = Args::command().render_long_help().to_string();
-        assert!(help.contains("zodexd"));
-        assert!(help.contains("remote execution"));
-        assert!(!help.contains("git-credential-helper"));
-        assert!(!help.contains("ensure-tls"));
-    }
-
-    #[test]
     fn push_grant_resolver_requires_an_active_push_grant() {
         let grants_dir = tempdir().expect("grants dir");
         let err = resolve_active_push_grant("owner/repo", grants_dir.path())
@@ -234,6 +201,15 @@ mod tests {
         let message = err.to_string();
         assert!(message.contains("no active push grant"));
         assert!(message.contains("request-push"));
+    }
+
+    #[test]
+    fn github_provider_error_body_does_not_dump_html() {
+        let html = "<html><body>provider error</body></html>";
+        assert_eq!(
+            summarize_github_error_body(html),
+            format!("non-JSON response body ({} bytes)", html.len())
+        );
     }
 
     #[test]
@@ -348,16 +324,10 @@ mod tests {
             ])
         ));
 
-        let bundle_base64 = create_direct_push_bundle_base64_from_dir(&repo, "refs/heads/smoke")
+        let bundle = create_direct_push_bundle_from_dir(&repo, "refs/heads/smoke")
             .expect("create bundle")
             .expect("branch push should have bundle contents");
-        fs::write(
-            &bundle_path,
-            base64::engine::general_purpose::STANDARD
-                .decode(bundle_base64)
-                .expect("decode bundle"),
-        )
-        .expect("write bundle");
+        fs::copy(bundle.path(), &bundle_path).expect("copy bundle");
 
         assert!(git_test_status(Command::new("git").args([
             "clone",
@@ -436,18 +406,12 @@ mod tests {
                 .args(["tag", "-a", "v1.0.0", "-m", "v1.0.0"])
         ));
 
-        let bundle_base64 = create_direct_push_bundle_base64_from_dir(&repo, "refs/tags/v1.0.0")
+        let bundle = create_direct_push_bundle_from_dir(&repo, "refs/tags/v1.0.0")
             .expect("create tag bundle")
             .expect(
                 "annotated tag object should produce a bundle even when target commit is remote",
             );
-        fs::write(
-            &bundle_path,
-            base64::engine::general_purpose::STANDARD
-                .decode(bundle_base64)
-                .expect("decode bundle"),
-        )
-        .expect("write bundle");
+        fs::copy(bundle.path(), &bundle_path).expect("copy bundle");
 
         assert!(git_test_status(Command::new("git").args([
             "clone",
@@ -527,10 +491,10 @@ mod tests {
                 .args(["tag", "v1.0.0"])
         ));
 
-        let bundle_base64 = create_direct_push_bundle_base64_from_dir(&repo, "refs/tags/v1.0.0")
+        let bundle = create_direct_push_bundle_from_dir(&repo, "refs/tags/v1.0.0")
             .expect("lightweight tag bundle attempt should not hard fail");
         assert!(
-            bundle_base64.is_none(),
+            bundle.is_none(),
             "lightweight tag on an already-remote commit has no new bundle objects"
         );
         let tag_oid = resolve_git_object_id(&repo, "refs/tags/v1.0.0").expect("tag oid");

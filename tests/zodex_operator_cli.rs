@@ -11,161 +11,32 @@ use zodex::invocation::{
 use zodex::local::{LocalHistoryRuntime, LocalHistoryRuntimeConfig, PRESENTATION_SCHEMA_VERSION};
 
 #[test]
-fn zodex_github_help_exposes_mode_commands() {
-    let output = Command::new(env!("CARGO_BIN_EXE_zodex"))
-        .args(["github", "--help"])
-        .output()
-        .expect("run zodex github --help");
-
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    assert!(stdout.contains("request-push"));
-    assert!(stdout.contains("grant-push"));
-    assert!(stdout.contains("revoke-push"));
-    assert!(stdout.contains("list-grants"));
-    assert!(stdout.contains("mode"));
-}
-
-#[test]
-fn zodex_github_mode_help_exposes_yolo_default_and_status() {
-    let output = Command::new(env!("CARGO_BIN_EXE_zodex"))
-        .args(["github", "mode", "--help"])
-        .output()
-        .expect("run zodex github mode --help");
-
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    assert!(stdout.contains("yolo"));
-    assert!(stdout.contains("default"));
-    assert!(stdout.contains("status"));
-}
-
-#[test]
-fn zodex_github_mode_yolo_help_exposes_expected_flags() {
-    let output = Command::new(env!("CARGO_BIN_EXE_zodex"))
-        .args(["github", "mode", "yolo", "--help"])
-        .output()
-        .expect("run zodex github mode yolo --help");
-
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    assert!(stdout.contains("--sprite"));
-    assert!(stdout.contains("--repo"));
-    assert!(stdout.contains("--ttl"));
-    assert!(stdout.contains("--no-ttl"));
-    assert!(stdout.contains("[default: 2h]"));
-}
-
-#[test]
-fn zodex_local_help_exposes_complete_public_family_and_inspection_examples() {
-    let output = Command::new(env!("CARGO_BIN_EXE_zodex"))
-        .args(["local", "--help"])
-        .output()
-        .expect("run zodex local --help");
-
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    for command in [
-        "setup", "start", "status", "watch", "history", "config", "stop",
+fn zodex_root_rejects_removed_commands_and_global_config() {
+    for args in [
+        vec!["install"],
+        vec!["start"],
+        vec!["stop"],
+        vec!["restart"],
+        vec!["status"],
+        vec!["logs"],
+        vec!["set-key", "secret"],
+        vec!["rotate-key"],
+        vec!["show-url"],
+        vec!["tls", "setup"],
+        vec!["publisher", "status"],
+        vec!["proxy", "status"],
+        vec!["github", "status"],
+        vec!["--config", "/etc/zodex/config.toml", "sprite", "status"],
     ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_zodex"))
+            .args(&args)
+            .output()
+            .unwrap_or_else(|error| panic!("run zodex {args:?}: {error}"));
         assert!(
-            stdout.contains(command),
-            "missing Local command {command}: {stdout}"
+            !output.status.success(),
+            "removed root syntax unexpectedly succeeded: zodex {args:?}"
         );
     }
-    assert!(stdout.contains("zodex local status --json"));
-    assert!(stdout.contains("zodex local history --last 20"));
-    assert!(stdout.contains("zodex local watch --tui --agent k7m2"));
-}
-
-#[test]
-fn zodex_local_subcommand_help_exposes_scriptable_contract() {
-    let cases: &[(&[&str], &[&str])] = &[
-        (
-            &["local", "setup", "--help"],
-            &[
-                "--tunnel-id",
-                "--runtime-key-stdin",
-                "--runtime-key-env",
-                "--runtime-key-fd",
-                "--rotate-observability-bearer",
-                "never put the secret itself on argv",
-                "does not bypass or configure TCC",
-                "Full Disk Access",
-            ],
-        ),
-        (
-            &["local", "start", "--help"],
-            &["PATH", "--ttl", "30min", "4h", "2d"],
-        ),
-        (&["local", "status", "--help"], &["--json"]),
-        (
-            &["local", "watch", "--help"],
-            &["--tui", "--agent", "--all", "default web Liveboard"],
-        ),
-        (
-            &["local", "history", "--help"],
-            &[
-                "--last",
-                "--since",
-                "--agent",
-                "--workdir",
-                "--id",
-                "--format",
-                "--raw",
-                "clear",
-            ],
-        ),
-        (&["local", "config", "--help"], &["get", "set"]),
-        (
-            &["local", "config", "set", "--help"],
-            &["history.max-age", "history.max-size", "tunnel.id"],
-        ),
-    ];
-
-    for (args, expected) in cases {
-        let output = Command::new(env!("CARGO_BIN_EXE_zodex"))
-            .args(*args)
-            .output()
-            .unwrap_or_else(|error| panic!("run {args:?}: {error}"));
-        assert!(output.status.success(), "{args:?} failed");
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        for needle in *expected {
-            assert!(
-                stdout.contains(needle),
-                "{args:?} missing {needle}: {stdout}"
-            );
-        }
-    }
-}
-
-#[test]
-fn zodex_local_watch_agent_filters_require_explicit_tui_mode() {
-    let fixture = LocalCliFixture::new();
-    for args in [
-        ["local", "watch", "--agent", "k7m2"].as_slice(),
-        ["local", "watch", "--all"].as_slice(),
-    ] {
-        let output = fixture.command().args(args).output().unwrap();
-        assert!(!output.status.success(), "{args:?} should require --tui");
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(stderr.contains("--tui"), "{args:?}: {stderr}");
-    }
-}
-
-#[test]
-fn zodex_local_setup_help_never_exposes_a_raw_runtime_key_argument() {
-    let output = Command::new(env!("CARGO_BIN_EXE_zodex"))
-        .args(["local", "setup", "--help"])
-        .output()
-        .expect("run zodex local setup --help");
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(!stdout.contains("--runtime-key <"), "{stdout}");
-    assert!(!stdout.contains("--runtime-key="), "{stdout}");
 }
 
 #[test]

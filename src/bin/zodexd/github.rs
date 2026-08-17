@@ -28,6 +28,28 @@ const GITHUB_API_VERSION: &str = "2022-11-28";
 const GITHUB_OAUTH_DEVICE_CODE_URL: &str = "https://github.com/login/device/code";
 const GITHUB_OAUTH_ACCESS_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 const DEFAULT_GITHUB_USER_AGENT: &str = "zodex/0.1";
+const MAX_GITHUB_ERROR_DETAIL_CHARS: usize = 2_048;
+
+pub(super) fn summarize_github_error_body(body: &str) -> String {
+    if body.trim().is_empty() {
+        return "empty response body".to_string();
+    }
+    if serde_json::from_str::<serde_json::Value>(body).is_err() {
+        return format!("non-JSON response body ({} bytes)", body.len());
+    }
+
+    let normalized = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut chars = normalized.chars();
+    let preview = chars
+        .by_ref()
+        .take(MAX_GITHUB_ERROR_DETAIL_CHARS)
+        .collect::<String>();
+    if chars.next().is_some() {
+        format!("{preview} … [truncated]")
+    } else {
+        preview
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(super) struct PushGrantRecord {
@@ -369,7 +391,10 @@ async fn github_repo_id(repo: &str, bearer_token: Option<&str>) -> Result<Option
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        bail!("GitHub repository lookup failed ({status}): {body}");
+        bail!(
+            "GitHub repository lookup failed ({status}): {}",
+            summarize_github_error_body(&body)
+        );
     }
 
     let payload: GitHubRepoResponse = response
@@ -416,7 +441,10 @@ async fn request_device_flow_code(client_id: &str) -> Result<GitHubDeviceCodeRes
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        bail!("GitHub device code request failed ({status}): {body}");
+        bail!(
+            "GitHub device code request failed ({status}): {}",
+            summarize_github_error_body(&body)
+        );
     }
 
     response
@@ -455,7 +483,10 @@ async fn poll_device_flow_access_token(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        bail!("GitHub device flow token request failed ({status}): {body}");
+        bail!(
+            "GitHub device flow token request failed ({status}): {}",
+            summarize_github_error_body(&body)
+        );
     }
 
     response
@@ -485,7 +516,10 @@ async fn refresh_user_access_token(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        bail!("GitHub user access token refresh failed ({status}): {body}");
+        bail!(
+            "GitHub user access token refresh failed ({status}): {}",
+            summarize_github_error_body(&body)
+        );
     }
 
     response
@@ -854,7 +888,7 @@ pub(super) async fn publish_pr(
 
     let current_dir = env::current_dir().context("failed to resolve current directory")?;
     let repo_root = detect_repo_root(&current_dir)?;
-    let request = build_publish_request(
+    let submission = build_publish_request(
         config,
         repo.clone(),
         base.map(ToString::to_string),
@@ -863,8 +897,13 @@ pub(super) async fn publish_pr(
         draft,
         &repo_root,
     )?;
-    let response =
-        submit_publish_request(Path::new(&config.publisher_socket_path), &request).await?;
+    let response = submit_publish_request(
+        Path::new(&config.publisher_socket_path),
+        config.publisher_max_bundle_bytes,
+        &submission.request,
+        submission.bundle.path(),
+    )
+    .await?;
 
     println!("publish-pr: created");
     println!("repo: {repo}");

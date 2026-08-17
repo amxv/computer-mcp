@@ -21,13 +21,13 @@ zodex local start --ttl 4h`,
     index: "B",
     eyebrow: "Sprite / Remote Linux",
     title: "Bring a remote workspace online.",
-    body: "Create a Sprite, install the Zodex runtime with separate GitHub reader/writer Apps, and connect ChatGPT to its public MCP endpoint.",
-    facts: ["remote Linux", "GitHub policy boundary", "PR / grant / YOLO"],
+    body: "Create a wake-on-demand Sprite, provision the isolated GitHub reader/writer boundary, and connect ChatGPT through Zodex's canonical Cloudflare Worker.",
+    facts: ["wake-on-demand Linux", "canonical Worker", "PR / grant / YOLO"],
     code: `curl -fsSL https://zodex.ashray.xyz/install.sh | sh
 curl -fsSL https://sprites.dev/install.sh | sh
-sprite org auth
+sprite login
 sprite create zodex-dev
-sprite use zodex-dev
+sprite info zodex-dev
 zodex sprite setup --help`,
     href: "/docs/sprite",
     cta: "Open Sprite quick start"
@@ -45,7 +45,7 @@ const executionModes = [
     index: "B",
     href: "/docs/sprite",
     title: "Sprite / remote Linux",
-    body: "Run the three tools on a remote Sprite-backed Linux workspace with the existing reader/publisher GitHub boundary, PR workflow, push grants, and scoped YOLO modes."
+    body: "Run the three tools on wake-on-demand Linux through the canonical Cloudflare Worker, with a restricted Agent account and isolated GitHub reader/publisher boundary."
   }
 ];
 
@@ -93,7 +93,7 @@ const modes = [
     state: "Trusted session",
     title: "Go scoped YOLO",
     body: "For repos and tasks you trust, grant bounded autonomy to one repo, several repos, or every installed repo. Grants carry scopes and independent expiry times.",
-    command: "zodex github mode yolo --sprite dev --repo owner/repo --ttl 4h"
+    command: "zodex sprite github yolo --sprite dev --repo owner/repo --ttl 2h"
   }
 ];
 
@@ -280,7 +280,7 @@ const guideLinks = [
         </div>
         <div class="z-section__intro">
           <p>
-            Local is direct trusted-host Mac execution. Sprite is remote Linux with the existing
+            Local is direct trusted-host Mac execution. Sprite is wake-on-demand remote Linux behind the canonical Cloudflare Worker, with a separate
             GitHub access boundary. They share the tool/service core without pretending the trust
             or lifecycle model is the same.
           </p>
@@ -308,7 +308,7 @@ const guideLinks = [
         <div class="z-section__intro">
           <p>
             Local uses an OpenAI Secure MCP Tunnel to reach the Mac you already work on. Sprite gives
-            ChatGPT a separate remote Linux workspace and adds an explicit GitHub write-policy layer.
+            ChatGPT a wake-on-demand remote Linux workspace through the canonical Cloudflare Worker and adds an explicit GitHub write-policy layer.
           </p>
           <a class="text-link" href="/docs">Compare the full guides <span aria-hidden="true">↗</span></a>
         </div>

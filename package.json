@@ -9,15 +9,13 @@
     "build": "astro build",
     "preview": "astro preview",
     "check": "astro check",
-    "check:repo": "bash scripts/check.sh",
-    "deploy:docs": "astro build && wrangler deploy -c wrangler.docs.jsonc"
+    "check:repo": "bash scripts/check.sh"
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.4",
     "@types/node": "^24.0.13",
     "astro": "^7.0.3",
     "typescript": "^5.9.2",
-    "wrangler": "^4.105.0",
     "zuedocs": "0.1.26"
   }
 }

@@ -1,40 +1,45 @@
+const COMPONENT = "zodex-cloudflare-worker";
 const HEALTH_PATH = "/health";
+const STATUS_PATH = "/status";
 const MCP_ROOT_PATH = "/mcp/";
-const RETRYABLE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
-const RETRY_DELAYS_MS = [0, 400, 1200, 2500];
+const RETRYABLE_HEALTH_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
+const HEALTH_RETRY_DELAYS_MS = [0, 250, 750, 1500];
 const WARMUP_TIMEOUTS_MS = [1500, 3000, 6000];
 const UPSTREAM_RESPONSE_TIMEOUT_MS = 20000;
 
 export default {
   async fetch(request, env) {
-    const url = new URL(request.url);
-    const route = resolveRoute(url.pathname);
-
-    if (!route) {
-      return json(
-        {
-          ok: true,
-          component: "zodex-cloudflare-worker",
-          routes: ["/", "/health", "/mcp", "/mcp/"],
-          spriteOrigin: env.SPRITE_ORIGIN,
-          docsOrigin: env.DOCS_ORIGIN ?? null,
-        },
-        200,
-      );
-    }
-
-    const preparedRequest = await prepareRequest(request);
-
-    if (route.kind === "docs") {
-      return proxyDocs(preparedRequest, env, route.upstreamPath);
-    }
-
-    await warmSprite(env);
-    return proxyWithRetry(preparedRequest, env, route.upstreamPath);
+    return handleRequest(request, env);
   },
 };
 
-function resolveRoute(pathname) {
+export async function handleRequest(request, env, dependencies = {}) {
+  const fetchImpl = dependencies.fetch ?? fetch;
+  const sleepImpl = dependencies.sleep ?? sleep;
+  const url = new URL(request.url);
+  const route = resolveRoute(url.pathname);
+
+  if (route.kind === "status") {
+    return workerStatus(env);
+  }
+
+  if (route.kind === "not-found") {
+    return json({ error: "not_found" }, 404, env);
+  }
+
+  if (route.kind === "health") {
+    return proxyHealthWithRetry(request, env, fetchImpl, sleepImpl);
+  }
+
+  await warmSprite(env, fetchImpl, sleepImpl);
+  return proxyMcpOnce(request, env, route.upstreamPath, fetchImpl);
+}
+
+export function resolveRoute(pathname) {
+  if (pathname === "/" || pathname === STATUS_PATH) {
+    return { kind: "status" };
+  }
+
   if (pathname === HEALTH_PATH) {
     return { kind: "health", upstreamPath: HEALTH_PATH };
   }
@@ -47,38 +52,70 @@ function resolveRoute(pathname) {
     return { kind: "mcp", upstreamPath: pathname };
   }
 
-  return { kind: "docs", upstreamPath: pathname };
+  return { kind: "not-found" };
 }
 
-async function prepareRequest(request) {
+function workerStatus(env) {
+  return json(
+    {
+      ok: true,
+      component: COMPONENT,
+      build: env.ZODEX_WORKER_BUILD ?? "unknown",
+      spriteOrigin: env.SPRITE_ORIGIN ?? null,
+      routes: ["/", STATUS_PATH, HEALTH_PATH, "/mcp", MCP_ROOT_PATH],
+    },
+    200,
+    env,
+  );
+}
+
+async function proxyHealthWithRetry(request, env, fetchImpl, sleepImpl) {
   const url = new URL(request.url);
-  const headers = new Headers(request.headers);
-  headers.delete("content-length");
-  headers.delete("host");
-  headers.set("x-forwarded-host", url.host);
-  headers.set("x-forwarded-proto", url.protocol.replace(":", ""));
-  headers.set("x-proxy-origin", "cloudflare-worker");
-
-  return {
-    method: request.method,
-    headers,
-    search: url.search,
-    bodyBuffer: shouldSendBody(request.method) ? await request.arrayBuffer() : null,
-  };
-}
-
-async function warmSprite(env) {
   let lastError = null;
 
-  for (const timeoutMs of WARMUP_TIMEOUTS_MS) {
+  for (let index = 0; index < HEALTH_RETRY_DELAYS_MS.length; index += 1) {
+    if (HEALTH_RETRY_DELAYS_MS[index] > 0) {
+      await sleepImpl(HEALTH_RETRY_DELAYS_MS[index]);
+    }
+
     try {
       const response = await fetchWithTimeout(
+        fetchImpl,
+        buildUpstreamUrl(env, HEALTH_PATH, url.search),
+        {
+          method: "GET",
+          headers: forwardedHeaders(request),
+        },
+        WARMUP_TIMEOUTS_MS[Math.min(index, WARMUP_TIMEOUTS_MS.length - 1)],
+      );
+
+      if (!RETRYABLE_HEALTH_STATUSES.has(response.status)) {
+        return relayResponse(response, env);
+      }
+
+      if (index + 1 === HEALTH_RETRY_DELAYS_MS.length) {
+        return relayResponse(response, env);
+      }
+      response.body?.cancel();
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  return upstreamFailure(lastError, env);
+}
+
+async function warmSprite(env, fetchImpl, sleepImpl) {
+  for (let index = 0; index < WARMUP_TIMEOUTS_MS.length; index += 1) {
+    try {
+      const response = await fetchWithTimeout(
+        fetchImpl,
         buildUpstreamUrl(env, HEALTH_PATH),
         {
           method: "GET",
           headers: noCacheHeaders(),
         },
-        timeoutMs,
+        WARMUP_TIMEOUTS_MS[index],
       );
 
       response.body?.cancel();
@@ -86,108 +123,58 @@ async function warmSprite(env) {
       if (response.ok) {
         return;
       }
-    } catch (error) {
-      lastError = error;
+    } catch {
+      // A failed readiness probe is safe to retry because it has no side effect.
     }
 
-    await sleep(250);
-  }
-
-  if (lastError) {
-    console.warn("sprite warmup did not complete before proxying", formatError(lastError));
+    if (index + 1 < WARMUP_TIMEOUTS_MS.length) {
+      await sleepImpl(250);
+    }
   }
 }
 
-async function proxyWithRetry(preparedRequest, env, upstreamPath) {
-  let lastError = null;
-  let lastRetryableResponse = null;
+async function proxyMcpOnce(request, env, upstreamPath, fetchImpl) {
+  const incomingUrl = new URL(request.url);
 
-  for (let index = 0; index < RETRY_DELAYS_MS.length; index += 1) {
-    if (RETRY_DELAYS_MS[index] > 0) {
-      await sleep(RETRY_DELAYS_MS[index]);
-    }
-
-    try {
-      const response = await proxyRequest(preparedRequest, env, upstreamPath);
-
-      if (!RETRYABLE_STATUSES.has(response.status)) {
-        return response;
-      }
-
-      lastRetryableResponse = response;
-      response.body?.cancel();
-    } catch (error) {
-      lastError = error;
-    }
-  }
-
-  if (lastRetryableResponse) {
-    return lastRetryableResponse;
-  }
-
-  if (lastError) {
-    return json(
+  try {
+    const upstreamUrl = buildUpstreamUrl(env, upstreamPath, incomingUrl.search);
+    const response = await fetchWithTimeout(
+      fetchImpl,
+      upstreamUrl,
       {
-        error: "upstream_fetch_failed",
-        detail: formatError(lastError),
+        method: request.method,
+        headers: forwardedHeaders(request),
+        body: shouldSendBody(request.method) ? request.body : undefined,
+        redirect: "manual",
+        duplex: shouldSendBody(request.method) ? "half" : undefined,
       },
-      502,
+      UPSTREAM_RESPONSE_TIMEOUT_MS,
     );
+
+    return relayResponse(response, env);
+  } catch (error) {
+    // Never replay an MCP request after dispatch. The upstream may already have
+    // executed a side effect even when the edge observes an ambiguous failure.
+    return upstreamFailure(error, env);
   }
-
-  return json(
-    {
-      error: "upstream_unavailable",
-      detail: "Sprite did not become ready in time.",
-    },
-    502,
-  );
 }
 
-async function proxyRequest(preparedRequest, env, upstreamPath) {
-  const upstreamUrl = buildUpstreamUrl(env, upstreamPath, preparedRequest.search);
-  const response = await fetchWithTimeout(
-    upstreamUrl,
-    {
-      method: preparedRequest.method,
-      headers: preparedRequest.headers,
-      body: buildRequestBody(preparedRequest.bodyBuffer),
-      redirect: "manual",
-    },
-    UPSTREAM_RESPONSE_TIMEOUT_MS,
-  );
-
-  return relayResponse(response, env);
-}
-
-async function proxyDocs(preparedRequest, env, upstreamPath) {
-  const upstreamUrl = buildDocsUrl(env, upstreamPath, preparedRequest.search);
-  const response = await fetchWithTimeout(
-    upstreamUrl,
-    {
-      method: preparedRequest.method,
-      headers: preparedRequest.headers,
-      body: buildRequestBody(preparedRequest.bodyBuffer),
-      redirect: "manual",
-    },
-    UPSTREAM_RESPONSE_TIMEOUT_MS,
-  );
-
-  return relayDocsResponse(response, env);
-}
-
-function buildRequestBody(bodyBuffer) {
-  if (!bodyBuffer) {
-    return undefined;
-  }
-
-  return bodyBuffer.slice(0);
+function forwardedHeaders(request) {
+  const url = new URL(request.url);
+  const headers = new Headers(request.headers);
+  headers.delete("content-length");
+  headers.delete("host");
+  headers.set("x-forwarded-host", url.host);
+  headers.set("x-forwarded-proto", url.protocol.replace(":", ""));
+  headers.set("x-proxy-origin", "cloudflare-worker");
+  return headers;
 }
 
 function relayResponse(response, env) {
   const headers = new Headers(response.headers);
   headers.set("cache-control", "no-store");
   headers.set("x-proxy-upstream", upstreamHost(env));
+  headers.set("x-zodex-worker-build", env.ZODEX_WORKER_BUILD ?? "unknown");
 
   return new Response(response.body, {
     status: response.status,
@@ -196,15 +183,15 @@ function relayResponse(response, env) {
   });
 }
 
-function relayDocsResponse(response, env) {
-  const headers = new Headers(response.headers);
-  headers.set("x-proxy-upstream", docsHost(env));
-
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers,
-  });
+function upstreamFailure(error, env) {
+  return json(
+    {
+      error: "upstream_fetch_failed",
+      detail: formatError(error),
+    },
+    502,
+    env,
+  );
 }
 
 function buildUpstreamUrl(env, pathname, search = "") {
@@ -218,28 +205,9 @@ function buildUpstreamUrl(env, pathname, search = "") {
   return url;
 }
 
-function buildDocsUrl(env, pathname, search = "") {
-  const origin = env.DOCS_ORIGIN;
-  if (!origin) {
-    throw new Error("DOCS_ORIGIN is not configured");
-  }
-
-  const url = new URL(pathname, ensureTrailingSlash(origin));
-  url.search = search;
-  return url;
-}
-
 function upstreamHost(env) {
   try {
     return new URL(env.SPRITE_ORIGIN).host;
-  } catch {
-    return "unknown";
-  }
-}
-
-function docsHost(env) {
-  try {
-    return new URL(env.DOCS_ORIGIN).host;
   } catch {
     return "unknown";
   }
@@ -264,12 +232,12 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function fetchWithTimeout(input, init, timeoutMs) {
+async function fetchWithTimeout(fetchImpl, input, init, timeoutMs) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort("timeout"), timeoutMs);
 
   try {
-    return await fetch(input, {
+    return await fetchImpl(input, {
       ...init,
       signal: controller.signal,
       redirect: "manual",
@@ -284,15 +252,14 @@ function formatError(error) {
     return error.message;
   }
 
-  return String(error);
+  return error == null ? "unknown upstream error" : String(error);
 }
 
-function json(payload, status) {
-  return new Response(JSON.stringify(payload, null, 2), {
-    status,
-    headers: {
-      "cache-control": "no-store",
-      "content-type": "application/json; charset=utf-8",
-    },
+function json(payload, status, env) {
+  const headers = new Headers({
+    "cache-control": "no-store",
+    "content-type": "application/json; charset=utf-8",
   });
+  headers.set("x-zodex-worker-build", env?.ZODEX_WORKER_BUILD ?? "unknown");
+  return new Response(JSON.stringify(payload, null, 2), { status, headers });
 }

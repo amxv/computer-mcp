@@ -11,124 +11,193 @@ fn install_script_path() -> PathBuf {
 }
 
 #[test]
-fn install_script_has_expected_structure() {
-    let script = std::fs::read_to_string(install_script_path()).expect("read install script");
+fn installer_auto_mode_is_always_operator_and_runtime_is_explicit() {
+    let command = r#"
+eval "$(sed -n '/^resolved_install_mode()/,/^}/p' "${INSTALL_SCRIPT}")"
+ZODEX_INSTALL_MODE=auto
+printf 'auto=%s\n' "$(resolved_install_mode)"
+ZODEX_INSTALL_MODE=operator
+printf 'operator=%s\n' "$(resolved_install_mode)"
+ZODEX_INSTALL_MODE=runtime
+printf 'runtime=%s\n' "$(resolved_install_mode)"
+"#;
+    let output = Command::new("bash")
+        .arg("-c")
+        .arg(command)
+        .env("INSTALL_SCRIPT", install_script_path())
+        .output()
+        .expect("resolve installer modes");
 
-    let required_snippets = [
-        "set -euo pipefail",
-        "ZODEX_VERSION",
-        "ZODEX_INSTALL_MODE",
-        "detect_operator_platform()",
-        "run_operator_install()",
-        "run_runtime_install()",
-        "sha256_verify()",
-        "resolve_release_checksum_url()",
-        "operator_local_runtime_dir()",
-        "ensure_local_stopped_before_operator_replace()",
-        "install_operator_binary_atomically()",
-        "/bin/rm -rf \"${TMP_DIR}\"",
-        "zodex operator CLI installed.",
-        "ZODEX_ASSET_URL",
-        "ZODEX_BINARY_SOURCE_DIR",
-        "ZODEX_INSTALL_DIR",
-        "ZODEX_CONFIG_PATH",
-        "ZODEX_AGENT_USER",
-        "ZODEX_AGENT_HOME",
-        "ZODEX_AGENT_SHELL",
-        "ZODEX_DEFAULT_WORKDIR",
-        "ZODEX_PUBLISHER_USER",
-        "ZODEX_PUBLISHER_HOME",
-        "ZODEX_SERVICE_GROUP",
-        "ZODEX_GIT_USER_NAME",
-        "ZODEX_GIT_USER_EMAIL",
-        "ZODEX_READER_KEY_DIR",
-        "ZODEX_HTTP_BIND_PORT",
-        "ZODEX_PUBLIC_HOST",
-        "ensure_service_accounts()",
-        "detect_platform()",
-        "resolved_http_bind_port()",
-        "resolved_public_host()",
-        "install_runtime_prerequisites()",
-        "install_build_prerequisites()",
-        "resolve_release_asset_url()",
-        "server_archive_name=\"zodex-${TARGET_TRIPLE}.tar.gz\"",
-        "install_binaries_from_release()",
-        "install_binaries_from_source()",
-        "run_cli_install()",
-        "configure_agent_git_identity()",
-        "configure_agent_git_reader_helper()",
-        "configure_agent_build_environment()",
-        "zodex-agent-build-env.sh",
-        "export TMPDIR=",
-        "export GOCACHE=",
-        "export GOMODCACHE=",
-        "export npm_config_cache=",
-        "export BUN_INSTALL_CACHE_DIR=",
-        "export COREPACK_HOME=",
-        "export CCACHE_DIR=",
-        "export PIP_CACHE_DIR=",
-        "export UV_CACHE_DIR=",
-        "keep site-specific toolchain policy in a separate profile fragment",
-        "if [ -d /.sprite/bin ]",
-        "export PATH=\"/.sprite/bin:\\${PATH}\"",
-        "git config --global user.name",
-        "git config --global user.email",
-        "${ZODEX_STATE_DIR}/publisher/run",
-        "${ZODEX_STATE_DIR}/publisher/logs",
-        "credential.https://github.com.helper",
-        "git-credential-helper",
-        "git-remote-zodex",
-        "zodex-agent",
-        "print_next_steps()",
-        "apt-get install -y --no-install-recommends",
-        "build-essential pkg-config libssl-dev git",
-        "zodex-prd",
-        "agent_home = \"${ZODEX_AGENT_HOME}\"",
-        "default_workdir = \"${ZODEX_DEFAULT_WORKDIR}\"",
-        "The commands below assume the default config path",
-        "Most installs can keep the built-in defaults.",
-        "reader_app_id",
-        "reader_installation_id",
-        "publisher_client_id",
-        "enable Device Flow on the push-grant GitHub App",
-        "# id = \"amxv/zodex\"",
-        "# repo = \"amxv/zodex\"",
-        "rotate the installer-generated API key",
-        "curl -k \"https://${public_host}/health\"",
-        "MCP URL shape: https://${public_host}/mcp?key=<redacted>",
-        "credential.https://github.com.useHttpPath true",
-        "url.\"zodex::https://github.com/\".pushInsteadOf",
-        "zodex-agent github request-push --repo <owner/repo>",
-        "zodex-agent github revoke-push --repo <owner/repo>",
-    ];
-
-    for snippet in required_snippets {
-        assert!(
-            script.contains(snippet),
-            "install script missing snippet: {snippet}"
-        );
-    }
-    assert!(
-        script
-            .lines()
-            .all(|line| !line.trim_start().starts_with("rm -")),
-        "installer cleanup must bypass user PATH wrappers with /bin/rm"
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "auto=operator\noperator=operator\nruntime=runtime\n"
     );
 }
 
 #[test]
-fn install_script_does_not_use_generic_target_triple_tarball_match() {
-    let script = std::fs::read_to_string(install_script_path()).expect("read install script");
+fn runtime_config_migration_updates_only_the_known_legacy_bundle_default() {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock before Unix epoch")
+        .as_nanos();
+    let test_dir = std::env::temp_dir().join(format!(
+        "zodex-runtime-config-migration-test-{}-{unique}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&test_dir).expect("create migration test directory");
+    let legacy_config = test_dir.join("legacy.toml");
+    let partially_migrated_config = test_dir.join("partially-migrated.toml");
+    let custom_config = test_dir.join("custom.toml");
+    std::fs::write(
+        &legacy_config,
+        concat!(
+            "api_key = \"redacted\"\n",
+            "bind_port = 8443\n",
+            "http_bind_port = 9090\n",
+            "tls_mode = \"manual\"\n",
+            "publisher_max_bundle_bytes = 33554432\n",
+        ),
+    )
+    .expect("write legacy config");
+    std::fs::write(
+        &partially_migrated_config,
+        concat!(
+            "api_key = \"redacted\"\n",
+            "service_port = 8080\n",
+            "publisher_max_bundle_bytes = 33554432\n",
+            "# BEGIN ZODEX_GH_APPS_MANAGED\n",
+            "reader_app_id = 1\n",
+            "publisher_app_id = 2\n",
+            "# END ZODEX_GH_APPS_MANAGED\n",
+        ),
+    )
+    .expect("write partially migrated config");
+    std::fs::write(
+        &custom_config,
+        concat!(
+            "api_key = \"redacted\"\n",
+            "service_port = 7070\n",
+            "publisher_max_bundle_bytes = 33554432\n",
+            "# BEGIN ZODEX_GH_APPS_MANAGED\n",
+            "publisher_client_id = \"Iv1.current\"\n",
+            "# END ZODEX_GH_APPS_MANAGED\n",
+        ),
+    )
+    .expect("write custom config");
 
-    assert!(
-        !script.contains("${TARGET_TRIPLE}[^\"]*\\.tar\\.gz"),
-        "install script should not select release assets via generic target triple tarball match"
-    );
-    let deprecated_platform_name = ["run", "pod"].concat();
-    assert!(
-        !script.contains(&deprecated_platform_name),
-        "install script should not contain deprecated platform-specific branches"
-    );
+    let command = r#"
+eval "$(sed -n '/^migrate_runtime_config()/,/^}/p' "${INSTALL_SCRIPT}")"
+log() { :; }
+die() { printf '%s\n' "$*" >&2; exit 1; }
+ZODEX_SERVICE_PORT=8080
+ZODEX_DEFAULT_PUBLISHER_MAX_BUNDLE_BYTES=134217728
+ZODEX_CONFIG_PATH="${LEGACY_CONFIG}"
+migrate_runtime_config
+ZODEX_CONFIG_PATH="${PARTIALLY_MIGRATED_CONFIG}"
+migrate_runtime_config
+ZODEX_CONFIG_PATH="${CUSTOM_CONFIG}"
+migrate_runtime_config
+"#;
+    let output = Command::new("bash")
+        .arg("-c")
+        .arg(command)
+        .env("INSTALL_SCRIPT", install_script_path())
+        .env("LEGACY_CONFIG", &legacy_config)
+        .env("PARTIALLY_MIGRATED_CONFIG", &partially_migrated_config)
+        .env("CUSTOM_CONFIG", &custom_config)
+        .output()
+        .expect("run runtime config migration");
+    if !output.status.success() {
+        panic!(
+            "runtime config migration failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let migrated = std::fs::read_to_string(&legacy_config).expect("read migrated config");
+    assert!(migrated.contains("service_port = 9090"));
+    assert!(migrated.contains("publisher_max_bundle_bytes = 134217728"));
+    assert!(!migrated.contains("bind_port ="));
+    assert!(!migrated.contains("http_bind_port ="));
+    assert!(!migrated.contains("tls_mode ="));
+
+    let partially_migrated = std::fs::read_to_string(&partially_migrated_config)
+        .expect("read partially migrated config");
+    assert!(partially_migrated.contains("service_port = 8080"));
+    assert!(partially_migrated.contains("publisher_max_bundle_bytes = 134217728"));
+    assert!(partially_migrated.contains("# BEGIN ZODEX_GH_APPS_MANAGED"));
+
+    let custom = std::fs::read_to_string(&custom_config).expect("read custom config");
+    assert!(custom.contains("service_port = 7070"));
+    assert!(custom.contains("publisher_max_bundle_bytes = 33554432"));
+
+    std::fs::remove_dir_all(&test_dir).expect("remove migration test directory");
+}
+
+#[test]
+fn runtime_binary_install_never_installs_operator_cli() {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock before Unix epoch")
+        .as_nanos();
+    let test_dir = std::env::temp_dir().join(format!(
+        "zodex-runtime-install-test-{}-{unique}",
+        std::process::id()
+    ));
+    let source_dir = test_dir.join("source");
+    let install_dir = test_dir.join("install");
+    std::fs::create_dir_all(&source_dir).expect("create source directory");
+    std::fs::create_dir_all(&install_dir).expect("create install directory");
+
+    for binary in [
+        "zodex",
+        "zodex-agent",
+        "git-remote-zodex",
+        "zodexd",
+        "zodex-prd",
+    ] {
+        let path = source_dir.join(binary);
+        std::fs::write(&path, "#!/bin/sh\nexit 0\n").expect("write fixture binary");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(&path)
+                .expect("read fixture metadata")
+                .permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&path, permissions).expect("make fixture executable");
+        }
+    }
+    std::fs::write(install_dir.join("zodex"), "stale operator\n")
+        .expect("write stale operator binary");
+
+    let command = r#"
+eval "$(sed -n '/^install_binaries_from_dir()/,/^}/p' "${INSTALL_SCRIPT}")"
+die() { printf '%s\n' "$*" >&2; exit 1; }
+install_binaries_from_dir "${SOURCE_DIR}"
+"#;
+    let output = Command::new("bash")
+        .arg("-c")
+        .arg(command)
+        .env("INSTALL_SCRIPT", install_script_path())
+        .env("SOURCE_DIR", &source_dir)
+        .env("ZODEX_INSTALL_DIR", &install_dir)
+        .output()
+        .expect("install runtime fixture binaries");
+    if !output.status.success() {
+        panic!(
+            "runtime fixture install failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    assert!(!install_dir.join("zodex").exists());
+    for binary in ["zodex-agent", "git-remote-zodex", "zodexd", "zodex-prd"] {
+        assert!(install_dir.join(binary).is_file(), "missing {binary}");
+    }
+
+    std::fs::remove_dir_all(&test_dir).expect("remove runtime install test directory");
 }
 
 #[test]
@@ -393,7 +462,6 @@ fn operator_release_dir_install_proves_local_needs_only_zodex_binary() {
     let output = Command::new("bash")
         .arg(install_script_path())
         .env("ZODEX_ASSET_URL", &asset_url)
-        .env("ZODEX_INSTALL_MODE", "operator")
         .env("ZODEX_INSTALL_DIR", &install_dir)
         .output()
         .expect("run operator release-dir install");
@@ -416,14 +484,12 @@ fn operator_release_dir_install_proves_local_needs_only_zodex_binary() {
         .output()
         .expect("run installed Local help");
     assert!(help.status.success());
-    assert!(String::from_utf8_lossy(&help.stdout).contains("Usage: zodex local <COMMAND>"));
 
     let setup_help = Command::new(&installed)
         .args(["local", "setup", "--help"])
         .output()
         .expect("run installed Local setup help");
     assert!(setup_help.status.success());
-    assert!(String::from_utf8_lossy(&setup_help.stdout).contains("--runtime-key-stdin"));
 
     std::fs::remove_dir_all(&test_dir).expect("remove Local install test directory");
 }

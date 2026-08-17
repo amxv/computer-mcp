@@ -17,7 +17,7 @@ If you want an isolated remote Linux workspace with scoped GitHub write permissi
 ### 1. Install the Zodex operator CLI
 
 ```bash
-curl -fsSL https://zodex.ashray.xyz/install.sh | ZODEX_INSTALL_MODE=operator bash
+curl -fsSL https://zodex.ashray.xyz/install.sh | sh
 zodex --help
 zodex local --help
 ```
@@ -36,6 +36,8 @@ Open [OpenAI Platform tunnel settings](https://platform.openai.com/settings/orga
 Creating or editing the tunnel requires **Tunnels Read + Manage**. That is an administrative setup permission; Zodex does not need to keep a Manage-capable key afterward.
 
 Local needs no Sprite proxy, Cloudflare Worker, public inbound port, or separate proxy URL. The OpenAI Secure MCP Tunnel is the ChatGPT connection path for Local.
+
+Most OpenAI paid plans support custom MCP servers.
 
 ### 3. Create a runtime API key with only tunnel Read + Use
 
@@ -120,7 +122,7 @@ In ChatGPT on the web:
 5. Scan the tools and create the app.
 6. Open a fresh chat, enable/select the Zodex app, and ask ChatGPT to inspect or work on the repo you started Local from.
 
-Most paid ChatGPT plans let users enable developer mode and add custom MCP servers. Availability can still depend on workspace settings or administrator policy.
+Most OpenAI paid plans support custom MCP servers.
 
 For workspace-specific steps and tunnel visibility troubleshooting, see [Local setup and ChatGPT connection](/docs/local/setup).
 

@@ -1,79 +1,43 @@
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
-use std::fs::OpenOptions;
 use std::io::{self, Read, Write};
-use std::net::IpAddr;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-#[cfg(unix)]
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand};
-#[cfg(unix)]
-use nix::errno::Errno;
-#[cfg(unix)]
-use nix::sys::signal::{Signal, kill};
-#[cfg(unix)]
-use nix::unistd::{Group, Pid, Uid, User, chown, setsid};
-use rand::distr::{Alphanumeric, SampleString};
-use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, SanType};
 use reqwest::Url;
 use reqwest::header::{ACCEPT, AUTHORIZATION, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
 use time::format_description::well_known::Rfc3339;
 use time::{OffsetDateTime, UtcOffset};
-use zodex::config::{Config, DEFAULT_CONFIG_PATH};
+use zodex::config::DEFAULT_CONFIG_PATH;
 use zodex::install_rustls_crypto_provider;
 use zodex::publisher::{
-    mint_publisher_installation_token_with_metadata, mint_reader_installation_token,
+    github_app_client_id, mint_publisher_installation_token_with_metadata,
+    mint_reader_installation_token,
     resolve_repo_installation_id,
 };
 use zodex::redaction::redact_api_key_query_params;
 
-const SERVICE_NAME: &str = "zodexd.service";
-const SYSTEMD_UNIT_PATH: &str = "/etc/systemd/system/zodexd.service";
 const SPRITE_MAIN_SERVICE_LABEL: &str = "zodexd";
-const STATE_DIR: &str = "/var/lib/zodex";
-const TLS_DIR: &str = "/var/lib/zodex/tls";
-const LETSENCRYPT_LIVE_DIR: &str = "/etc/letsencrypt/live";
-const DEFAULT_LOG_LINES: &str = "200";
-const STATUS_HOST_HINT_FALLBACK: &str = "<host>";
-const TLS_MODE_LETSENCRYPT_IP: &str = "letsencrypt_ip";
-const TLS_MODE_SELF_SIGNED: &str = "self_signed";
-const PROCESS_RUNTIME_DIRNAME: &str = "run";
-const PROCESS_LOG_DIRNAME: &str = "logs";
-const PROCESS_PID_FILENAME: &str = "zodexd.pid";
-const PROCESS_LOG_FILENAME: &str = "zodexd.log";
-const PUBLISHER_PROCESS_SUBDIR: &str = "publisher";
 const PUBLISHER_SERVICE_LABEL: &str = "zodex-prd";
-const PUBLISHER_PROCESS_PID_FILENAME: &str = "zodex-prd.pid";
-const PUBLISHER_PROCESS_LOG_FILENAME: &str = "zodex-prd.log";
-const PROCESS_START_STABILIZE_MS: u64 = 300;
-const PROCESS_STOP_TIMEOUT_MS: u64 = 5_000;
-const PROCESS_STOP_POLL_MS: u64 = 100;
-const SHARED_PROCESS_DIR_MODE: u32 = 0o750;
-const SPRITE_SERVICE_RESTART_TIMEOUT_MS: u64 = 20_000;
-const SPRITE_SERVICE_RESTART_POLL_MS: u64 = 200;
 const PRIMARY_OPERATOR_BINARY: &str = "zodex";
-const AGENT_OPERATOR_BINARY: &str = "zodex-agent";
-const PRIMARY_DAEMON_BINARY: &str = "zodexd";
 const PUSH_GRANTS_DIR: &str = "/var/lib/zodex/push-grants";
 const PUSH_GRANT_REMOTE_TMP_PATH: &str = "/tmp/zodex-push-grant.json";
 const GITHUB_PUSH_GRANT_DEVICE_CACHE_DIR: &str = ".config/zodex/github-device-flow";
 const GITHUB_PUSH_GRANT_CLIENT_ID_ENV: &str = "ZODEX_PUBLISHER_CLIENT_ID";
-const DEFAULT_PUSH_GRANT_TTL_SECONDS: u64 = 30 * 60;
 const GITHUB_MODE_DIR: &str = "/var/lib/zodex/mode";
 const GITHUB_MODE_STATE_PATH: &str = "/var/lib/zodex/mode/state.json";
 const GITHUB_MODE_REMOTE_TMP_PATH: &str = "/tmp/zodex-github-mode.json";
 const DEFAULT_YOLO_TTL_SECONDS: u64 = 2 * 60 * 60;
 const ZODEX_AGENT_USER: &str = "zodex-agent";
+const ZODEX_PUBLISHER_USER: &str = "zodex-publisher";
 const ZODEX_AGENT_HOME: &str = "/home/zodex-agent";
 const ZODEX_AGENT_BINARY_PATH: &str = "/usr/local/bin/zodex-agent";
 const GITHUB_PUSH_REWRITE_SOURCE: &str = "https://github.com/";
@@ -97,92 +61,31 @@ const SPRITE_REMOTE_UPLOAD_GIT_REMOTE_HELPER_PATH: &str = "/tmp/git-remote-zodex
 const SPRITE_REMOTE_UPLOAD_DAEMON_PATH: &str = "/tmp/zodexd";
 #[allow(dead_code)]
 const SPRITE_REMOTE_UPLOAD_PUBLISHER_PATH: &str = "/tmp/zodex-prd";
-const PROXY_COMPONENT_DIR: &str = "proxy/cloudflare-worker";
-const PROXY_COMPONENT_README: &str = "proxy/cloudflare-worker/README.md";
-const PROXY_WORKER_ENTRYPOINT: &str = "proxy/cloudflare-worker/src/index.js";
-const PROXY_WRANGLER_TEMPLATE_PATH: &str = "proxy/cloudflare-worker/wrangler.jsonc";
-const PROXY_SPRITE_ORIGIN_PLACEHOLDER: &str = "__SPRITE_ORIGIN__";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ServiceManager {
-    Systemd,
-    Process,
-}
-
 #[derive(Debug, Parser)]
 #[command(name = "zodex")]
 #[command(about = "Zodex operator CLI")]
 #[command(version)]
 struct Cli {
-    #[arg(long, default_value = DEFAULT_CONFIG_PATH)]
-    config: String,
-
     #[command(subcommand)]
     command: Commands,
 }
 
 #[derive(Debug, Subcommand)]
 enum Commands {
-    Install,
     Upgrade {
         #[arg(long, default_value = "latest")]
         version: String,
     },
-    Start,
-    Stop,
-    Restart,
-    Status,
-    Logs,
-    SetKey {
-        value: String,
-    },
-    RotateKey,
-    GitCredentialHelper {
-        operation: String,
-    },
-    ShowUrl {
-        #[arg(long, default_value = "127.0.0.1")]
-        host: String,
-    },
-    Tls {
-        #[command(subcommand)]
-        command: TlsCommand,
-    },
-    #[command(hide = true)]
-    Publisher {
-        #[command(subcommand)]
-        command: PublisherCommand,
-    },
+    /// Manage Zodex on a wake-on-demand remote Linux Sprite.
     Sprite {
         #[command(subcommand)]
         command: SpriteCommand,
-    },
-    Proxy {
-        #[command(subcommand)]
-        command: ProxyCommand,
-    },
-    Github {
-        #[command(subcommand)]
-        command: GithubCommand,
     },
     /// Run and inspect Zodex directly on the logged-in Mac.
     Local {
         #[command(subcommand)]
         command: LocalCommand,
     },
-}
-
-#[derive(Debug, Subcommand)]
-enum TlsCommand {
-    Setup,
-}
-
-#[derive(Debug, Subcommand)]
-enum PublisherCommand {
-    Start,
-    Stop,
-    Status,
-    Logs,
 }
 
 #[derive(Debug, Subcommand)]
@@ -201,10 +104,12 @@ enum SpriteCommand {
         #[arg(long)]
         publisher_app_id: u64,
         #[arg(long)]
+        publisher_client_id: String,
+        #[arg(long)]
         publisher_pem: PathBuf,
         #[arg(long, default_value = "main")]
         default_base: String,
-        #[arg(long, default_value = "sprite")]
+        #[arg(long, default_value = "public")]
         url_auth: String,
         #[arg(long, default_value = DEFAULT_CONFIG_PATH)]
         remote_config: String,
@@ -265,17 +170,49 @@ enum SpriteCommand {
         #[arg(long)]
         url_auth: Option<String>,
     },
+    /// Restart the managed Zodex service stack without changing Sprite power state.
+    Restart {
+        #[arg(long)]
+        sprite: Option<String>,
+        #[arg(long)]
+        org: Option<String>,
+    },
+    /// Copy the registered ChatGPT MCP endpoint for this Sprite.
+    Connect {
+        #[arg(long)]
+        sprite: Option<String>,
+        #[arg(long)]
+        org: Option<String>,
+        /// Print the secret capability URL even when clipboard copy succeeds.
+        #[arg(long, default_value_t = false)]
+        show_url: bool,
+    },
+    /// Manage the canonical Cloudflare front door for this Sprite.
+    Proxy {
+        #[command(subcommand)]
+        command: ProxyCommand,
+    },
+    /// Manage operator-side GitHub push policy for this Sprite.
+    Github {
+        #[command(subcommand)]
+        command: SpriteGithubCommand,
+    },
 }
 
 #[derive(Debug, Subcommand)]
 enum ProxyCommand {
-    Inspect {
+    #[command(alias = "inspect")]
+    Status {
         #[arg(long)]
         sprite: Option<String>,
         #[arg(long)]
         org: Option<String>,
         #[arg(long)]
         origin: Option<String>,
+        #[arg(long)]
+        worker_name: Option<String>,
+        #[arg(long)]
+        worker_url: Option<String>,
     },
     #[command(alias = "update")]
     Deploy {
@@ -285,33 +222,28 @@ enum ProxyCommand {
         org: Option<String>,
         #[arg(long)]
         origin: Option<String>,
+        #[arg(long)]
+        worker_name: Option<String>,
+        #[arg(long)]
+        cloudflare_account: Option<String>,
         #[arg(long, default_value_t = false)]
         skip_verify_origin: bool,
     },
-    VerifyOrigin {
+    #[command(alias = "verify-origin")]
+    Verify {
         #[arg(long)]
         sprite: Option<String>,
         #[arg(long)]
         org: Option<String>,
         #[arg(long)]
         origin: Option<String>,
+        #[arg(long)]
+        worker_url: Option<String>,
     },
 }
 
 #[derive(Debug, Subcommand)]
-enum GithubCommand {
-    RequestPush {
-        #[arg(long)]
-        repo: String,
-        #[arg(long)]
-        publisher_client_id: Option<String>,
-        #[arg(long, default_value = "30m")]
-        ttl: String,
-        #[arg(long, default_value_t = false)]
-        no_ttl: bool,
-        #[arg(long, default_value_t = false)]
-        cache_refresh_token: bool,
-    },
+enum SpriteGithubCommand {
     GrantPush {
         #[arg(long)]
         sprite: Option<String>,
@@ -338,14 +270,6 @@ enum GithubCommand {
         #[arg(long)]
         org: Option<String>,
     },
-    Mode {
-        #[command(subcommand)]
-        command: GithubModeCommand,
-    },
-}
-
-#[derive(Debug, Subcommand)]
-enum GithubModeCommand {
     Yolo {
         #[arg(long)]
         sprite: Option<String>,
@@ -443,10 +367,27 @@ struct GithubModeRecord {
     token_source: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+const OPERATOR_SPRITES_REGISTRY_VERSION: u32 = 2;
+
+fn legacy_operator_sprites_registry_version() -> u32 {
+    1
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct OperatorSpriteRegistry {
+    #[serde(default = "legacy_operator_sprites_registry_version")]
+    version: u32,
     #[serde(default)]
     sprites: Vec<OperatorSpriteRecord>,
+}
+
+impl Default for OperatorSpriteRegistry {
+    fn default() -> Self {
+        Self {
+            version: OPERATOR_SPRITES_REGISTRY_VERSION,
+            sprites: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -456,6 +397,18 @@ struct OperatorSpriteRecord {
     org: Option<String>,
     remote_config: String,
     last_setup_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    proxy: Option<OperatorSpriteProxyRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct OperatorSpriteProxyRecord {
+    cloudflare_account_id: String,
+    worker_name: String,
+    worker_url: String,
+    worker_version: String,
+    worker_build: String,
+    deployed_at: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -491,6 +444,7 @@ struct SpriteSetupOptions<'a> {
     reader_app_id: u64,
     reader_pem: &'a Path,
     publisher_app_id: u64,
+    publisher_client_id: &'a str,
     publisher_pem: &'a Path,
     default_base: &'a str,
     url_auth: &'a str,

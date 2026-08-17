@@ -1,20 +1,63 @@
 use std::fs;
 use std::io::{self, BufRead, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, anyhow, bail};
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as BASE64;
+use tempfile::TempDir;
 use zodex::config::Config;
 use zodex::publisher::{
     DirectPushRequest, mint_reader_installation_token, submit_direct_push_request,
 };
 
 use super::github::{load_matching_push_grant, normalize_github_repo};
-use super::tls::ensure_reader_ready_for_start;
 
 const PUSH_GRANTS_DIR: &str = "/var/lib/zodex/push-grants";
+
+fn ensure_reader_ready_for_start(config: &Config) -> Result<()> {
+    let Some(app_id) = config.reader_app_id else {
+        bail!("reader_app_id must be configured before start");
+    };
+    if app_id == 0 {
+        bail!("reader_app_id must be non-zero");
+    }
+
+    let Some(installation_id) = config.reader_installation_id else {
+        bail!("reader_installation_id must be configured before start");
+    };
+    if installation_id == 0 {
+        bail!("reader_installation_id must be non-zero");
+    }
+
+    if config.reader_private_key_path.trim().is_empty() {
+        bail!("reader_private_key_path must be configured");
+    }
+    if !Path::new(&config.reader_private_key_path).exists() {
+        bail!(
+            "reader private key file not found: {}",
+            config.reader_private_key_path
+        );
+    }
+
+    Ok(())
+}
+
+#[derive(Debug)]
+pub(super) struct DirectPushBundle {
+    _tempdir: TempDir,
+    path: PathBuf,
+    len: u64,
+}
+
+impl DirectPushBundle {
+    pub(super) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub(super) fn len(&self) -> u64 {
+        self.len
+    }
+}
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(super) struct GitCredentialRequest {
@@ -172,27 +215,40 @@ async fn handle_git_remote_zodex_push(
         bail!("push destination ref cannot be empty");
     }
 
-    let (bundle_base64, src_oid, src_object_type) = if src.is_empty() {
+    let (bundle, src_oid, src_object_type) = if src.is_empty() {
         (None, None, None)
     } else {
         (
-            create_direct_push_bundle_base64(src)?,
+            create_direct_push_bundle(src)?,
             Some(resolve_git_object_id(Path::new("."), src)?),
             Some(resolve_git_object_type(Path::new("."), src)?),
         )
     };
+    if let Some(bundle) = bundle.as_ref()
+        && bundle.len() > config.publisher_max_bundle_bytes as u64
+    {
+        bail!(
+            "git bundle is too large ({} bytes > {} bytes)",
+            bundle.len(),
+            config.publisher_max_bundle_bytes
+        );
+    }
     let request = DirectPushRequest {
         repo: repo.to_string(),
         src: src.to_string(),
         dst: dst.to_string(),
         force,
-        bundle_base64,
         src_oid,
         src_object_type,
     };
-    let response = submit_direct_push_request(Path::new(&config.publisher_socket_path), &request)
-        .await
-        .with_context(|| format!("zodex direct push failed for {repo} {raw_spec}"))?;
+    let response = submit_direct_push_request(
+        Path::new(&config.publisher_socket_path),
+        config.publisher_max_bundle_bytes,
+        &request,
+        bundle.as_ref().map(DirectPushBundle::path),
+    )
+    .await
+    .with_context(|| format!("zodex direct push failed for {repo} {raw_spec}"))?;
     Ok(response.dst)
 }
 
@@ -206,14 +262,14 @@ pub(super) fn git_remote_zodex_push_dst(raw_spec: &str) -> Option<String> {
     }
 }
 
-fn create_direct_push_bundle_base64(src: &str) -> Result<Option<String>> {
-    create_direct_push_bundle_base64_from_dir(Path::new("."), src)
+fn create_direct_push_bundle(src: &str) -> Result<Option<DirectPushBundle>> {
+    create_direct_push_bundle_from_dir(Path::new("."), src)
 }
 
-pub(super) fn create_direct_push_bundle_base64_from_dir(
+pub(super) fn create_direct_push_bundle_from_dir(
     repo_dir: &Path,
     src: &str,
-) -> Result<Option<String>> {
+) -> Result<Option<DirectPushBundle>> {
     let tempdir = tempfile::tempdir().context("failed to create direct push bundle tempdir")?;
     let bundle_path = tempdir.path().join("direct-push.bundle");
     let mut args = vec!["bundle", "create", bundle_path.to_str().unwrap(), src];
@@ -232,9 +288,14 @@ pub(super) fn create_direct_push_bundle_base64_from_dir(
         }
         bail!("git bundle create failed: {}", stderr.trim());
     }
-    let bundle = fs::read(&bundle_path)
-        .with_context(|| format!("failed to read {}", bundle_path.display()))?;
-    Ok(Some(BASE64.encode(bundle)))
+    let len = fs::metadata(&bundle_path)
+        .with_context(|| format!("failed to stat {}", bundle_path.display()))?
+        .len();
+    Ok(Some(DirectPushBundle {
+        _tempdir: tempdir,
+        path: bundle_path,
+        len,
+    }))
 }
 
 pub(super) fn resolve_git_object_id(repo_dir: &Path, src: &str) -> Result<String> {

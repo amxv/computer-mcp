@@ -9,18 +9,14 @@ pub const DEFAULT_CONFIG_PATH: &str = "/etc/zodex/config.toml";
 const MIN_YIELD_MS: u64 = 50;
 const MAX_YIELD_MS: u64 = 60_000;
 const MIN_EXEC_TIMEOUT_MS: u64 = 1_000;
-pub const DEFAULT_PUBLISHER_MAX_BUNDLE_BYTES: usize = 32 * 1024 * 1024;
+pub const DEFAULT_PUBLISHER_MAX_BUNDLE_BYTES: usize = 128 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub bind_host: String,
-    pub bind_port: u16,
-    pub http_bind_port: Option<u16>,
+    pub service_port: u16,
     pub api_key: String,
-    pub tls_mode: String,
-    pub tls_cert_path: String,
-    pub tls_key_path: String,
     pub max_sessions: usize,
     pub default_exec_timeout_ms: u64,
     pub max_exec_timeout_ms: u64,
@@ -89,12 +85,8 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             bind_host: "0.0.0.0".to_string(),
-            bind_port: 443,
-            http_bind_port: None,
+            service_port: 8080,
             api_key: "change-me".to_string(),
-            tls_mode: "auto".to_string(),
-            tls_cert_path: "/var/lib/zodex/tls/cert.pem".to_string(),
-            tls_key_path: "/var/lib/zodex/tls/key.pem".to_string(),
             max_sessions: 64,
             default_exec_timeout_ms: 7_200_000,
             max_exec_timeout_ms: 7_200_000,
@@ -187,7 +179,7 @@ mod tests {
     fn config_defaults_include_publisher_settings() {
         let cfg = Config::default();
 
-        assert_eq!(cfg.http_bind_port, None);
+        assert_eq!(cfg.service_port, 8080);
         assert_eq!(cfg.reader_app_id, None);
         assert_eq!(cfg.reader_installation_id, None);
         assert!(
@@ -234,7 +226,7 @@ max_output_chars = 200000
 
         assert_eq!(parsed.reader_app_id, None);
         assert_eq!(parsed.reader_installation_id, None);
-        assert_eq!(parsed.http_bind_port, Some(8080));
+        assert_eq!(parsed.service_port, 8080);
         assert_eq!(
             parsed.reader_private_key_path,
             "/etc/zodex/reader/private-key.pem"
@@ -249,6 +241,25 @@ max_output_chars = 200000
         assert_eq!(parsed.publisher_branch_prefix, "agent");
         assert!(parsed.publisher_installations.is_empty());
         assert!(parsed.publisher_targets.is_empty());
+    }
+
+    #[test]
+    fn legacy_tls_dual_listener_fields_are_ignored_while_service_port_defaults_to_8080() {
+        let parsed: Config = toml::from_str(
+            r#"
+bind_host = "0.0.0.0"
+bind_port = 8443
+http_bind_port = 8080
+api_key = "legacy-key"
+tls_mode = "self_signed"
+tls_cert_path = "/var/lib/zodex/tls/cert.pem"
+tls_key_path = "/var/lib/zodex/tls/key.pem"
+"#,
+        )
+        .expect("legacy TLS config should remain loadable during migration");
+
+        assert_eq!(parsed.service_port, 8080);
+        assert_eq!(parsed.bind_host, "0.0.0.0");
     }
 
     #[test]

@@ -29,7 +29,7 @@ OpenAI Platform tunnel permissions and ChatGPT developer-mode permissions are se
 ## Install the operator CLI
 
 ```bash
-curl -fsSL https://zodex.ashray.xyz/install.sh | ZODEX_INSTALL_MODE=operator bash
+curl -fsSL https://zodex.ashray.xyz/install.sh | sh
 ```
 
 Verify:
@@ -178,7 +178,7 @@ zodex local status
 
 OpenAI's UI can change, so use the path shown in your current ChatGPT settings.
 
-Current OpenAI guidance uses **Settings → Apps** and developer mode / custom apps. Most paid ChatGPT plans let users enable developer mode and add custom MCP servers, although workspace settings or administrator policy can still restrict access.
+Current OpenAI guidance uses **Settings → Apps** and developer mode / custom apps. Most OpenAI paid plans support custom MCP servers.
 
 ## Create the Zodex app in ChatGPT
 

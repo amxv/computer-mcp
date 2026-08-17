@@ -1,76 +1,7 @@
     #[test]
-    fn build_reader_status_lines_include_reader_hints() {
-        let config = Config::default();
-        let joined = build_reader_status_lines(&config).join("\n");
-        assert!(joined.contains("service: zodex-reader"));
-        assert!(joined.contains("active: not-ready"));
-        assert!(joined.contains("hint: set `reader_app_id` in config"));
-        assert!(joined.contains("hint: set `reader_installation_id` in config"));
-    }
-
-    #[test]
-    fn parse_git_credential_request_extracts_known_fields() {
-        let request = parse_git_credential_request(
-            "protocol=https\nhost=github.com\npath=amxv/zodex.git\nusername=x-access-token\n\n",
-        );
-
-        assert_eq!(request.protocol.as_deref(), Some("https"));
-        assert_eq!(request.host.as_deref(), Some("github.com"));
-        assert_eq!(request.path.as_deref(), Some("amxv/zodex.git"));
-        assert_eq!(request.username.as_deref(), Some("x-access-token"));
-    }
-
-    #[test]
-    fn git_credential_request_targets_github_for_https_host() {
-        let request = parse_git_credential_request("protocol=https\nhost=github.com\n\n");
-        assert!(git_credential_request_targets_github(&request));
-    }
-
-    #[test]
-    fn git_credential_request_targets_github_for_https_url_fallback() {
-        let request = parse_git_credential_request("url=https://github.com/amxv/zodex.git\n\n");
-        assert!(git_credential_request_targets_github(&request));
-    }
-
-    #[test]
-    fn git_credential_request_rejects_non_github_or_non_https() {
-        let ssh_request = parse_git_credential_request("protocol=ssh\nhost=github.com\n\n");
-        let other_host_request =
-            parse_git_credential_request("protocol=https\nhost=example.com\n\n");
-
-        assert!(!git_credential_request_targets_github(&ssh_request));
-        assert!(!git_credential_request_targets_github(&other_host_request));
-    }
-
-    #[test]
-    fn credential_url_helpers_extract_protocol_and_host() {
-        assert_eq!(
-            credential_url_protocol("https://github.com/amxv/zodex.git"),
-            Some("https")
-        );
-        assert_eq!(
-            credential_url_host("https://token@github.com/amxv/zodex.git"),
-            Some("github.com")
-        );
-        assert!(credential_host_is_github("github.com:443"));
-        assert!(credential_host_is_github("www.github.com"));
-        assert!(!credential_host_is_github("gitlab.com"));
-    }
-
-    #[test]
-    fn github_repo_normalization_handles_git_suffix_and_url_path() {
+    fn github_repo_normalization_handles_git_suffix() {
         assert_eq!(
             normalize_github_repo("/amxv/zodex.git"),
-            Some("amxv/zodex".to_string())
-        );
-        assert_eq!(
-            credential_url_path("https://github.com/amxv/zodex.git"),
-            Some("amxv/zodex.git")
-        );
-        assert_eq!(
-            git_credential_request_repo(&parse_git_credential_request(
-                "url=https://github.com/amxv/zodex.git\n\n"
-            )),
             Some("amxv/zodex".to_string())
         );
     }
@@ -207,6 +138,17 @@
     }
 
     #[test]
+    fn default_agent_git_repair_script_keeps_grant_helper_and_removes_yolo_rewrite() {
+        let script = github_default_agent_git_repair_script();
+
+        assert!(script.contains(r#"helper_cmd="/usr/local/bin/zodex-agent --config /etc/zodex/config.toml git-credential-helper""#));
+        assert!(script.contains(r#"git config --global --replace-all credential.https://github.com.helper "$helper_cmd""#));
+        assert!(script.contains(r#"git config --global credential.https://github.com.useHttpPath true"#));
+        assert!(script.contains(r#"git config --global --unset-all url."zodex::https://github.com/".pushInsteadOf || true"#));
+        assert!(!script.contains(r#"--replace-all url."zodex::https://github.com/".pushInsteadOf"#));
+    }
+
+    #[test]
     fn yolo_agent_git_inspect_script_reads_direct_push_plumbing() {
         let script = github_yolo_agent_git_inspect_script();
 
@@ -286,11 +228,13 @@
     #[test]
     fn sprite_registry_resolves_explicit_env_single_and_ambiguous_cases() {
         let registry = OperatorSpriteRegistry {
+            version: OPERATOR_SPRITES_REGISTRY_VERSION,
             sprites: vec![OperatorSpriteRecord {
                 name: "dev-sprite".to_string(),
                 org: None,
                 remote_config: "/etc/zodex/config.toml".to_string(),
                 last_setup_at: "2026-06-30T00:00:00Z".to_string(),
+                proxy: None,
             }],
         };
 
@@ -323,18 +267,21 @@
         assert!(empty_message.contains("zodex sprite setup"));
 
         let ambiguous = OperatorSpriteRegistry {
+            version: OPERATOR_SPRITES_REGISTRY_VERSION,
             sprites: vec![
                 OperatorSpriteRecord {
                     name: "one".to_string(),
                     org: None,
                     remote_config: "/etc/zodex/config.toml".to_string(),
                     last_setup_at: "2026-06-30T00:00:00Z".to_string(),
+                    proxy: None,
                 },
                 OperatorSpriteRecord {
                     name: "two".to_string(),
                     org: None,
                     remote_config: "/etc/zodex/config.toml".to_string(),
                     last_setup_at: "2026-06-30T00:00:00Z".to_string(),
+                    proxy: None,
                 },
             ],
         };
@@ -366,6 +313,7 @@
                 org: None,
                 remote_config: "/old".to_string(),
                 last_setup_at: "old".to_string(),
+                proxy: None,
             },
         );
         upsert_operator_sprite_record(
@@ -375,40 +323,12 @@
                 org: None,
                 remote_config: "/new".to_string(),
                 last_setup_at: "new".to_string(),
+                proxy: None,
             },
         );
 
         assert_eq!(registry.sprites.len(), 1);
         assert_eq!(registry.sprites[0].remote_config, "/new");
-    }
-
-    #[test]
-    fn matching_push_grant_uses_repo_path_and_ignores_ungranted_repo() {
-        let grants_dir = tempdir().expect("tempdir");
-        let granted_repo = "amxv/zodex";
-        let grant_path = grants_dir.path().join("amxv__zodex.json");
-        fs::write(
-            &grant_path,
-            r#"{"repo":"amxv/zodex","token":"push-token","expires_at":"2026-06-26T00:00:00Z"}"#,
-        )
-        .expect("write grant");
-
-        let granted_request = parse_git_credential_request(
-            "protocol=https\nhost=github.com\npath=amxv/zodex.git\n\n",
-        );
-        let ungranted_request = parse_git_credential_request(
-            "protocol=https\nhost=github.com\npath=amxv/other.git\n\n",
-        );
-
-        let granted = load_matching_push_grant(&granted_request, grants_dir.path())
-            .expect("granted lookup should succeed")
-            .expect("grant should exist");
-        let ungranted = load_matching_push_grant(&ungranted_request, grants_dir.path())
-            .expect("ungranted lookup should succeed");
-
-        assert_eq!(granted.repo, granted_repo);
-        assert_eq!(granted.token, "push-token");
-        assert!(ungranted.is_none());
     }
 
     #[test]
@@ -435,6 +355,20 @@
     }
 
     #[test]
+    fn github_provider_error_body_is_bounded_and_does_not_dump_html() {
+        let html = "<html><body>provider error</body></html>";
+        assert_eq!(
+            summarize_github_error_body(html),
+            format!("non-JSON response body ({} bytes)", html.len())
+        );
+
+        let huge_json = serde_json::json!({ "error": "x".repeat(4_096) }).to_string();
+        let summary = summarize_github_error_body(&huge_json);
+        assert!(summary.ends_with("… [truncated]"));
+        assert!(summary.chars().count() <= MAX_GITHUB_ERROR_DETAIL_CHARS + 16);
+    }
+
+    #[test]
     fn push_grant_expired_only_when_epoch_cutoff_has_passed() {
         let active = PushGrantRecord {
             repo: "amxv/zodex".to_string(),
@@ -454,23 +388,6 @@
         assert!(!push_grant_expired(&active, 999));
         assert!(push_grant_expired(&active, 1_000));
         assert!(!push_grant_expired(&no_ttl, 9_999));
-    }
-
-    #[test]
-    fn load_push_grant_from_dir_ignores_expired_grants() {
-        let grants_dir = tempdir().expect("tempdir");
-        let path = grants_dir.path().join("amxv__zodex.json");
-        fs::write(
-            &path,
-            r#"{"repo":"amxv/zodex","token":"push-token","expires_at":"1970-01-01T00:00:01Z","expires_at_epoch_seconds":1}"#,
-        )
-        .expect("write grant");
-
-        let grant =
-            load_push_grant_from_dir("amxv/zodex", grants_dir.path()).expect("lookup should work");
-
-        assert!(grant.is_none());
-        assert!(!path.exists());
     }
 
     #[test]
@@ -501,16 +418,17 @@
     }
 
     #[test]
-    fn sprite_setup_and_upgrade_scripts_enable_github_use_http_path() {
-        let setup_script = build_sprite_setup_script(
-            "owner/repo",
-            1,
-            2,
-            3,
-            4,
-            "main",
-            Path::new("/etc/zodex/config.toml"),
-        );
+    fn sprite_setup_and_upgrade_scripts_enable_github_use_http_path_without_forcing_yolo() {
+        let setup_script = build_sprite_setup_script(&super::SpriteSetupScriptOptions {
+            repo: "owner/repo",
+            reader_app_id: 1,
+            reader_installation_id: 2,
+            publisher_app_id: 3,
+            publisher_client_id: "Iv1.writer-client",
+            publisher_installation_id: 4,
+            default_base: "main",
+            remote_config: Path::new("/etc/zodex/config.toml"),
+        });
         let upgrade_script = build_sprite_upgrade_script(
             "latest",
             "owner/repo",
@@ -518,9 +436,10 @@
         );
 
         assert!(setup_script.contains("credential.https://github.com.useHttpPath true"));
+        assert!(setup_script.contains("publisher_client_id = \"Iv1.writer-client\""));
         assert!(upgrade_script.contains("credential.https://github.com.useHttpPath true"));
-        assert!(setup_script.contains("url.\"zodex::https://github.com/\".pushInsteadOf"));
-        assert!(upgrade_script.contains("url.\"zodex::https://github.com/\".pushInsteadOf"));
+        assert!(!setup_script.contains("url.\"zodex::https://github.com/\".pushInsteadOf"));
+        assert!(!upgrade_script.contains("url.\"zodex::https://github.com/\".pushInsteadOf"));
         assert!(!setup_script.contains(".insteadOf https://github.com/"));
         assert!(!upgrade_script.contains(".insteadOf https://github.com/"));
         let disabled_setting = ["credential.https://github.com.useHttpPath ", "false"].concat();
@@ -529,19 +448,10 @@
     }
 
     #[test]
-    fn resolve_publisher_client_id_prefers_explicit_value_then_config() {
-        let config = Config {
-            publisher_client_id: Some("Iv1.from-config".to_string()),
-            ..Config::default()
-        };
-
+    fn resolve_publisher_client_id_accepts_explicit_value() {
         assert_eq!(
-            resolve_publisher_client_id(&config, Some("Iv1.from-cli")),
+            resolve_publisher_client_id(Some("Iv1.from-cli")),
             Some("Iv1.from-cli".to_string())
-        );
-        assert_eq!(
-            resolve_publisher_client_id(&config, None),
-            Some("Iv1.from-config".to_string())
         );
     }
 

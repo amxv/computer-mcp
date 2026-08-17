@@ -1,12 +1,14 @@
 {
   "name": "zodex-cloudflare-worker",
   "private": true,
+  "type": "module",
   "version": "0.1.0",
   "description": "Cloudflare Worker proxy for zodex Sprite deployments",
   "scripts": {
-    "deploy": "wrangler deploy"
+    "deploy": "wrangler deploy",
+    "test": "bun test src/index.test.js"
   },
   "devDependencies": {
-    "wrangler": "^4.23.0"
+    "wrangler": "^4.102.0"
   }
 }
