@@ -687,7 +687,7 @@
             .join("src")
             .join("bin")
             .join("zodex");
-        let source = ["sprite_proxy.rs", "sprite_services.rs"]
+        let source = ["sprite_proxy.rs", "sprite_services.rs", "sprite_health.rs"]
             .into_iter()
             .map(|file| {
                 std::fs::read_to_string(source_dir.join(file)).expect("read zodex source module")
@@ -697,12 +697,11 @@
 
         for fn_name in [
             "derive_remote_target_repo",
-            "verify_local_sprite_health",
             "verify_agent_git_identity",
             "verify_reader_git_access",
             "verify_publisher_socket_permissions",
             "verify_publisher_key_isolation",
-            "verify_sprite_health",
+            "read_local_sprite_runtime_health",
         ] {
             let start = source
                 .find(&format!("fn {fn_name}"))

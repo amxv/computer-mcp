@@ -13,7 +13,7 @@ pub use git::{
     detect_repo_root, ensure_clean_worktree,
 };
 pub use github::{
-    create_pull_request, mint_publisher_installation_token,
+    create_pull_request, github_app_client_id, mint_publisher_installation_token,
     mint_publisher_installation_token_with_metadata, mint_reader_installation_token,
     resolve_repo_installation_id,
 };

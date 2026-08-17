@@ -216,6 +216,9 @@ async fn try_resolve_repo_id_for_device_flow(config: &Config, repo: &str) -> Res
 }
 
 async fn request_device_flow_code(client_id: &str) -> Result<GitHubDeviceCodeResponse> {
+    if client_id.trim().is_empty() {
+        bail!("GitHub writer client ID cannot be empty");
+    }
     let client = reqwest::Client::new();
     let response = client
         .post(GITHUB_OAUTH_DEVICE_CODE_URL)
@@ -225,17 +228,46 @@ async fn request_device_flow_code(client_id: &str) -> Result<GitHubDeviceCodeRes
         .send()
         .await
         .context("failed to request GitHub device code")?;
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    parse_github_device_code_response(status.as_u16(), &body)
+}
 
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        bail!("GitHub device code request failed ({status}): {body}");
+fn parse_github_device_code_response(status: u16, body: &str) -> Result<GitHubDeviceCodeResponse> {
+    let value: serde_json::Value = serde_json::from_str(body).with_context(|| {
+        format!("GitHub device code response was not valid JSON (HTTP {status})")
+    })?;
+    if let Some(error) = value.get("error").and_then(serde_json::Value::as_str) {
+        let description = value
+            .get("error_description")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("no description");
+        match error {
+            "device_flow_disabled" => bail!(
+                "GitHub writer App Device Flow is disabled. Enable Device Flow in the writer GitHub App settings, then rerun setup."
+            ),
+            "incorrect_client_credentials" => bail!(
+                "GitHub rejected the writer client ID. Pass the writer GitHub App Client ID (not the App ID or client secret)."
+            ),
+            other => bail!("GitHub device-code preflight failed with {other}: {description}"),
+        }
     }
+    if !(200..300).contains(&status) {
+        bail!("GitHub device-code preflight failed with HTTP {status}");
+    }
+    serde_json::from_value(value).context("failed to decode GitHub device code response")
+}
 
-    response
-        .json()
-        .await
-        .context("failed to decode GitHub device code response")
+async fn preflight_publisher_device_flow(client_id: &str) -> Result<()> {
+    let code = request_device_flow_code(client_id).await?;
+    if code.device_code.trim().is_empty()
+        || code.user_code.trim().is_empty()
+        || code.verification_uri.trim().is_empty()
+        || code.expires_in == 0
+    {
+        bail!("GitHub Device Flow preflight returned an incomplete device-code response");
+    }
+    Ok(())
 }
 
 async fn poll_device_flow_access_token(

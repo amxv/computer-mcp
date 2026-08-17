@@ -509,15 +509,16 @@
 
     #[test]
     fn sprite_setup_and_upgrade_scripts_enable_github_use_http_path() {
-        let setup_script = build_sprite_setup_script(
-            "owner/repo",
-            1,
-            2,
-            3,
-            4,
-            "main",
-            Path::new("/etc/zodex/config.toml"),
-        );
+        let setup_script = build_sprite_setup_script(&super::SpriteSetupScriptOptions {
+            repo: "owner/repo",
+            reader_app_id: 1,
+            reader_installation_id: 2,
+            publisher_app_id: 3,
+            publisher_client_id: "Iv1.writer-client",
+            publisher_installation_id: 4,
+            default_base: "main",
+            remote_config: Path::new("/etc/zodex/config.toml"),
+        });
         let upgrade_script = build_sprite_upgrade_script(
             "latest",
             "owner/repo",
@@ -525,6 +526,7 @@
         );
 
         assert!(setup_script.contains("credential.https://github.com.useHttpPath true"));
+        assert!(setup_script.contains("publisher_client_id = \"Iv1.writer-client\""));
         assert!(upgrade_script.contains("credential.https://github.com.useHttpPath true"));
         assert!(setup_script.contains("url.\"zodex::https://github.com/\".pushInsteadOf"));
         assert!(upgrade_script.contains("url.\"zodex::https://github.com/\".pushInsteadOf"));

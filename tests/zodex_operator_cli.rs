@@ -125,6 +125,22 @@ fn zodex_sprite_proxy_help_exposes_canonical_worker_operations() {
 }
 
 #[test]
+fn zodex_sprite_setup_help_exposes_writer_device_flow_and_public_edge_contract() {
+    let output = Command::new(env!("CARGO_BIN_EXE_zodex"))
+        .args(["sprite", "setup", "--help"])
+        .output()
+        .expect("run zodex sprite setup --help");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--publisher-client-id"));
+    assert!(stdout.contains("--publisher-app-id"));
+    assert!(stdout.contains("--publisher-pem"));
+    assert!(stdout.contains("--url-auth"));
+    assert!(stdout.contains("[default: public]"));
+}
+
+#[test]
 fn zodex_github_help_exposes_mode_commands() {
     let output = Command::new(env!("CARGO_BIN_EXE_zodex"))
         .args(["github", "--help"])

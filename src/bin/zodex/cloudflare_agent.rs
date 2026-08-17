@@ -183,6 +183,19 @@ fn cloudflare_account_fallback_id<'a>(
     registered_account_id.or(environment_account_id)
 }
 
+fn permanent_cloudflare_auth_available(proxy: &OperatorSpriteProxyRecord) -> Result<bool> {
+    let deploy = match resolve_proxy_deploy_command() {
+        Ok(deploy) => deploy,
+        Err(_) => return Ok(false),
+    };
+    match run_wrangler_whoami(&deploy) {
+        Ok(WranglerWhoamiState::Authenticated(accounts)) => Ok(accounts
+            .iter()
+            .any(|account| account.id == proxy.cloudflare_account_id)),
+        Ok(WranglerWhoamiState::Unauthenticated) | Err(_) => Ok(false),
+    }
+}
+
 fn run_wrangler_deploy_attempt(
     deploy: &ProxyDeployCommandSpec,
     project_dir: &Path,
@@ -367,6 +380,36 @@ fn registered_proxy_for_resolution(
     Ok(load_operator_sprite_record(sprite)?.and_then(|record| record.proxy))
 }
 
+fn verified_current_registered_proxy_url(
+    resolution: &ProxyOriginResolution,
+) -> Result<Option<String>> {
+    let Some(proxy) = registered_proxy_for_resolution(resolution)? else {
+        return Ok(None);
+    };
+    let expected_build = proxy_worker_build_id();
+    if proxy.worker_build != expected_build {
+        return Ok(None);
+    }
+    let Ok(status) = proxy_worker_status(&proxy.worker_url) else {
+        return Ok(None);
+    };
+    if !registered_proxy_matches_live_status(&proxy, &status, resolution, &expected_build) {
+        return Ok(None);
+    }
+    Ok(Some(proxy.worker_url))
+}
+
+fn registered_proxy_matches_live_status(
+    proxy: &OperatorSpriteProxyRecord,
+    status: &ProxyWorkerStatus,
+    resolution: &ProxyOriginResolution,
+    expected_build: &str,
+) -> bool {
+    proxy.worker_build == expected_build
+        && proxy_worker_build_state(status, expected_build) == "current"
+        && status.sprite_origin.as_deref() == Some(resolution.origin.as_str())
+}
+
 fn verify_deployed_proxy(url: &str, resolution: &ProxyOriginResolution, expected_build: &str) -> Result<()> {
     let status = proxy_worker_status(url)?;
     if status.component != PROXY_WORKER_COMPONENT {
@@ -392,7 +435,7 @@ fn deploy_proxy_with_cloudflare_flow(
     config_path: &Path,
     deploy: &ProxyDeployCommandSpec,
     requested_account: Option<&str>,
-) -> Result<()> {
+) -> Result<CloudflareDeployOutcome> {
     let existing_proxy = registered_proxy_for_resolution(resolution)?;
     let registered_account_id = existing_proxy
         .as_ref()
@@ -410,7 +453,7 @@ fn deploy_proxy_with_cloudflare_flow(
         environment_account.as_deref(),
     )?;
 
-    match outcome {
+    match &outcome {
         CloudflareDeployOutcome::Permanent(permanent) => {
             verify_deployed_proxy(&permanent.worker_url, resolution, worker_build)?;
             if let Some(sprite) = resolution.sprite.as_ref() {
@@ -472,7 +515,7 @@ fn deploy_proxy_with_cloudflare_flow(
             println!("proxy-deploy: temporary-awaiting-claim");
         }
     }
-    Ok(())
+    Ok(outcome)
 }
 
 fn execute_cloudflare_deploy_flow(

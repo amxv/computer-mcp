@@ -160,6 +160,38 @@ pub async fn mint_publisher_installation_token_with_metadata(
     .await
 }
 
+pub async fn github_app_client_id(app_id: u64, private_key_path: &Path) -> Result<String> {
+    #[derive(Debug, Deserialize)]
+    struct AuthenticatedAppResponse {
+        client_id: String,
+    }
+
+    let jwt = github_app_jwt(app_id, private_key_path, "publisher")?;
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!("{GITHUB_API_BASE}/app"))
+        .header(ACCEPT, "application/vnd.github+json")
+        .header(AUTHORIZATION, format!("Bearer {jwt}"))
+        .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
+        .header(USER_AGENT, DEFAULT_USER_AGENT)
+        .send()
+        .await
+        .context("failed to inspect publisher GitHub App metadata")?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        bail!("GitHub authenticated App lookup failed ({status}): {body}");
+    }
+    let payload: AuthenticatedAppResponse = response
+        .json()
+        .await
+        .context("failed to decode publisher GitHub App metadata")?;
+    if payload.client_id.trim().is_empty() {
+        bail!("GitHub authenticated App metadata did not contain a client ID");
+    }
+    Ok(payload.client_id)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum TokenPermissionProfile {
     Reader,
@@ -172,26 +204,7 @@ async fn mint_installation_token(
     installation_id: u64,
     permissions: TokenPermissionProfile,
 ) -> Result<MintedInstallationToken> {
-    let key_pem = fs::read(private_key_path)
-        .with_context(|| format!("failed to read {}", private_key_path.display()))?;
-    let encoding_key = EncodingKey::from_rsa_pem(&key_pem).with_context(|| {
-        format!(
-            "failed to parse {} RSA private key",
-            permissions.private_key_label()
-        )
-    })?;
-
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .context("system clock is before UNIX_EPOCH")?
-        .as_secs();
-    let claims = GithubAppClaims {
-        iat: now.saturating_sub(60),
-        exp: now + 540,
-        iss: app_id.to_string(),
-    };
-    let jwt = encode(&Header::new(Algorithm::RS256), &claims, &encoding_key)
-        .context("failed to encode GitHub App JWT")?;
+    let jwt = github_app_jwt(app_id, private_key_path, permissions.private_key_label())?;
 
     let client = reqwest::Client::new();
     let response = client
@@ -233,22 +246,7 @@ pub async fn resolve_repo_installation_id(
         id: u64,
     }
 
-    let key_pem = fs::read(private_key_path)
-        .with_context(|| format!("failed to read {}", private_key_path.display()))?;
-    let encoding_key =
-        EncodingKey::from_rsa_pem(&key_pem).context("failed to parse publisher RSA private key")?;
-
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .context("system clock is before UNIX_EPOCH")?
-        .as_secs();
-    let claims = GithubAppClaims {
-        iat: now.saturating_sub(60),
-        exp: now + 540,
-        iss: app_id.to_string(),
-    };
-    let jwt = encode(&Header::new(Algorithm::RS256), &claims, &encoding_key)
-        .context("failed to encode GitHub App JWT")?;
+    let jwt = github_app_jwt(app_id, private_key_path, "GitHub App")?;
 
     let client = reqwest::Client::new();
     let response = client
@@ -272,6 +270,24 @@ pub async fn resolve_repo_installation_id(
         .await
         .context("failed to decode GitHub repo installation response")?;
     Ok(payload.id)
+}
+
+fn github_app_jwt(app_id: u64, private_key_path: &Path, key_label: &str) -> Result<String> {
+    let key_pem = fs::read(private_key_path)
+        .with_context(|| format!("failed to read {}", private_key_path.display()))?;
+    let encoding_key = EncodingKey::from_rsa_pem(&key_pem)
+        .with_context(|| format!("failed to parse {key_label} RSA private key"))?;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock is before UNIX_EPOCH")?
+        .as_secs();
+    let claims = GithubAppClaims {
+        iat: now.saturating_sub(60),
+        exp: now + 540,
+        iss: app_id.to_string(),
+    };
+    encode(&Header::new(Algorithm::RS256), &claims, &encoding_key)
+        .context("failed to encode GitHub App JWT")
 }
 
 impl TokenPermissionProfile {

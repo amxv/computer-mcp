@@ -32,7 +32,8 @@ use time::{OffsetDateTime, UtcOffset};
 use zodex::config::{Config, DEFAULT_CONFIG_PATH};
 use zodex::install_rustls_crypto_provider;
 use zodex::publisher::{
-    mint_publisher_installation_token_with_metadata, mint_reader_installation_token,
+    github_app_client_id, mint_publisher_installation_token_with_metadata,
+    mint_reader_installation_token,
     resolve_repo_installation_id,
 };
 use zodex::redaction::redact_api_key_query_params;
@@ -62,7 +63,6 @@ const SHARED_PROCESS_DIR_MODE: u32 = 0o750;
 const SPRITE_SERVICE_RESTART_TIMEOUT_MS: u64 = 20_000;
 const SPRITE_SERVICE_RESTART_POLL_MS: u64 = 200;
 const PRIMARY_OPERATOR_BINARY: &str = "zodex";
-const AGENT_OPERATOR_BINARY: &str = "zodex-agent";
 const PRIMARY_DAEMON_BINARY: &str = "zodexd";
 const PUSH_GRANTS_DIR: &str = "/var/lib/zodex/push-grants";
 const PUSH_GRANT_REMOTE_TMP_PATH: &str = "/tmp/zodex-push-grant.json";
@@ -209,10 +209,12 @@ enum SpriteCommand {
         #[arg(long)]
         publisher_app_id: u64,
         #[arg(long)]
+        publisher_client_id: String,
+        #[arg(long)]
         publisher_pem: PathBuf,
         #[arg(long, default_value = "main")]
         default_base: String,
-        #[arg(long, default_value = "sprite")]
+        #[arg(long, default_value = "public")]
         url_auth: String,
         #[arg(long, default_value = DEFAULT_CONFIG_PATH)]
         remote_config: String,
@@ -621,6 +623,7 @@ struct SpriteSetupOptions<'a> {
     reader_app_id: u64,
     reader_pem: &'a Path,
     publisher_app_id: u64,
+    publisher_client_id: &'a str,
     publisher_pem: &'a Path,
     default_base: &'a str,
     url_auth: &'a str,

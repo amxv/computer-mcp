@@ -185,6 +185,7 @@ fn restart_sprite_services(sprite: &str, org: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn local_sprite_health_probe_script() -> &'static str {
     r#"set -euo pipefail
 for attempt in $(seq 1 20); do
@@ -272,22 +273,11 @@ fn verify_sprite_service_logs(sprite: &str, org: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn verify_local_sprite_health(sprite: &str, org: Option<&str>) -> Result<()> {
-    let exec_args = vec![
-        "sudo".to_string(),
-        "bash".to_string(),
-        "-lc".to_string(),
-        local_sprite_health_probe_script().to_string(),
-    ];
-    run_sprite_exec(sprite, org, &exec_args, &[])?;
-    Ok(())
-}
-
 fn verify_installed_sprite_release(
     sprite: &str,
     org: Option<&str>,
     requested_version: &str,
-) -> Result<()> {
+) -> Result<String> {
     let exec_args = vec![
         "sudo".to_string(),
         "-u".to_string(),
@@ -300,7 +290,7 @@ fn verify_installed_sprite_release(
     let output = run_sprite_exec(sprite, org, &exec_args, &[])?;
     let installed_version = validate_installed_sprite_release(&output, requested_version)?;
     println!("sprite-runtime-version: {installed_version}");
-    Ok(())
+    Ok(installed_version)
 }
 
 fn validate_installed_sprite_release(output: &str, requested_version: &str) -> Result<String> {

@@ -610,22 +610,37 @@ fn deploy_proxy_component(
     skip_verify_origin: bool,
 ) -> Result<()> {
     let resolution = resolve_proxy_origin(sprite, org, origin)?;
-    ensure_proxy_origin_is_publicly_routable(&resolution)?;
+    deploy_proxy_for_resolution(
+        &resolution,
+        worker_name,
+        cloudflare_account,
+        skip_verify_origin,
+    )?;
+    Ok(())
+}
+
+fn deploy_proxy_for_resolution(
+    resolution: &ProxyOriginResolution,
+    worker_name: Option<&str>,
+    cloudflare_account: Option<&str>,
+    skip_verify_origin: bool,
+) -> Result<CloudflareDeployOutcome> {
+    ensure_proxy_origin_is_publicly_routable(resolution)?;
     if !skip_verify_origin {
-        print_proxy_origin_check(&verify_proxy_origin(&resolution)?);
+        print_proxy_origin_check(&verify_proxy_origin(resolution)?);
     }
-    let existing_proxy = registered_proxy_for_resolution(&resolution)?;
+    let existing_proxy = registered_proxy_for_resolution(resolution)?;
     let name = worker_name
         .map(str::to_string)
         .or_else(|| existing_proxy.as_ref().map(|proxy| proxy.worker_name.clone()))
-        .unwrap_or_else(|| derive_proxy_worker_name(&resolution));
+        .unwrap_or_else(|| derive_proxy_worker_name(resolution));
     validate_worker_name(&name)?;
     let build = proxy_worker_build_id();
     let project = tempfile::tempdir().context("failed to create temporary Worker project")?;
-    let config_path = materialize_proxy_project(project.path(), &resolution, &name, &build)?;
+    let config_path = materialize_proxy_project(project.path(), resolution, &name, &build)?;
     let deploy = resolve_proxy_deploy_command()?;
     deploy_proxy_with_cloudflare_flow(
-        &resolution,
+        resolution,
         &name,
         &build,
         project.path(),

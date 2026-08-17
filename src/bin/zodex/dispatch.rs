@@ -116,6 +116,7 @@ pub(crate) async fn run() -> Result<()> {
                     reader_app_id,
                     reader_pem,
                     publisher_app_id,
+                    publisher_client_id,
                     publisher_pem,
                     default_base,
                     url_auth,
@@ -128,6 +129,7 @@ pub(crate) async fn run() -> Result<()> {
                         reader_app_id,
                         reader_pem: &reader_pem,
                         publisher_app_id,
+                        publisher_client_id: &publisher_client_id,
                         publisher_pem: &publisher_pem,
                         default_base: &default_base,
                         url_auth: &url_auth,
@@ -151,7 +153,8 @@ pub(crate) async fn run() -> Result<()> {
                         repo.as_deref(),
                         url_auth.as_deref(),
                         Path::new(&remote_config),
-                    )?;
+                    )
+                    .await?;
                 }
                 SpriteCommand::Sync {
                     sprite,
@@ -204,11 +207,16 @@ pub(crate) async fn run() -> Result<()> {
                     url_auth,
                 } => {
                     let resolved = resolve_remote_sprite(sprite.as_deref(), org.as_deref())?;
-                    verify_sprite_health(
-                        &resolved.name,
-                        resolved.org.as_deref(),
-                        url_auth.as_deref(),
-                    )?;
+                    if let Some(url_auth) = url_auth.as_deref() {
+                        require_public_sprite_url_auth(url_auth)?;
+                    }
+                    let record = load_operator_sprite_record(&resolved)?.ok_or_else(|| {
+                        anyhow!(
+                            "Sprite `{}` is not registered locally; run `zodex sprite setup` first",
+                            resolved.name
+                        )
+                    })?;
+                    verify_sprite_end_to_end_health(&resolved, &record).await?;
                 }
                 SpriteCommand::Restart { sprite, org } => {
                     let resolved = resolve_remote_sprite(sprite.as_deref(), org.as_deref())?;
