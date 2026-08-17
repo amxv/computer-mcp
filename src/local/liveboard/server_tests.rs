@@ -97,6 +97,10 @@ async fn host_serves_embedded_assets_and_only_allowlisted_same_origin_resources(
             .unwrap()
             .contains("connect-src 'self'")
     );
+    let csp = root.headers()["content-security-policy"].to_str().unwrap();
+    assert!(csp.contains("script-src 'self'"));
+    assert!(!csp.contains("script-src 'self' 'unsafe-inline'"));
+    assert!(csp.contains("style-src 'self' 'unsafe-inline'"));
     assert!(root.headers().get("access-control-allow-origin").is_none());
     let html = root.text().await.unwrap();
     assert!(html.contains("Zodex Liveboard"));

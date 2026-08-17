@@ -22,7 +22,7 @@ use super::bridge::LiveboardObserverBridge;
 use super::prefs::{LiveboardPreferencesPatch, LiveboardPreferencesStore};
 
 const PREFERENCE_BODY_LIMIT: usize = 64 * 1024;
-const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'";
+const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'";
 
 #[derive(Clone)]
 struct LiveboardState {

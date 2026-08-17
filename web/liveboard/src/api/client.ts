@@ -9,8 +9,21 @@ export interface ApiStatus {
 
 export interface ApiAgent {
   id: string
+  first_seen_at_ms: number
+  last_seen_at_ms: number
   seen_in_current_runtime: boolean
   active_process_count: number
+  workdirs: ApiAgentWorkdir[]
+}
+
+export interface ApiAgentWorkdir {
+  normalized_workdir: string
+  ordinal: number
+  first_seen_at_ms: number
+  last_seen_at_ms: number
+  first_invocation_id: number
+  last_invocation_id: number
+  retained_invocation_count: number
 }
 
 export interface ApiAgentList {
@@ -27,6 +40,23 @@ export interface LiveboardPreferences {
   max_visible_agents: number
   command_outputs_expanded: boolean
   diffs_expanded: boolean
+  agents: Record<string, LiveboardAgentPreference>
+}
+
+export interface LiveboardAgentPreference {
+  alias?: string
+  visible?: boolean
+  order?: number
+  width_weight?: number
+}
+
+export interface LiveboardPreferencesPatch {
+  schema_version?: number
+  theme?: ThemePreference
+  max_visible_agents?: number
+  command_outputs_expanded?: boolean
+  diffs_expanded?: boolean
+  agents?: Record<string, LiveboardAgentPreference>
 }
 
 export async function fetchJson<T>(path: string): Promise<T> {
@@ -38,6 +68,24 @@ export async function fetchJson<T>(path: string): Promise<T> {
     throw new Error(`Liveboard request failed (${response.status})`)
   }
   return (await response.json()) as T
+}
+
+export async function patchPreferences(
+  patch: LiveboardPreferencesPatch,
+): Promise<LiveboardPreferences> {
+  const response = await fetch('preferences', {
+    method: 'PATCH',
+    credentials: 'same-origin',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(patch),
+  })
+  if (!response.ok) {
+    throw new Error(`Liveboard preference update failed (${response.status})`)
+  }
+  return (await response.json()) as LiveboardPreferences
 }
 
 export async function loadBootstrap() {

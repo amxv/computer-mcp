@@ -1,60 +1,80 @@
-import { Match, Show, Switch, createEffect, createResource } from 'solid-js'
+import {
+  Match,
+  Switch,
+  createEffect,
+  createResource,
+  createSignal,
+} from 'solid-js'
 
-import { loadBootstrap } from '../api/client'
-import { applyTheme, connectionSummary } from './bootstrap'
+import {
+  loadBootstrap,
+  patchPreferences,
+  type LiveboardPreferencesPatch,
+} from '../api/client'
+import { Board } from '../board/Board'
+import { applyTheme } from './bootstrap'
+import { createCoarseClock } from './clock'
 
-export function App() {
-  const [bootstrap] = createResource(loadBootstrap)
-  createEffect(() => {
-    const value = bootstrap()
-    if (value) {
-      applyTheme(value.preferences.theme)
-    }
-  })
+type Bootstrap = Awaited<ReturnType<typeof loadBootstrap>>
+
+function LiveboardWorkspace(props: { bootstrap: Bootstrap }) {
+  const [preferences, setPreferences] = createSignal(props.bootstrap.preferences)
+  const [pendingSaves, setPendingSaves] = createSignal(0)
+  const [saveError, setSaveError] = createSignal<string>()
+  const now = createCoarseClock()
+  let mutationQueue: Promise<void> = Promise.resolve()
+
+  createEffect(() => applyTheme(preferences().theme))
+
+  const persistPreferences = (patch: LiveboardPreferencesPatch) => {
+    setPendingSaves((count) => count + 1)
+    setSaveError(undefined)
+    mutationQueue = mutationQueue
+      .then(async () => {
+        const updated = await patchPreferences(patch)
+        setPreferences(updated)
+      })
+      .catch((error: unknown) => {
+        setSaveError(error instanceof Error ? error.message : String(error))
+      })
+      .finally(() => setPendingSaves((count) => Math.max(0, count - 1)))
+  }
 
   return (
     <div class="app-shell">
-      <header class="toolbar">
-        <div>
-          <strong class="brand">Zodex Liveboard</strong>
-          <Show when={bootstrap()}>
-            {(value) => (
-              <span class="connection-detail">
-                {connectionSummary(
-                  value().status.runtime_id,
-                  value().status.current_runtime_agent_count,
-                  value().status.active_process_count,
-                )}
-              </span>
-            )}
-          </Show>
-        </div>
-        <span class="phase-label">Local observer</span>
-      </header>
-      <main class="bootstrap-surface">
-        <Switch>
-          <Match when={bootstrap.loading}>
-            <p>Connecting to Zodex Local…</p>
-          </Match>
-          <Match when={bootstrap.error}>
-            <div role="status" class="connection-error">
-              <strong>Local observer disconnected</strong>
-              <span>{String(bootstrap.error)}</span>
-            </div>
-          </Match>
-          <Match when={bootstrap()}>
-            {(value) => (
-              <section aria-label="Liveboard bootstrap" class="empty-board">
-                <p>
-                  {value().agents.agents.length === 0
-                    ? 'Waiting for the first Agent activity in this Local runtime.'
-                    : `${value().agents.agents.length} current-runtime Agent${value().agents.agents.length === 1 ? '' : 's'} ready for the board.`}
-                </p>
-              </section>
-            )}
-          </Match>
-        </Switch>
-      </main>
+      <Board
+        agents={props.bootstrap.agents.agents}
+        preferences={preferences()}
+        nowMs={now()}
+        saving={pendingSaves() > 0}
+        error={saveError()}
+        onPatch={persistPreferences}
+      />
     </div>
+  )
+}
+
+export function App() {
+  const [bootstrap] = createResource(loadBootstrap)
+
+  return (
+    <Switch>
+      <Match when={bootstrap.loading}>
+        <main class="bootstrap-surface">
+          <p>Connecting to Zodex Local…</p>
+        </main>
+      </Match>
+      <Match when={bootstrap.error}>
+        <main class="bootstrap-surface">
+          <div role="status" class="connection-error">
+            <strong>Local observer disconnected</strong>
+            <span>{String(bootstrap.error)}</span>
+          </div>
+        </main>
+      </Match>
+      <Match when={bootstrap()}>
+        {(value) => <LiveboardWorkspace bootstrap={value()} />}
+      </Match>
+    </Switch>
   )
 }
