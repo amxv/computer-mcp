@@ -8,6 +8,13 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.3.3 — 2026-08-18
+
+- Added presentation schema v3 and history schema v5 with persisted materialized file-change summaries/full bodies, projection-aware timeline/SSE delivery, and batch diff hydration so expanded diffs stay single-request while collapsed diffs remain lightweight.
+- Improved Liveboard rendering and streaming performance with lower virtualizer overscan, bounded O(1) SSE/output caches, smaller manual-history pages, stale-detail rejection, unmounted closed drawers, and more reliable Follow Live settling.
+- Expanded Liveboard controls with Lucide icons, configurable editor links for changed files, Raw-button visibility, consistent copy controls, clearer runtime/settings presentation, and refined command/diff metadata layout.
+- Reworked Agent drag ordering with a floating overlay and sliding sibling columns while preserving each virtualized timeline DOM node and avoiding unnecessary SSE handovers during UI-only reorders.
+
 ## 0.3.2 — 2026-08-17
 
 - Made `zodex local watch` open the read-only browser Liveboard by default while preserving the terminal viewer behind explicit `--tui` / TUI-only Agent filters.
