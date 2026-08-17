@@ -3,7 +3,8 @@ use std::io::IsTerminal as _;
 use zodex::local::{
     HistoryFormat, HistoryQuery, LocalConfig, LocalHistoryReader, LocalPaths, LocalStatusDocument,
     LocalStatusState, RuntimeKey, build_presentation, clear_local_history, ensure_offline_mutation,
-    parse_human_duration, render_presentation, run_local_watch, validate_tunnel_id, WatchOptions,
+    parse_human_duration, render_presentation, run_local_liveboard, run_local_watch,
+    validate_tunnel_id, WatchOptions,
 };
 
 #[cfg(target_os = "macos")]
@@ -15,7 +16,7 @@ use zodex::local::{
 };
 
 #[derive(Debug, Subcommand)]
-#[command(after_help = "Agent inspection examples:\n  zodex local status --json\n  zodex local history --last 20\n  zodex local watch\n  zodex local watch --agent k7m2\n  zodex local history --agent k7m2 --since 1h\n  zodex local history --workdir /absolute/repo/path\n  zodex local history --id <invocation-id> --raw")]
+#[command(after_help = "Agent inspection examples:\n  zodex local status --json\n  zodex local history --last 20\n  zodex local watch\n  zodex local watch --tui --agent k7m2\n  zodex local history --agent k7m2 --since 1h\n  zodex local history --workdir /absolute/repo/path\n  zodex local history --id <invocation-id> --raw")]
 enum LocalCommand {
     /// Provision Local configuration, credentials, and the managed tunnel client.
     #[command(after_help = "Examples:\n  zodex local setup\n  printf '%s\\n' \"$OPENAI_TUNNEL_RUNTIME_KEY\" | zodex local setup --tunnel-id tunnel_<id> --runtime-key-stdin\n  zodex local setup --tunnel-id tunnel_<id> --runtime-key-env OPENAI_TUNNEL_RUNTIME_KEY\n\nThe OpenAI tunnel runtime key is read from a hidden terminal prompt by default. For automation, pass it via stdin, an environment variable name, or an already-open file descriptor; never put the secret itself on argv.\n\nmacOS privacy: setup does not bypass or configure TCC. Protected folders or app data may later require a normal user-approved Files & Folders or Full Disk Access grant for the effective Zodex runtime identity. Ordinary unprotected workspaces do not require blanket Full Disk Access.")]
@@ -63,14 +64,17 @@ enum LocalCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Attach the optional read-only Agent-aware terminal viewer.
-    #[command(after_help = "Examples:\n  zodex local watch\n  zodex local watch --agent k7m2\n  zodex local watch --all")]
+    /// Open the read-only Local Liveboard, or explicitly use the terminal viewer.
+    #[command(after_help = "Examples:\n  zodex local watch\n  zodex local watch --tui\n  zodex local watch --tui --agent k7m2\n  zodex local watch --tui --all")]
     Watch {
-        /// Open or wait for one four-character Agent ID.
-        #[arg(long, conflicts_with = "all")]
-        agent: Option<String>,
-        /// Watch combined activity from all Agents.
+        /// Use the terminal viewer instead of the default web Liveboard.
         #[arg(long)]
+        tui: bool,
+        /// In TUI mode, open or wait for one four-character Agent ID.
+        #[arg(long, requires = "tui", conflicts_with = "all")]
+        agent: Option<String>,
+        /// In TUI mode, watch combined activity from all Agents.
+        #[arg(long, requires = "tui")]
         all: bool,
     },
     /// Inspect durable Local invocation history without opening the TUI.
@@ -184,12 +188,16 @@ async fn handle_local_command(command: LocalCommand) -> Result<()> {
             run_native_local_start(&paths, &start_dir, ttl_seconds).await
         }
         LocalCommand::Status { json } => print_local_status(&paths, json),
-        LocalCommand::Watch { agent, all } => {
+        LocalCommand::Watch { tui, agent, all } => {
             if let Some(agent) = agent.as_deref() {
                 validate_agent_id(agent)?;
             }
             ensure_local_runtime_host()?;
-            run_local_watch(&paths, WatchOptions { agent, all }).await
+            if tui {
+                run_local_watch(&paths, WatchOptions { agent, all }).await
+            } else {
+                run_local_liveboard(&paths).await
+            }
         }
         LocalCommand::History {
             last,

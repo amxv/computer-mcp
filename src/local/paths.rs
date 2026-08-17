@@ -92,6 +92,18 @@ impl LocalPaths {
         self.local_state_root().join("runtime")
     }
 
+    pub fn liveboard_dir(&self) -> PathBuf {
+        self.local_state_root().join("liveboard")
+    }
+
+    pub fn liveboard_preferences_file(&self) -> PathBuf {
+        self.liveboard_dir().join("preferences.json")
+    }
+
+    pub fn liveboard_preferences_lock_file(&self) -> PathBuf {
+        self.liveboard_dir().join("preferences.lock")
+    }
+
     pub fn lifecycle_lock_file(&self) -> PathBuf {
         self.local_state_root().join("lifecycle.lock")
     }
@@ -141,7 +153,12 @@ impl LocalPaths {
     }
 
     pub fn ensure_persistent_dirs(&self) -> Result<()> {
-        for path in [self.credentials_dir(), self.history_dir(), self.logs_dir()] {
+        for path in [
+            self.credentials_dir(),
+            self.history_dir(),
+            self.logs_dir(),
+            self.liveboard_dir(),
+        ] {
             fs::create_dir_all(&path)
                 .with_context(|| format!("failed to create {}", path.display()))?;
         }
@@ -164,7 +181,12 @@ impl LocalPaths {
         if runtime == local_state || !runtime.starts_with(&local_state) {
             bail!("Local runtime directory must be a child of the Local state root");
         }
-        for persistent in [self.credentials_dir(), self.history_dir(), self.logs_dir()] {
+        for persistent in [
+            self.credentials_dir(),
+            self.history_dir(),
+            self.logs_dir(),
+            self.liveboard_dir(),
+        ] {
             if persistent.starts_with(&runtime) || runtime.starts_with(&persistent) {
                 bail!(
                     "Local persistent path {} must be disjoint from runtime path {}",
@@ -235,6 +257,16 @@ mod tests {
                 .ends_with("local/history/history.sqlite3")
         );
         assert!(paths.logs_dir().ends_with("local/logs"));
+        assert!(
+            paths
+                .liveboard_preferences_file()
+                .ends_with("local/liveboard/preferences.json")
+        );
+        assert!(
+            paths
+                .liveboard_preferences_lock_file()
+                .ends_with("local/liveboard/preferences.lock")
+        );
         assert!(paths.runtime_dir().ends_with("local/runtime"));
         assert!(
             paths
@@ -259,6 +291,7 @@ mod tests {
         std::fs::write(paths.history_dir().join("keep"), "history").unwrap();
         std::fs::write(paths.credentials_dir().join("keep"), "credential").unwrap();
         std::fs::write(paths.logs_dir().join("keep"), "log").unwrap();
+        std::fs::write(paths.liveboard_dir().join("keep"), "liveboard").unwrap();
         std::fs::write(paths.runtime_dir().join("remove"), "runtime").unwrap();
 
         paths.clear_runtime_state().unwrap();
@@ -267,6 +300,7 @@ mod tests {
         assert!(paths.history_dir().join("keep").exists());
         assert!(paths.credentials_dir().join("keep").exists());
         assert!(paths.logs_dir().join("keep").exists());
+        assert!(paths.liveboard_dir().join("keep").exists());
     }
 
     #[test]

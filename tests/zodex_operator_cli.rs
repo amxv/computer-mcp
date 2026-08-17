@@ -78,7 +78,7 @@ fn zodex_local_help_exposes_complete_public_family_and_inspection_examples() {
     }
     assert!(stdout.contains("zodex local status --json"));
     assert!(stdout.contains("zodex local history --last 20"));
-    assert!(stdout.contains("zodex local watch --agent k7m2"));
+    assert!(stdout.contains("zodex local watch --tui --agent k7m2"));
 }
 
 #[test]
@@ -102,7 +102,10 @@ fn zodex_local_subcommand_help_exposes_scriptable_contract() {
             &["PATH", "--ttl", "30min", "4h", "2d"],
         ),
         (&["local", "status", "--help"], &["--json"]),
-        (&["local", "watch", "--help"], &["--agent", "--all"]),
+        (
+            &["local", "watch", "--help"],
+            &["--tui", "--agent", "--all", "default web Liveboard"],
+        ),
         (
             &["local", "history", "--help"],
             &[
@@ -136,6 +139,20 @@ fn zodex_local_subcommand_help_exposes_scriptable_contract() {
                 "{args:?} missing {needle}: {stdout}"
             );
         }
+    }
+}
+
+#[test]
+fn zodex_local_watch_agent_filters_require_explicit_tui_mode() {
+    let fixture = LocalCliFixture::new();
+    for args in [
+        ["local", "watch", "--agent", "k7m2"].as_slice(),
+        ["local", "watch", "--all"].as_slice(),
+    ] {
+        let output = fixture.command().args(args).output().unwrap();
+        assert!(!output.status.success(), "{args:?} should require --tui");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("--tui"), "{args:?}: {stderr}");
     }
 }
 

@@ -182,6 +182,19 @@ impl LocalObserverClient {
         ensure_success(self.get("v1/events", &query).await?).await
     }
 
+    pub(crate) async fn raw_get(&self, path: &str, raw_query: Option<&str>) -> Result<Response> {
+        let mut url = self
+            .base_url
+            .join(path)
+            .with_context(|| format!("invalid Local observability path `{path}`"))?;
+        url.set_query(raw_query.filter(|query| !query.is_empty()));
+        let send = self.http.get(url).bearer_auth(&self.bearer).send();
+        tokio::time::timeout(REQUEST_TIMEOUT, send)
+            .await
+            .context("Local observability request timed out")?
+            .context("failed to connect to Local observability API")
+    }
+
     async fn get_json<T>(&self, path: &str, query: &[(&str, &str)]) -> Result<T>
     where
         T: serde::de::DeserializeOwned,

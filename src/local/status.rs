@@ -280,7 +280,7 @@ where
     Ok(Some(value))
 }
 
-fn write_user_only_json_atomic(path: &Path, value: &impl Serialize) -> Result<()> {
+pub(super) fn write_user_only_json_atomic(path: &Path, value: &impl Serialize) -> Result<()> {
     let parent = path
         .parent()
         .context("Local runtime JSON path has no parent")?;

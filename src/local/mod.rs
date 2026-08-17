@@ -10,6 +10,7 @@ mod lifecycle_lock;
 mod lifecycle_start;
 #[cfg(test)]
 mod lifecycle_tests;
+mod liveboard;
 mod observability;
 mod observer_client;
 mod parse;
@@ -47,6 +48,7 @@ pub use lifecycle_context::{
     paths_from_runtime_bootstrap, resolve_developer_shell, validate_runtime_start_directory,
 };
 pub use lifecycle_start::{LocalStartOutcome, start_via_launchd};
+pub use liveboard::run_local_liveboard;
 pub use observability::{
     LOCAL_OBSERVABILITY_API_VERSION, LocalObservabilityServer, start_local_observability_server,
 };

@@ -7,4 +7,5 @@ target/
 node_modules/
 .astro/
 dist/
+coverage/
 .wrangler/

@@ -1,0 +1,27 @@
+{
+  "name": "@zodex/liveboard",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --config vitest.config.ts",
+    "test:browser": "vitest run --config vitest.browser.config.ts",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@tanstack/solid-virtual": "3.13.36",
+    "highlight.js": "11.12.0",
+    "solid-js": "1.9.14"
+  },
+  "devDependencies": {
+    "@solidjs/testing-library": "0.8.10",
+    "@vitest/browser-playwright": "4.1.10",
+    "jsdom": "^30.0.1",
+    "playwright": "1.62.1",
+    "typescript": "7.0.2",
+    "vite": "8.2.1",
+    "vite-plugin-solid": "2.11.14",
+    "vitest": "4.1.10"
+  }
+}
