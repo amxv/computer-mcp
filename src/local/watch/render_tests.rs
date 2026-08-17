@@ -144,6 +144,21 @@ fn renders_compact_running_completed_failed_and_all_agent_command_cards() {
 }
 
 #[test]
+fn incomplete_command_status_is_not_rendered_as_success() {
+    let mut app = direct_app();
+    app.merge_detail(command_detail(
+        7,
+        Some("k7m2"),
+        "interrupted command",
+        "incomplete",
+        None,
+    ));
+    let text = render_text(&app, 90, 20);
+    assert!(text.contains("? $ interrupted command"));
+    assert!(!text.contains("✓ $ interrupted command"));
+}
+
+#[test]
 fn renders_structured_file_diff_and_write_mode() {
     let mut app = direct_app();
     let file = PresentationFileChange {

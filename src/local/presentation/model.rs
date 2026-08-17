@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-pub const PRESENTATION_SCHEMA_VERSION: u32 = 1;
+pub const PRESENTATION_SCHEMA_VERSION: u32 = 2;
+pub(crate) const PRESENTATION_RAW_INVOCATION_ID_SAMPLE_LIMIT: usize = 32;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PresentationDocument {
@@ -29,7 +30,11 @@ pub struct PresentationWorkdir {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PresentationRecord {
+    pub presentation_id: String,
+    pub primary_invocation_id: i64,
+    pub raw_evidence_count: usize,
     pub raw_invocation_ids: Vec<i64>,
+    pub raw_invocation_ids_truncated: bool,
     pub agent_id: Option<String>,
     pub declared_workdir: Option<String>,
     pub normalized_workdir: Option<String>,

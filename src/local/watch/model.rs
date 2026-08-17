@@ -9,6 +9,7 @@ use super::super::history::HistoryLiveEvent;
 use super::super::observability::{ApiAgent, ApiInvocationDetail};
 use super::super::presentation::sanitize_display_text;
 use super::super::{PresentationDocument, PresentationKind, PresentationRecord};
+use super::cards::{CardKey, WatchCard, merge_card, selected_invocation_id};
 use super::client::WatchBootstrap;
 use super::input::WatchInput;
 
@@ -45,21 +46,6 @@ pub(super) enum ConnectionState {
     Connecting,
     Connected,
     Degraded(String),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum CardKey {
-    Invocation(i64),
-    Poll {
-        target_session_handle: String,
-        caller_agent_id: Option<String>,
-    },
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct WatchCard {
-    key: CardKey,
-    pub record: PresentationRecord,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -274,9 +260,10 @@ impl WatchApp {
 
     pub(super) fn merge_detail(&mut self, detail: ApiInvocationDetail) {
         let invocation_id = detail.invocation.id;
+        let duplicate_detail = self.details.contains_key(&invocation_id);
         for mut record in detail.presentation.records.iter().cloned() {
             sanitize_record_for_terminal(&mut record);
-            self.merge_record(record);
+            self.merge_record(record, duplicate_detail);
         }
         self.live_output.remove(&invocation_id);
         self.details.insert(invocation_id, detail);
@@ -286,10 +273,8 @@ impl WatchApp {
     pub(super) fn merge_presentation(&mut self, presentation: PresentationDocument) {
         for mut record in presentation.records {
             sanitize_record_for_terminal(&mut record);
-            if let Some(invocation_id) = record.raw_invocation_ids.first() {
-                self.live_output.remove(invocation_id);
-            }
-            self.merge_record(record);
+            self.live_output.remove(&record.primary_invocation_id);
+            self.merge_record(record, false);
         }
         self.clamp_selection();
     }
@@ -518,28 +503,8 @@ impl WatchApp {
         Vec::new()
     }
 
-    fn merge_record(&mut self, record: PresentationRecord) {
-        let key = card_key(&record);
-        self.cards.retain(|card| {
-            card.key == key
-                || card
-                    .record
-                    .raw_invocation_ids
-                    .iter()
-                    .all(|id| !record.raw_invocation_ids.contains(id))
-        });
-        if matches!(key, CardKey::Poll { .. })
-            && let Some(index) = self.cards.iter().position(|card| card.key == key)
-        {
-            merge_poll_record(&mut self.cards[index].record, &record);
-            self.sort_cards();
-            return;
-        }
-        if let Some(existing) = self.cards.iter_mut().find(|card| card.key == key) {
-            existing.record = record;
-            return;
-        }
-        self.cards.push(WatchCard { key, record });
+    fn merge_record(&mut self, record: PresentationRecord, duplicate_detail: bool) {
+        merge_card(&mut self.cards, record, duplicate_detail);
         self.sort_cards();
         if self.cards.len() > MAX_LIVE_CARDS {
             self.cards.remove(0);
@@ -547,12 +512,8 @@ impl WatchApp {
     }
 
     fn sort_cards(&mut self) {
-        self.cards.sort_by_key(|card| {
-            (
-                card.record.started_at_ms,
-                card.record.raw_invocation_ids.first().copied().unwrap_or(0),
-            )
-        });
+        self.cards
+            .sort_by_key(|card| (card.record.started_at_ms, card.record.primary_invocation_id));
     }
 
     fn card_in_scope(&self, card: &WatchCard) -> bool {
@@ -665,28 +626,6 @@ fn now_ms() -> i64 {
             i64::MAX
         }
     })
-}
-
-fn card_key(record: &PresentationRecord) -> CardKey {
-    if let PresentationKind::PollAggregate {
-        target_session_handle,
-        ..
-    } = &record.kind
-    {
-        CardKey::Poll {
-            target_session_handle: target_session_handle.clone(),
-            caller_agent_id: record.agent_id.clone(),
-        }
-    } else {
-        CardKey::Invocation(record.raw_invocation_ids.first().copied().unwrap_or(0))
-    }
-}
-
-fn selected_invocation_id(card: &WatchCard) -> Option<i64> {
-    match &card.key {
-        CardKey::Invocation(id) => (*id > 0).then_some(*id),
-        CardKey::Poll { .. } => card.record.raw_invocation_ids.last().copied(),
-    }
 }
 
 fn sanitize_agents_for_terminal(agents: &mut [ApiAgent]) {
@@ -826,107 +765,6 @@ fn sanitize_record_for_terminal(record: &mut PresentationRecord) {
             *summary = summary.take().map(|value| sanitize_display_text(&value));
         }
     }
-}
-
-fn merge_poll_record(existing: &mut PresentationRecord, incoming: &PresentationRecord) {
-    let existing_latest = (
-        existing.started_at_ms,
-        existing
-            .raw_invocation_ids
-            .iter()
-            .copied()
-            .max()
-            .unwrap_or(0),
-    );
-    let incoming_latest = (
-        incoming.started_at_ms,
-        incoming
-            .raw_invocation_ids
-            .iter()
-            .copied()
-            .max()
-            .unwrap_or(0),
-    );
-    let PresentationKind::PollAggregate {
-        count: existing_count,
-        final_status,
-        creator_agent_id,
-        caller_agent_ids,
-        cross_agent,
-        ..
-    } = &mut existing.kind
-    else {
-        return;
-    };
-    let PresentationKind::PollAggregate {
-        final_status: incoming_status,
-        creator_agent_id: incoming_creator,
-        caller_agent_ids: incoming_callers,
-        cross_agent: incoming_cross_agent,
-        ..
-    } = &incoming.kind
-    else {
-        return;
-    };
-    if incoming_latest > existing_latest {
-        *final_status = incoming_status.clone();
-        existing.started_at_ms = incoming.started_at_ms;
-        existing.duration_ms = incoming.duration_ms;
-    }
-    if creator_agent_id.is_none() {
-        *creator_agent_id = incoming_creator.clone();
-    }
-    for caller in incoming_callers {
-        if !caller_agent_ids.contains(caller) {
-            caller_agent_ids.push(caller.clone());
-        }
-    }
-    *cross_agent |= *incoming_cross_agent;
-    for id in incoming.raw_invocation_ids.iter().copied() {
-        if !existing.raw_invocation_ids.contains(&id) {
-            existing.raw_invocation_ids.push(id);
-        }
-    }
-    existing.raw_invocation_ids.sort_unstable();
-    *existing_count = existing.raw_invocation_ids.len();
-    merge_evidence(&mut existing.evidence, &incoming.evidence);
-}
-
-fn merge_evidence(
-    existing: &mut super::super::PresentationEvidence,
-    incoming: &super::super::PresentationEvidence,
-) {
-    existing.evidence_state =
-        merge_evidence_state(&existing.evidence_state, &incoming.evidence_state);
-    existing.capture_state = merge_capture_state(&existing.capture_state, &incoming.capture_state);
-    existing.degraded |= incoming.degraded;
-    if existing.reason.is_none() {
-        existing.reason = incoming.reason.clone();
-    }
-}
-
-fn merge_evidence_state(existing: &str, incoming: &str) -> String {
-    if existing == "incomplete" || incoming == "incomplete" {
-        "incomplete"
-    } else if existing == "pending" || incoming == "pending" {
-        "pending"
-    } else {
-        "complete"
-    }
-    .to_owned()
-}
-
-fn merge_capture_state(existing: &str, incoming: &str) -> String {
-    if existing == "incomplete" || incoming == "incomplete" {
-        "incomplete"
-    } else if existing == "pending" || incoming == "pending" {
-        "pending"
-    } else if existing == "complete" || incoming == "complete" {
-        "complete"
-    } else {
-        "not_applicable"
-    }
-    .to_owned()
 }
 
 fn raw_evidence_text(detail: &ApiInvocationDetail) -> String {

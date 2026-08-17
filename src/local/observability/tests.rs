@@ -664,7 +664,10 @@ async fn sse_starts_now_filters_live_events_and_surfaces_recoverable_lag() {
         "{completed}"
     );
     let presentation = next_sse_frame_containing(&mut stream, "event: presentation_updated").await;
-    assert!(presentation.contains("\"presentation_revision\":1"));
+    assert!(presentation.contains(&format!(
+        "\"presentation_revision\":{}",
+        crate::local::PRESENTATION_SCHEMA_VERSION
+    )));
     wait_for_invocation(&history, invocation_id);
 
     let detail = request(

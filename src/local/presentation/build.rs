@@ -1,13 +1,16 @@
 use std::collections::{HashMap, HashSet};
+use std::iter;
 use std::path::Path;
 
 use crate::invocation::InvocationStart;
 
+use super::PresentationInput;
 use super::diff::build_text_diff;
 use super::model::{
-    PRESENTATION_SCHEMA_VERSION, PresentationAgent, PresentationDocument, PresentationEvidence,
-    PresentationFileChange, PresentationFileOperation, PresentationKind, PresentationPollSummary,
-    PresentationRecord, PresentationWorkdir, PresentationWriteMode,
+    PRESENTATION_RAW_INVOCATION_ID_SAMPLE_LIMIT, PRESENTATION_SCHEMA_VERSION, PresentationAgent,
+    PresentationDocument, PresentationEvidence, PresentationFileChange, PresentationFileOperation,
+    PresentationKind, PresentationPollSummary, PresentationRecord, PresentationWorkdir,
+    PresentationWriteMode,
 };
 use super::sanitize::{sanitize_display_text, sanitize_preview};
 use crate::local::file_evidence::parse_file_capture_plans;
@@ -22,42 +25,64 @@ pub fn build_presentation(
     records: &[HistoryInvocation],
     agents: &[HistoryAgentSummary],
 ) -> PresentationDocument {
-    let mut polls_by_handle = HashMap::<String, Vec<&HistoryInvocation>>::new();
-    let mut continuations_by_handle = HashMap::<String, Vec<&HistoryInvocation>>::new();
-    let mut parent_handles = HashSet::new();
+    let inputs = records
+        .iter()
+        .map(PresentationInput::from)
+        .collect::<Vec<_>>();
+    build_presentation_inputs(&inputs, agents)
+}
 
-    for record in records {
-        if record.tool_name == "exec_command"
-            && let Some(handle) = record.result_session_handle.as_ref()
-        {
-            parent_handles.insert(handle.clone());
-        }
-        if record.tool_name == "write_stdin"
-            && let Some(handle) = record.target_session_handle.as_ref()
-        {
-            continuations_by_handle
+pub(crate) fn build_presentation_inputs(
+    records: &[PresentationInput],
+    agents: &[HistoryAgentSummary],
+) -> PresentationDocument {
+    let command_ids = records
+        .iter()
+        .filter(|record| record.tool_name == "exec_command")
+        .map(|record| record.id)
+        .collect::<HashSet<_>>();
+    let parent_handles = records
+        .iter()
+        .filter(|record| record.tool_name == "exec_command")
+        .filter_map(|record| record.result_session_handle.clone())
+        .collect::<HashSet<_>>();
+    let mut polls_by_parent = HashMap::<i64, Vec<&PresentationInput>>::new();
+    let mut legacy_polls_by_handle = HashMap::<String, Vec<&PresentationInput>>::new();
+
+    for record in records.iter().filter(|record| is_poll(record)) {
+        if let Some(parent_id) = record.target_created_by_invocation_id {
+            polls_by_parent.entry(parent_id).or_default().push(record);
+        } else if let Some(handle) = record.target_session_handle.as_ref() {
+            legacy_polls_by_handle
                 .entry(handle.clone())
                 .or_default()
                 .push(record);
-            if is_poll(record) {
-                polls_by_handle
-                    .entry(handle.clone())
-                    .or_default()
-                    .push(record);
-            }
         }
     }
-    for values in polls_by_handle.values_mut() {
-        values.sort_by_key(|record| (record.started_at_ms, record.id));
+    for values in polls_by_parent.values_mut() {
+        sort_invocations(values);
     }
-    for values in continuations_by_handle.values_mut() {
-        values.sort_by_key(|record| (record.started_at_ms, record.id));
+    for values in legacy_polls_by_handle.values_mut() {
+        sort_invocations(values);
     }
 
-    let mut emitted_orphan_polls = HashSet::new();
+    let mut emitted_parent_orphans = HashSet::new();
+    let mut emitted_legacy_orphans = HashSet::new();
     let mut presented = Vec::new();
     for record in records {
         if is_poll(record) {
+            if let Some(parent_id) = record.target_created_by_invocation_id {
+                if command_ids.contains(&parent_id) {
+                    continue;
+                }
+                if emitted_parent_orphans.insert(parent_id)
+                    && let Some(polls) = polls_by_parent.get(&parent_id)
+                {
+                    presented.push(orphan_poll_record(polls, Some(parent_id)));
+                }
+                continue;
+            }
+
             let Some(handle) = record.target_session_handle.as_ref() else {
                 presented.push(generic_record(record));
                 continue;
@@ -65,10 +90,10 @@ pub fn build_presentation(
             if parent_handles.contains(handle) {
                 continue;
             }
-            if emitted_orphan_polls.insert(handle.clone())
-                && let Some(polls) = polls_by_handle.get(handle)
+            if emitted_legacy_orphans.insert(handle.clone())
+                && let Some(polls) = legacy_polls_by_handle.get(handle)
             {
-                presented.push(orphan_poll_record(polls));
+                presented.push(orphan_poll_record(polls, None));
             }
             continue;
         }
@@ -76,7 +101,7 @@ pub fn build_presentation(
         if let Some(changes) = build_file_changes(record) {
             presented.push(record_with_kind(
                 record,
-                vec![record.id],
+                raw_identity(record.id, 1, iter::once(record.id)),
                 record.duration_ms,
                 PresentationKind::FileChanges {
                     source_tool: record.tool_name.clone(),
@@ -88,19 +113,15 @@ pub fn build_presentation(
 
         match record.tool_name.as_str() {
             "exec_command" => {
-                let polls = record
-                    .result_session_handle
-                    .as_ref()
-                    .and_then(|handle| polls_by_handle.get(handle))
-                    .map(Vec::as_slice)
-                    .unwrap_or(&[]);
-                let continuations = record
-                    .result_session_handle
-                    .as_ref()
-                    .and_then(|handle| continuations_by_handle.get(handle))
-                    .map(Vec::as_slice)
-                    .unwrap_or(&[]);
-                presented.push(command_record(record, polls, continuations));
+                let mut polls = polls_by_parent.get(&record.id).cloned().unwrap_or_default();
+                if let Some(handle) = record.result_session_handle.as_ref()
+                    && let Some(legacy) = legacy_polls_by_handle.get(handle)
+                {
+                    polls.extend(legacy.iter().copied());
+                }
+                sort_invocations(&mut polls);
+                polls.dedup_by_key(|poll| poll.id);
+                presented.push(command_record(record, &polls));
             }
             "write_stdin" => presented.push(write_stdin_record(record)),
             _ => presented.push(generic_record(record)),
@@ -112,6 +133,10 @@ pub fn build_presentation(
         agents: agents.iter().map(present_agent).collect(),
         records: presented,
     }
+}
+
+fn sort_invocations(records: &mut Vec<&PresentationInput>) {
+    records.sort_by_key(|record| (record.started_at_ms, record.id));
 }
 
 fn present_agent(agent: &HistoryAgentSummary) -> PresentationAgent {
@@ -134,28 +159,28 @@ fn present_agent(agent: &HistoryAgentSummary) -> PresentationAgent {
     }
 }
 
-fn command_record(
-    record: &HistoryInvocation,
-    polls: &[&HistoryInvocation],
-    continuations: &[&HistoryInvocation],
-) -> PresentationRecord {
+#[derive(Debug)]
+struct CommandFacts {
+    status: String,
+    effective_cwd: Option<String>,
+    exit_code: Option<i64>,
+    termination_reason: Option<String>,
+    duration_ms: Option<i64>,
+}
+
+fn command_record(record: &PresentationInput, polls: &[&PresentationInput]) -> PresentationRecord {
     let command = record
         .arguments
         .get("cmd")
         .and_then(serde_json::Value::as_str)
         .unwrap_or("<unavailable command>");
     let (command, _) = sanitize_preview(command, MAX_COMMAND_PREVIEW_CHARS);
-    let latest = continuations
-        .iter()
-        .rev()
-        .copied()
-        .find(|continuation| continuation.result_status.is_some())
-        .unwrap_or(record);
+    let latest_poll = polls.last().copied();
+    let facts = command_facts(record, latest_poll);
     let output_source = record
         .output_preview
         .as_deref()
-        .or_else(|| tool_output_text(latest))
-        .or_else(|| tool_output_text(record));
+        .or(record.result_output.as_deref());
     let (output, output_truncated) = output_source
         .map(|output| sanitize_preview(output, MAX_OUTPUT_PREVIEW_CHARS))
         .map(|(value, truncated)| (Some(value), truncated || record.output_preview_truncated))
@@ -163,103 +188,161 @@ fn command_record(
 
     let poll_summary = (!polls.is_empty()).then(|| PresentationPollSummary {
         count: polls.len(),
-        final_status: polls.last().map(|poll| status_for(poll)),
+        final_status: latest_poll.map(status_for),
         caller_agent_ids: unique_agent_ids(polls),
         cross_agent: polls.iter().any(|poll| poll.cross_agent == Some(true)),
     });
-    let mut raw_ids = vec![record.id];
-    raw_ids.extend(
-        continuations
-            .iter()
-            .filter(|continuation| is_poll(continuation) || continuation.result_status.is_some())
-            .map(|continuation| continuation.id),
+    let identity = raw_identity(
+        record.id,
+        polls.len().saturating_add(1),
+        iter::once(record.id).chain(polls.iter().map(|poll| poll.id)),
     );
-    let duration = latest
-        .completed_at_ms
-        .map(|completed| completed.saturating_sub(record.started_at_ms))
-        .or(record.duration_ms);
 
     let mut presented = record_with_kind(
         record,
-        raw_ids,
-        duration,
+        identity,
+        facts.duration_ms,
         PresentationKind::Command {
             command,
-            status: status_for(latest),
-            effective_cwd: latest
-                .result_cwd
-                .as_deref()
-                .or(record.result_cwd.as_deref())
-                .map(sanitize_display_text),
-            exit_code: latest.result_exit_code.or(record.result_exit_code),
-            termination_reason: latest
-                .result_termination_reason
-                .clone()
-                .or_else(|| record.result_termination_reason.clone()),
+            status: facts.status,
+            effective_cwd: facts.effective_cwd,
+            exit_code: facts.exit_code,
+            termination_reason: facts.termination_reason,
             output,
             output_truncated,
             polls: poll_summary,
         },
     );
-    if !continuations.is_empty() {
-        let mut evidence_records = Vec::with_capacity(continuations.len() + 1);
+    if !polls.is_empty() {
+        let mut evidence_records = Vec::with_capacity(polls.len() + 1);
         evidence_records.push(record);
-        evidence_records.extend(
-            continuations.iter().copied().filter(|continuation| {
-                is_poll(continuation) || continuation.result_status.is_some()
-            }),
-        );
+        evidence_records.extend(polls.iter().copied());
         presented.evidence = combined_evidence(&evidence_records);
     }
     presented
 }
 
-fn write_stdin_record(record: &HistoryInvocation) -> PresentationRecord {
+fn command_facts(
+    record: &PresentationInput,
+    latest_poll: Option<&PresentationInput>,
+) -> CommandFacts {
+    let lifecycle_cwd = record
+        .process_cwd
+        .as_deref()
+        .or(record.result_cwd.as_deref())
+        .map(sanitize_display_text);
+    match record.process_state.as_deref() {
+        Some("running") => CommandFacts {
+            status: "running".to_string(),
+            effective_cwd: lifecycle_cwd,
+            exit_code: None,
+            termination_reason: None,
+            duration_ms: record.duration_ms,
+        },
+        Some("exited") => CommandFacts {
+            status: "exited".to_string(),
+            effective_cwd: lifecycle_cwd,
+            exit_code: record.process_exit_code,
+            termination_reason: record.process_termination_reason.clone(),
+            duration_ms: lifecycle_duration(record).or(record.duration_ms),
+        },
+        Some("incomplete") => CommandFacts {
+            status: "incomplete".to_string(),
+            effective_cwd: lifecycle_cwd,
+            exit_code: None,
+            termination_reason: None,
+            duration_ms: record.duration_ms,
+        },
+        _ => {
+            let latest = latest_poll.unwrap_or(record);
+            CommandFacts {
+                status: status_for(latest),
+                effective_cwd: latest
+                    .result_cwd
+                    .as_deref()
+                    .or(record.result_cwd.as_deref())
+                    .map(sanitize_display_text),
+                exit_code: latest.result_exit_code.or(record.result_exit_code),
+                termination_reason: latest
+                    .result_termination_reason
+                    .clone()
+                    .or_else(|| record.result_termination_reason.clone()),
+                duration_ms: latest
+                    .completed_at_ms
+                    .map(|completed| completed.saturating_sub(record.started_at_ms))
+                    .or(record.duration_ms),
+            }
+        }
+    }
+}
+
+fn lifecycle_duration(record: &PresentationInput) -> Option<i64> {
+    Some(
+        record
+            .process_ended_at_ms?
+            .saturating_sub(record.process_started_at_ms?),
+    )
+}
+
+fn write_stdin_record(record: &PresentationInput) -> PresentationRecord {
     let handle = record
         .target_session_handle
         .as_deref()
         .unwrap_or("<unknown-session>");
-    let kill = record
-        .arguments
-        .get("kill_process")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
-    let kind = if kill {
-        PresentationKind::Kill {
+    let kind = match continuation_kind(record) {
+        Some("kill") => PresentationKind::Kill {
             target_session_handle: sanitize_display_text(handle),
             creator_agent_id: record.target_created_by_agent_id.clone(),
             cross_agent: record.cross_agent == Some(true),
             result_status: Some(status_for(record)),
+        },
+        Some("stdin") => {
+            let Some(chars) = record
+                .arguments
+                .get("chars")
+                .and_then(serde_json::Value::as_str)
+            else {
+                return generic_record(record);
+            };
+            let (chars, chars_truncated) = sanitize_preview(chars, MAX_STDIN_PREVIEW_CHARS);
+            PresentationKind::Stdin {
+                target_session_handle: sanitize_display_text(handle),
+                chars,
+                chars_truncated,
+                creator_agent_id: record.target_created_by_agent_id.clone(),
+                cross_agent: record.cross_agent == Some(true),
+                result_status: Some(status_for(record)),
+            }
         }
-    } else if let Some(chars) = record
-        .arguments
-        .get("chars")
-        .and_then(serde_json::Value::as_str)
-    {
-        let (chars, chars_truncated) = sanitize_preview(chars, MAX_STDIN_PREVIEW_CHARS);
-        PresentationKind::Stdin {
-            target_session_handle: sanitize_display_text(handle),
-            chars,
-            chars_truncated,
-            creator_agent_id: record.target_created_by_agent_id.clone(),
-            cross_agent: record.cross_agent == Some(true),
-            result_status: Some(status_for(record)),
-        }
-    } else {
-        return generic_record(record);
+        Some("poll") => return generic_record(record),
+        _ => return generic_record(record),
     };
-    record_with_kind(record, vec![record.id], record.duration_ms, kind)
+    record_with_kind(
+        record,
+        raw_identity(record.id, 1, iter::once(record.id)),
+        record.duration_ms,
+        kind,
+    )
 }
 
-fn orphan_poll_record(polls: &[&HistoryInvocation]) -> PresentationRecord {
+fn orphan_poll_record(
+    polls: &[&PresentationInput],
+    retained_parent_id: Option<i64>,
+) -> PresentationRecord {
     let latest = polls.last().copied().expect("poll group is non-empty");
+    let earliest = polls.first().copied().expect("poll group is non-empty");
     let handle = latest
         .target_session_handle
         .as_deref()
         .unwrap_or("<unknown-session>");
+    let primary_invocation_id = retained_parent_id.unwrap_or(earliest.id);
     let mut record = record_with_kind(
         latest,
-        polls.iter().map(|poll| poll.id).collect(),
+        raw_identity(
+            primary_invocation_id,
+            polls.len(),
+            polls.iter().map(|poll| poll.id),
+        ),
         latest.duration_ms,
         PresentationKind::PollAggregate {
             target_session_handle: sanitize_display_text(handle),
@@ -270,26 +353,20 @@ fn orphan_poll_record(polls: &[&HistoryInvocation]) -> PresentationRecord {
             cross_agent: polls.iter().any(|poll| poll.cross_agent == Some(true)),
         },
     );
+    record.started_at_ms = earliest.started_at_ms;
     record.evidence = combined_evidence(polls);
     record
 }
 
-fn generic_record(record: &HistoryInvocation) -> PresentationRecord {
+fn generic_record(record: &PresentationInput) -> PresentationRecord {
     let summary = record
         .error
         .as_deref()
-        .or_else(|| {
-            record
-                .result
-                .as_ref()
-                .and_then(serde_json::Value::as_object)
-                .and_then(|result| result.get("summary"))
-                .and_then(serde_json::Value::as_str)
-        })
+        .or(record.result_summary.as_deref())
         .map(|summary| sanitize_preview(summary, MAX_GENERIC_SUMMARY_CHARS).0);
     record_with_kind(
         record,
-        vec![record.id],
+        raw_identity(record.id, 1, iter::once(record.id)),
         record.duration_ms,
         PresentationKind::Generic {
             tool_name: sanitize_display_text(&record.tool_name),
@@ -299,14 +376,42 @@ fn generic_record(record: &HistoryInvocation) -> PresentationRecord {
     )
 }
 
-fn record_with_kind(
-    record: &HistoryInvocation,
+#[derive(Debug)]
+struct RawIdentity {
+    primary_invocation_id: i64,
+    raw_evidence_count: usize,
     raw_invocation_ids: Vec<i64>,
+    raw_invocation_ids_truncated: bool,
+}
+
+fn raw_identity(
+    primary_invocation_id: i64,
+    raw_evidence_count: usize,
+    ids: impl Iterator<Item = i64>,
+) -> RawIdentity {
+    let raw_invocation_ids = ids
+        .take(PRESENTATION_RAW_INVOCATION_ID_SAMPLE_LIMIT)
+        .collect::<Vec<_>>();
+    RawIdentity {
+        primary_invocation_id,
+        raw_evidence_count,
+        raw_invocation_ids_truncated: raw_evidence_count > raw_invocation_ids.len(),
+        raw_invocation_ids,
+    }
+}
+
+fn record_with_kind(
+    record: &PresentationInput,
+    identity: RawIdentity,
     duration_ms: Option<i64>,
     kind: PresentationKind,
 ) -> PresentationRecord {
     PresentationRecord {
-        raw_invocation_ids,
+        presentation_id: presentation_id(identity.primary_invocation_id),
+        primary_invocation_id: identity.primary_invocation_id,
+        raw_evidence_count: identity.raw_evidence_count,
+        raw_invocation_ids: identity.raw_invocation_ids,
+        raw_invocation_ids_truncated: identity.raw_invocation_ids_truncated,
         agent_id: record.agent_id.clone(),
         declared_workdir: record
             .declared_workdir_exact
@@ -332,12 +437,20 @@ fn record_with_kind(
     }
 }
 
-fn evidence_for(record: &HistoryInvocation) -> PresentationEvidence {
-    let degraded = record.evidence_state == "incomplete" || record.capture_state == "incomplete";
+fn presentation_id(primary_invocation_id: i64) -> String {
+    format!("inv-{primary_invocation_id}")
+}
+
+fn evidence_for(record: &PresentationInput) -> PresentationEvidence {
+    let lifecycle_incomplete = record.process_state.as_deref() == Some("incomplete");
+    let degraded = record.evidence_state == "incomplete"
+        || record.capture_state == "incomplete"
+        || lifecycle_incomplete;
     let reason = record
         .evidence_reason
         .as_deref()
         .or(record.capture_reason.as_deref())
+        .or(record.process_incomplete_reason.as_deref())
         .map(sanitize_display_text);
     PresentationEvidence {
         evidence_state: record.evidence_state.clone(),
@@ -347,7 +460,7 @@ fn evidence_for(record: &HistoryInvocation) -> PresentationEvidence {
     }
 }
 
-fn combined_evidence(records: &[&HistoryInvocation]) -> PresentationEvidence {
+fn combined_evidence(records: &[&PresentationInput]) -> PresentationEvidence {
     let degraded = records.iter().any(|record| evidence_for(record).degraded);
     let reason = records
         .iter()
@@ -391,7 +504,7 @@ fn combined_evidence(records: &[&HistoryInvocation]) -> PresentationEvidence {
     }
 }
 
-fn status_for(record: &HistoryInvocation) -> String {
+fn status_for(record: &PresentationInput) -> String {
     record.result_status.clone().unwrap_or_else(|| {
         if record.outcome_kind.as_deref() == Some("error") {
             "failed".to_string()
@@ -403,25 +516,33 @@ fn status_for(record: &HistoryInvocation) -> String {
     })
 }
 
-fn tool_output_text(record: &HistoryInvocation) -> Option<&str> {
-    record.result.as_ref()?.as_object()?.get("output")?.as_str()
+fn is_poll(record: &PresentationInput) -> bool {
+    continuation_kind(record) == Some("poll")
 }
 
-fn is_poll(record: &HistoryInvocation) -> bool {
-    record.tool_name == "write_stdin"
-        && record
-            .arguments
-            .get("chars")
-            .and_then(serde_json::Value::as_str)
-            .is_none_or(|chars| chars.is_empty())
-        && !record
-            .arguments
-            .get("kill_process")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false)
+fn continuation_kind(record: &PresentationInput) -> Option<&str> {
+    if record.tool_name != "write_stdin" {
+        return None;
+    }
+    if let Some(kind) = record.continuation_kind.as_deref() {
+        return Some(kind);
+    }
+    if record
+        .arguments
+        .get("kill_process")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+    {
+        return Some("kill");
+    }
+    match record.arguments.get("chars") {
+        Some(serde_json::Value::String(chars)) if !chars.is_empty() => Some("stdin"),
+        Some(serde_json::Value::String(_) | serde_json::Value::Null) | None => Some("poll"),
+        Some(_) => None,
+    }
 }
 
-fn unique_agent_ids(records: &[&HistoryInvocation]) -> Vec<String> {
+fn unique_agent_ids(records: &[&PresentationInput]) -> Vec<String> {
     let mut seen = HashSet::new();
     records
         .iter()
@@ -430,7 +551,7 @@ fn unique_agent_ids(records: &[&HistoryInvocation]) -> Vec<String> {
         .collect()
 }
 
-fn build_file_changes(record: &HistoryInvocation) -> Option<Vec<PresentationFileChange>> {
+fn build_file_changes(record: &PresentationInput) -> Option<Vec<PresentationFileChange>> {
     if record.outcome_kind.as_deref() != Some("success") || record.file_evidence.is_empty() {
         return None;
     }

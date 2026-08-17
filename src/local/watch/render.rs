@@ -11,7 +11,8 @@ use super::super::presentation::sanitize_display_text;
 use super::super::{
     PresentationFileOperation, PresentationKind, PresentationRecord, PresentationWriteMode,
 };
-use super::model::{ConnectionState, WatchApp, WatchCard, WatchScope};
+use super::cards::WatchCard;
+use super::model::{ConnectionState, WatchApp, WatchScope};
 
 const MAX_HEADER_WORKDIRS: usize = 3;
 const MAX_COMPACT_OUTPUT_LINES: usize = 3;
@@ -505,6 +506,8 @@ fn header_workdirs(app: &WatchApp) -> Vec<String> {
 fn status_mark(status: &str, exit_code: Option<i64>) -> &'static str {
     if status == "running" {
         "…"
+    } else if matches!(status, "incomplete" | "unknown") {
+        "?"
     } else if exit_code.is_some_and(|code| code != 0) || matches!(status, "error" | "failed") {
         "✗"
     } else {

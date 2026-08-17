@@ -524,7 +524,9 @@ fn fifty_cumulative_null_and_empty_string_polls_collapse_into_one_parent_command
         output.as_deref(),
         Some("full-start\nfull-middle\nfull-end\n")
     );
-    assert_eq!(document.records[0].raw_invocation_ids.len(), 51);
+    assert_eq!(document.records[0].raw_evidence_count, 51);
+    assert_eq!(document.records[0].raw_invocation_ids.len(), 32);
+    assert!(document.records[0].raw_invocation_ids_truncated);
     let markdown = render_presentation(&document, HistoryFormat::Markdown).unwrap();
     assert_eq!(markdown.matches("polled 50x").count(), 1);
     assert!(markdown.contains("full-middle"));
@@ -690,7 +692,7 @@ fn stdin_and_kill_remain_visible_with_cross_agent_attribution() {
 }
 
 #[test]
-fn command_state_inherits_degraded_evidence_from_a_visible_continuation() {
+fn command_state_inherits_degraded_evidence_from_a_folded_poll() {
     let handle = "continuation-evidence-handle";
     let mut parent = invocation(
         95,
@@ -701,17 +703,19 @@ fn command_state_inherits_degraded_evidence_from_a_visible_continuation() {
     parent.result_session_handle = Some(handle.to_string());
     parent.result = Some(tool_result("running", "started", Some(handle)));
 
-    let mut stdin = invocation(
+    let mut poll = invocation(
         96,
         "write_stdin",
-        json!({"session_handle":handle,"chars":"y\n","kill_process":false}),
+        json!({"session_handle":handle,"chars":null,"kill_process":false}),
     );
-    stdin.target_session_handle = Some(handle.to_string());
-    stdin.result_status = Some("exited".to_string());
-    stdin.capture_state = "incomplete".to_string();
-    stdin.capture_reason = Some("injected continuation capture loss".to_string());
+    poll.target_session_handle = Some(handle.to_string());
+    poll.target_created_by_invocation_id = Some(parent.id);
+    poll.continuation_kind = Some("poll".to_string());
+    poll.result_status = Some("exited".to_string());
+    poll.capture_state = "incomplete".to_string();
+    poll.capture_reason = Some("injected continuation capture loss".to_string());
 
-    let document = build_presentation(&[parent, stdin], &[]);
+    let document = build_presentation(&[parent, poll], &[]);
     let command = document
         .records
         .iter()
@@ -722,12 +726,7 @@ fn command_state_inherits_degraded_evidence_from_a_visible_continuation() {
         command.evidence.reason.as_deref(),
         Some("injected continuation capture loss")
     );
-    assert!(
-        document
-            .records
-            .iter()
-            .any(|record| matches!(record.kind, PresentationKind::Stdin { .. }))
-    );
+    assert_eq!(document.records.len(), 1, "poll must stay folded");
 }
 
 #[test]

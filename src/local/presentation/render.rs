@@ -51,11 +51,11 @@ fn render_markdown(document: &PresentationDocument) -> String {
 }
 
 fn render_record(output: &mut String, record: &PresentationRecord) {
-    let id = record
-        .raw_invocation_ids
-        .first()
-        .map(|id| format!("#{id}"))
-        .unwrap_or_else(|| "#?".to_string());
+    let id = if record.primary_invocation_id > 0 {
+        format!("#{}", record.primary_invocation_id)
+    } else {
+        "#?".to_string()
+    };
     let agent = record.agent_id.as_deref().unwrap_or("----");
     let workdir = record
         .normalized_workdir

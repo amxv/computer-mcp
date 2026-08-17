@@ -190,7 +190,9 @@ fn poll_only_calls_merge_into_one_compact_aggregate() {
         }
         other => panic!("expected poll aggregate, got {other:?}"),
     }
-    assert_eq!(cards[0].record.raw_invocation_ids.len(), 50);
+    assert_eq!(cards[0].record.raw_evidence_count, 50);
+    assert_eq!(cards[0].record.raw_invocation_ids.len(), 32);
+    assert!(cards[0].record.raw_invocation_ids_truncated);
 
     for id in 1..=50 {
         app.merge_detail(poll_detail(id, "k7m2", "proc-1"));
@@ -202,10 +204,10 @@ fn poll_only_calls_merge_into_one_compact_aggregate() {
         other => panic!("expected poll aggregate, got {other:?}"),
     }
     assert_eq!(
-        cards[0].record.raw_invocation_ids.len(),
-        50,
+        cards[0].record.raw_evidence_count, 50,
         "re-fetching durable poll details during recovery must be idempotent"
     );
+    assert_eq!(cards[0].record.raw_invocation_ids.len(), 32);
 }
 
 #[test]
@@ -229,6 +231,8 @@ fn canonical_poll_presentation_replaces_live_delta_and_orphan_poll_card() {
         command_detail(1, Some("k7m2"), "long-task", "exited", Some("start\nend\n")).presentation;
     canonical.schema_version = PRESENTATION_SCHEMA_VERSION;
     canonical.records[0].raw_invocation_ids = vec![1, 2];
+    canonical.records[0].raw_evidence_count = 2;
+    canonical.records[0].raw_invocation_ids_truncated = false;
     if let PresentationKind::Command { polls, .. } = &mut canonical.records[0].kind {
         *polls = Some(PresentationPollSummary {
             count: 1,
@@ -371,6 +375,7 @@ fn command_card_copy_and_raw_target_parent_invocation_not_folded_poll() {
     );
     let mut detail = command_detail(1, Some("k7m2"), "sleep 30", "running", Some("started"));
     detail.presentation.records[0].raw_invocation_ids = vec![1, 2];
+    detail.presentation.records[0].raw_evidence_count = 2;
     app.merge_detail(detail);
 
     assert_eq!(

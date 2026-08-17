@@ -180,7 +180,11 @@ pub(super) fn record(
     kind: PresentationKind,
 ) -> PresentationRecord {
     PresentationRecord {
+        presentation_id: format!("inv-{id}"),
+        primary_invocation_id: id,
+        raw_evidence_count: 1,
         raw_invocation_ids: vec![id],
+        raw_invocation_ids_truncated: false,
         agent_id: agent_id.map(str::to_owned),
         declared_workdir: Some("/workspace".to_owned()),
         normalized_workdir: Some("/workspace".to_owned()),
