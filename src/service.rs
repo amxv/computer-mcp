@@ -180,8 +180,11 @@ impl ZodexService {
         self.sessions.session_counts().await
     }
 
-    pub async fn session_creator_agent_id(&self, session_handle: &str) -> Option<Arc<str>> {
-        self.sessions.session_creator_agent_id(session_handle).await
+    pub async fn session_creator_context(
+        &self,
+        session_handle: &str,
+    ) -> Option<crate::session::SessionCreatorContext> {
+        self.sessions.session_creator_context(session_handle).await
     }
 
     pub async fn shutdown_sessions(&self) -> Result<RuntimeShutdownResult> {

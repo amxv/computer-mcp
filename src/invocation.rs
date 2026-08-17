@@ -53,6 +53,8 @@ pub struct InvocationStart {
     pub tool_name: Arc<str>,
     pub arguments: Value,
     pub target_created_by_agent_id: Option<Arc<str>>,
+    pub target_created_by_invocation_id: Option<i64>,
+    pub continuation_kind: Option<InvocationContinuationKind>,
 }
 
 impl InvocationStart {
@@ -61,12 +63,41 @@ impl InvocationStart {
             tool_name: tool_name.into(),
             arguments,
             target_created_by_agent_id: None,
+            target_created_by_invocation_id: None,
+            continuation_kind: None,
         }
     }
 
     pub fn with_target_created_by_agent_id(mut self, value: Option<Arc<str>>) -> Self {
         self.target_created_by_agent_id = value;
         self
+    }
+
+    pub fn with_target_created_by_invocation_id(mut self, value: Option<i64>) -> Self {
+        self.target_created_by_invocation_id = value;
+        self
+    }
+
+    pub fn with_continuation_kind(mut self, value: InvocationContinuationKind) -> Self {
+        self.continuation_kind = Some(value);
+        self
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvocationContinuationKind {
+    Poll,
+    Stdin,
+    Kill,
+}
+
+impl InvocationContinuationKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Poll => "poll",
+            Self::Stdin => "stdin",
+            Self::Kill => "kill",
+        }
     }
 }
 

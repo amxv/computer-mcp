@@ -88,12 +88,22 @@ pub struct HistoryInvocation {
     pub capture_reason: Option<String>,
     pub target_session_handle: Option<String>,
     pub target_created_by_agent_id: Option<String>,
+    pub target_created_by_invocation_id: Option<i64>,
+    pub continuation_kind: Option<String>,
     pub cross_agent: Option<bool>,
     pub result_status: Option<String>,
     pub result_cwd: Option<String>,
     pub result_session_handle: Option<String>,
     pub result_exit_code: Option<i64>,
     pub result_termination_reason: Option<String>,
+    pub process_state: Option<String>,
+    pub process_started_at_ms: Option<i64>,
+    pub process_ended_at_ms: Option<i64>,
+    pub process_updated_at_ms: Option<i64>,
+    pub process_exit_code: Option<i64>,
+    pub process_termination_reason: Option<String>,
+    pub process_cwd: Option<String>,
+    pub process_incomplete_reason: Option<String>,
     #[serde(skip)]
     pub output_preview: Option<String>,
     #[serde(skip)]
@@ -214,13 +224,21 @@ impl LocalHistoryReader {
         let connection = open_read_only(path)?;
         let schema_version = readable_schema_version(&connection)?;
 
-        let mut sql = String::from(
+        let lifecycle_columns = if schema_version >= 4 {
+            "target_created_by_invocation_id, continuation_kind,
+             process_state, process_started_at_ms, process_ended_at_ms, process_updated_at_ms,
+             process_exit_code, process_termination_reason, process_cwd, process_incomplete_reason"
+        } else {
+            "NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL"
+        };
+        let mut sql = format!(
             "SELECT id, correlation_id, agent_id, provider_kind, provider_session_key,
                     tool_name, args_json, declared_workdir_exact, declared_workdir_normalized,
                     is_new_workdir, started_at_ms, completed_at_ms, duration_ms, outcome_kind,
                     result_json, error_text, evidence_state, evidence_reason, capture_state, capture_reason, target_session_handle,
                     target_created_by_agent_id, cross_agent, result_status, result_cwd,
-                    result_session_handle, result_exit_code, result_termination_reason
+                    result_session_handle, result_exit_code, result_termination_reason,
+                    {lifecycle_columns}
              FROM invocations WHERE 1 = 1",
         );
         let mut parameters = Vec::<SqlValue>::new();
@@ -238,6 +256,10 @@ impl LocalHistoryReader {
             );
             parameters.push(SqlValue::Integer(since_ms));
             parameters.push(SqlValue::Integer(since_ms));
+            if schema_version >= 4 {
+                sql.push_str(" OR process_updated_at_ms >= ?");
+                parameters.push(SqlValue::Integer(since_ms));
+            }
             if !query.active_process_invocation_ids.is_empty() {
                 sql.push_str(" OR id IN (");
                 for (index, invocation_id) in query
@@ -602,12 +624,22 @@ fn map_invocation(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoryInvocation
         capture_reason: row.get(19)?,
         target_session_handle: row.get(20)?,
         target_created_by_agent_id: row.get(21)?,
+        target_created_by_invocation_id: row.get(28)?,
+        continuation_kind: row.get(29)?,
         cross_agent: row.get::<_, Option<i64>>(22)?.map(|value| value != 0),
         result_status: row.get(23)?,
         result_cwd: row.get(24)?,
         result_session_handle: row.get(25)?,
         result_exit_code: row.get(26)?,
         result_termination_reason: row.get(27)?,
+        process_state: row.get(30)?,
+        process_started_at_ms: row.get(31)?,
+        process_ended_at_ms: row.get(32)?,
+        process_updated_at_ms: row.get(33)?,
+        process_exit_code: row.get(34)?,
+        process_termination_reason: row.get(35)?,
+        process_cwd: row.get(36)?,
+        process_incomplete_reason: row.get(37)?,
         output_preview: None,
         output_preview_truncated: false,
         full_output: None,

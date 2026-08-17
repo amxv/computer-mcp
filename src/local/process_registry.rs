@@ -8,8 +8,8 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::session::{
-    OwnedProcess, OwnedProcessObserver, ProcessControl, ProcessIdentity, ProcessSignal,
-    identity_matches, signal_process_if_matching,
+    OwnedProcess, OwnedProcessEnd, OwnedProcessObserver, ProcessControl, ProcessIdentity,
+    ProcessSignal, identity_matches, signal_process_if_matching,
 };
 
 pub const LOCAL_PROCESS_REGISTRY_SCHEMA_VERSION: u32 = 1;
@@ -114,7 +114,7 @@ impl OwnedProcessObserver for LocalOwnedProcessRegistry {
         })
     }
 
-    fn process_ended(&self, process: &OwnedProcess) -> Result<()> {
+    fn process_ended(&self, process: &OwnedProcess, _end: &OwnedProcessEnd) -> Result<()> {
         self.update(|records| {
             records.retain(|record| record.internal_session_id != process.internal_session_id);
         })
@@ -429,9 +429,10 @@ mod tests {
     use tempfile::tempdir;
 
     use crate::invocation::InvocationContext;
+    use crate::protocol::TerminationReason;
     use crate::session::{
-        OwnedProcess, OwnedProcessObserver, ProcessBirthIdentity, ProcessControl, ProcessIdentity,
-        ProcessInspector, ProcessSignal,
+        OwnedProcess, OwnedProcessEnd, OwnedProcessObserver, ProcessBirthIdentity, ProcessControl,
+        ProcessIdentity, ProcessInspector, ProcessSignal,
     };
 
     use super::{
@@ -460,6 +461,10 @@ mod tests {
         }
     }
 
+    fn exited_end() -> OwnedProcessEnd {
+        OwnedProcessEnd::exited(0, TerminationReason::Exit, "/tmp".to_string())
+    }
+
     #[test]
     fn registry_atomically_tracks_start_and_end_without_leaving_empty_state() {
         let dir = tempdir().unwrap();
@@ -478,9 +483,9 @@ mod tests {
         assert_eq!(raw["runtime_id"], "runtime-a");
         assert_eq!(raw["processes"].as_array().unwrap().len(), 2);
 
-        registry.process_ended(&first).unwrap();
+        registry.process_ended(&first, &exited_end()).unwrap();
         assert_eq!(registry.snapshot().len(), 1);
-        registry.process_ended(&second).unwrap();
+        registry.process_ended(&second, &exited_end()).unwrap();
         assert!(registry.snapshot().is_empty());
         assert!(!path.exists(), "empty ephemeral registry should be removed");
     }

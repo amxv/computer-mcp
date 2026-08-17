@@ -11,9 +11,10 @@ use crate::invocation::{
     InvocationContext, InvocationEvidenceRecorder, InvocationOutcome, InvocationStart,
     ProviderCallMetadata,
 };
+use crate::protocol::TerminationReason;
 use crate::session::{
-    OwnedProcess, OwnedProcessObserver, ProcessBirthIdentity, ProcessIdentity, SessionOutputChunk,
-    SessionOutputCompletion, SessionOutputObserver,
+    OwnedProcess, OwnedProcessEnd, OwnedProcessObserver, ProcessBirthIdentity, ProcessIdentity,
+    SessionOutputChunk, SessionOutputCompletion, SessionOutputObserver,
 };
 
 use super::query::{HistoryQuery, LocalHistoryReader};
@@ -883,7 +884,12 @@ fn active_process_creator_invocation_survives_retention_even_when_capture_is_inc
         "active creator evidence must be retention-protected"
     );
 
-    runtime.process_ended(&process).unwrap();
+    runtime
+        .process_ended(
+            &process,
+            &OwnedProcessEnd::exited(0, TerminationReason::Exit, dir.path().display().to_string()),
+        )
+        .unwrap();
     runtime.run_retention_now(1, u64::MAX).unwrap();
     assert!(
         LocalHistoryReader::query(

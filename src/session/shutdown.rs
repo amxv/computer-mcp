@@ -176,7 +176,9 @@ pub(super) async fn wait_for_session_exits_until(
                     let leader_exited =
                         reap_exit_code(&mut inner, runtime.process_inspector.as_ref())?.is_some();
                     if leader_exited && inner.owned_group_members.is_empty() {
-                        runtime.release_process_ownership();
+                        let end = super::owned_process_end(&inner)
+                            .expect("reaped owned process without final end evidence");
+                        runtime.release_process_ownership(end);
                     } else {
                         survivors += 1;
                     }

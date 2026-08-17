@@ -1,9 +1,10 @@
 use super::{
     McpServerPolicy, ProviderMetadata, ProviderMetadataObserver, ZodexMcpService,
     build_mcp_service_with_policy, extract_provider_metadata, key_from_query,
-    rewrite_mcp_transport_root_uri,
+    rewrite_mcp_transport_root_uri, write_stdin_continuation_kind,
 };
 use crate::config::Config;
+use crate::invocation::InvocationContinuationKind;
 use crate::protocol::{
     ApplyPatchInput, CommandStatus, ExecCommandInput, TerminationReason, ToolOutput,
     WriteStdinInput,
@@ -31,6 +32,33 @@ fn test_workdir() -> String {
         .expect("test current directory")
         .to_string_lossy()
         .to_string()
+}
+
+#[test]
+fn write_stdin_continuation_kind_uses_typed_input_semantics() {
+    let input = |chars: Option<&str>, kill_process: bool| WriteStdinInput {
+        session_handle: "session".to_string(),
+        chars: chars.map(str::to_owned),
+        yield_time_ms: None,
+        kill_process: Some(kill_process),
+    };
+
+    assert_eq!(
+        write_stdin_continuation_kind(&input(None, false)),
+        InvocationContinuationKind::Poll
+    );
+    assert_eq!(
+        write_stdin_continuation_kind(&input(Some(""), false)),
+        InvocationContinuationKind::Poll
+    );
+    assert_eq!(
+        write_stdin_continuation_kind(&input(Some("y\n"), false)),
+        InvocationContinuationKind::Stdin
+    );
+    assert_eq!(
+        write_stdin_continuation_kind(&input(Some("ignored"), true)),
+        InvocationContinuationKind::Kill
+    );
 }
 
 fn stateless_policy(observer: Option<ProviderMetadataObserver>) -> McpServerPolicy {

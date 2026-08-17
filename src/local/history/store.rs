@@ -9,12 +9,11 @@ use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, 
 use serde_json::Value;
 use tracing::{error, warn};
 
+use super::history_store_paths;
+use super::schema::initialize_or_migrate;
 use crate::invocation::{
     InvocationContext, InvocationOutcome, InvocationStart, ProviderCallMetadata,
 };
-
-use super::history_store_paths;
-use super::schema::initialize_or_migrate;
 
 const AGENT_ID_ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
 const AGENT_ID_ATTEMPTS: usize = 128;
@@ -80,6 +79,7 @@ impl HistoryStore {
         };
         store.recover_interrupted_capture()?;
         store.recover_interrupted_file_evidence()?;
+        store.recover_interrupted_process_lifecycle()?;
         store.set_health("healthy", None)?;
         Ok(store)
     }
@@ -143,6 +143,8 @@ impl HistoryStore {
             .target_created_by_agent_id
             .as_deref()
             .map(str::to_owned);
+        let target_creator_invocation_id = start.target_created_by_invocation_id;
+        let continuation_kind = start.continuation_kind.map(|kind| kind.as_str());
         let cross_agent = match (agent_id.as_deref(), target_creator.as_deref()) {
             (Some(caller), Some(creator)) => Some(i64::from(caller != creator)),
             _ => None,
@@ -164,8 +166,9 @@ impl HistoryStore {
                     correlation_id, agent_id, provider_kind, provider_session_key, tool_name,
                     args_json, declared_workdir_exact, declared_workdir_normalized,
                     started_at_ms, evidence_state, capture_state, target_session_handle,
-                    target_created_by_agent_id, cross_agent
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'pending', ?10, ?11, ?12, ?13)",
+                    target_created_by_agent_id, target_created_by_invocation_id,
+                    continuation_kind, cross_agent
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'pending', ?10, ?11, ?12, ?13, ?14, ?15)",
                 params![
                     correlation_id.as_ref(),
                     agent_id,
@@ -179,6 +182,8 @@ impl HistoryStore {
                     capture_state,
                     target_session_handle,
                     target_creator,
+                    target_creator_invocation_id,
+                    continuation_kind,
                     cross_agent,
                 ],
             )

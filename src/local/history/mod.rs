@@ -1,10 +1,13 @@
 mod events;
 mod file_store;
+mod lifecycle;
 mod query;
 mod schema;
 mod store;
 mod worker;
 
+#[cfg(test)]
+mod lifecycle_tests;
 #[cfg(test)]
 mod maintenance_tests;
 #[cfg(test)]

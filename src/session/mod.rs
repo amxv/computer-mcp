@@ -19,12 +19,14 @@ use crate::protocol::{
 };
 use crate::workdir::validate_absolute_existing_workdir;
 
+mod lifecycle;
 mod output;
 mod policy;
 mod process;
 mod query;
 mod shutdown;
 
+use lifecycle::{owned_process_end, process_termination_reason};
 use output::{OutputBuffer, next_char_boundary, spawn_reader};
 use shutdown::{
     maybe_force_kill, reap_exit_code, request_termination, signal_owned_group_members,
@@ -32,8 +34,8 @@ use shutdown::{
 };
 
 pub use policy::{
-    OwnedProcess, OwnedProcessObserver, SessionOutputChunk, SessionOutputCompletion,
-    SessionOutputObserver, SessionRuntimePolicy,
+    OwnedProcess, OwnedProcessEnd, OwnedProcessObserver, SessionCreatorContext, SessionOutputChunk,
+    SessionOutputCompletion, SessionOutputObserver, SessionRuntimePolicy,
 };
 pub use process::{
     ProcessBirthIdentity, ProcessControl, ProcessIdentity, ProcessInspector, ProcessSignal,
@@ -158,23 +160,6 @@ impl SessionRuntime {
         Ok(leader_exited && inner.owned_group_members.is_empty())
     }
 
-    fn release_process_ownership(&self) {
-        if self.ownership_released.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        let Some(process) = self.owned_process.as_ref() else {
-            return;
-        };
-        if let Err(error) = self.process_observer.process_ended(process) {
-            warn!(
-                event = "session_process_observer_remove_failed",
-                internal_session_id = self.internal_session_id,
-                session_handle_prefix = self.handle_prefix(),
-                error = %error,
-            );
-        }
-    }
-
     async fn continue_session(
         &self,
         input: WriteStdinInput,
@@ -293,13 +278,7 @@ impl SessionRuntime {
                         if inner.require_exit_before_return
                             && !inner.owned_group_members.is_empty() => {}
                     Some(code) => {
-                        let termination_reason = if inner.timed_out {
-                            TerminationReason::Timeout
-                        } else if inner.kill_requested || inner.force_killed {
-                            TerminationReason::Killed
-                        } else {
-                            TerminationReason::Exit
-                        };
+                        let termination_reason = process_termination_reason(&inner);
                         finished = Some((code, inner.last_known_cwd.clone(), termination_reason));
                     }
                     None if started.elapsed() >= yield_for && !inner.require_exit_before_return => {
@@ -527,6 +506,17 @@ impl SessionManager {
         {
             let _ = process::signal_process_group(pid, ProcessSignal::Kill);
             let _ = child.wait().await;
+            let rollback = OwnedProcessEnd::incomplete(
+                "process ownership admission failed before the session was admitted",
+                Some(command_cwd_display.clone()),
+            );
+            if let Err(end_error) = process_observer.process_ended(process, &rollback) {
+                warn!(
+                    event = "session_process_observer_rollback_failed",
+                    internal_session_id,
+                    error = %end_error,
+                );
+            }
             return Err(error).context(
                 "failed to record command process ownership; command was terminated before admission",
             );
@@ -694,8 +684,8 @@ impl SessionManager {
                     ProcessSignal::Terminate,
                 )?;
                 sessions_signaled += 1;
-            } else {
-                runtime.release_process_ownership();
+            } else if let Some(end) = owned_process_end(&inner) {
+                runtime.release_process_ownership(end);
             }
         }
 
@@ -776,13 +766,32 @@ impl SessionManager {
     }
 
     async fn remove_session(&self, session_handle: &str) {
+        let runtime = {
+            let sessions = self.sessions.read().await;
+            sessions.get(session_handle).cloned()
+        };
+        let Some(runtime) = runtime else {
+            return;
+        };
+        let end = {
+            let inner = runtime.inner.lock().await;
+            owned_process_end(&inner)
+        };
+        let Some(end) = end else {
+            warn!(
+                event = "session_removal_deferred_without_final_process_evidence",
+                internal_session_id = runtime.internal_session_id,
+                session_handle_prefix = runtime.handle_prefix(),
+            );
+            return;
+        };
         let removed = {
             let mut sessions = self.sessions.write().await;
             sessions.remove(session_handle)
         };
 
         if let Some(runtime) = removed {
-            runtime.release_process_ownership();
+            runtime.release_process_ownership(end);
             info!(
                 event = "session_removed",
                 internal_session_id = runtime.internal_session_id,
@@ -841,21 +850,24 @@ fn spawn_child_reaper(runtime: Arc<SessionRuntime>, poll_interval: Duration) {
             let reaped = {
                 let mut inner = runtime.inner.lock().await;
                 let result = reap_exit_code(&mut inner, runtime.process_inspector.as_ref());
-                result.map(|exit| (exit, inner.owned_group_members.is_empty()))
+                result.map(|exit| {
+                    let end = exit.and_then(|_| owned_process_end(&inner));
+                    (exit, end)
+                })
             };
 
             match reaped {
-                Ok((Some(exit_code), true)) => {
+                Ok((Some(exit_code), Some(end))) => {
                     info!(
                         event = "session_child_reaped",
                         internal_session_id = runtime.internal_session_id,
                         session_handle_prefix = runtime.handle_prefix(),
                         exit_code,
                     );
-                    runtime.release_process_ownership();
+                    runtime.release_process_ownership(end);
                     break;
                 }
-                Ok((Some(_), false)) | Ok((None, _)) => {}
+                Ok((Some(_), None)) | Ok((None, _)) => {}
                 Err(err) => {
                     warn!(
                         event = "session_child_reap_failed",

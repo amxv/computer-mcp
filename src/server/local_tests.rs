@@ -807,6 +807,8 @@ async fn local_mcp_history_records_cross_agent_session_creator_and_unattributed_
         .unwrap();
     assert_ne!(write.agent_id, exec.agent_id);
     assert_eq!(write.target_created_by_agent_id, exec.agent_id);
+    assert_eq!(write.target_created_by_invocation_id, Some(exec.id));
+    assert_eq!(write.continuation_kind.as_deref(), Some("kill"));
     assert_eq!(write.cross_agent, Some(true));
     assert_eq!(
         write.target_session_handle.as_deref(),

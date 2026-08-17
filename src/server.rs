@@ -27,12 +27,12 @@ use tracing::{error, info};
 use crate::config::Config;
 use crate::http_api;
 use crate::invocation::{
-    InvocationContext, InvocationEvidenceRecorder, InvocationOutcome, InvocationStart,
-    ProviderCallMetadata,
+    InvocationContext, InvocationContinuationKind, InvocationEvidenceRecorder, InvocationOutcome,
+    InvocationStart, ProviderCallMetadata,
 };
 use crate::protocol::{ApplyPatchInput, ExecCommandInput, ToolOutput, WriteStdinInput};
 use crate::service::{ServiceRequest, ZodexService};
-use crate::session::SessionOrigin;
+use crate::session::{SessionCreatorContext, SessionOrigin};
 
 type McpHttpService = StreamableHttpService<ZodexMcpService, LocalSessionManager>;
 const DEFAULT_MCP_INSTRUCTIONS: &str = "zodex remote execution tools";
@@ -140,7 +140,8 @@ impl ZodexMcpService {
         tool_name: &'static str,
         input: &T,
         request_meta: &RequestMetaObject,
-        target_created_by_agent_id: Option<Arc<str>>,
+        target_creator: Option<SessionCreatorContext>,
+        continuation_kind: Option<InvocationContinuationKind>,
     ) -> Result<InvocationContext, String> {
         self.observe_provider_metadata(request_meta);
         let context = invocation_context(request_meta);
@@ -150,12 +151,17 @@ impl ZodexMcpService {
         let arguments = serde_json::to_value(input).map_err(|error| {
             format!("failed to serialize {tool_name} invocation input: {error}")
         })?;
+        let mut start = InvocationStart::new(tool_name, arguments);
+        if let Some(target_creator) = target_creator {
+            start = start
+                .with_target_created_by_agent_id(target_creator.agent_id)
+                .with_target_created_by_invocation_id(target_creator.invocation_id);
+        }
+        if let Some(continuation_kind) = continuation_kind {
+            start = start.with_continuation_kind(continuation_kind);
+        }
         recorder
-            .begin(
-                context,
-                InvocationStart::new(tool_name, arguments)
-                    .with_target_created_by_agent_id(target_created_by_agent_id),
-            )
+            .begin(context, start)
             .map_err(|error| format!("Local invocation evidence unavailable: {error}"))
     }
 
@@ -234,7 +240,8 @@ impl ZodexMcpService {
         Parameters(input): Parameters<ExecCommandInput>,
         request_meta: RequestMetaObject,
     ) -> Result<McpJson<ToolOutput>, String> {
-        let invocation = self.begin_invocation("exec_command", &input, &request_meta, None)?;
+        let invocation =
+            self.begin_invocation("exec_command", &input, &request_meta, None, None)?;
         let result = self
             .execute_tool_output(
                 ServiceRequest::ExecCommand {
@@ -262,15 +269,17 @@ impl ZodexMcpService {
         Parameters(input): Parameters<WriteStdinInput>,
         request_meta: RequestMetaObject,
     ) -> Result<McpJson<ToolOutput>, String> {
-        let target_created_by_agent_id = self
+        let target_creator = self
             .zodex_service
-            .session_creator_agent_id(&input.session_handle)
+            .session_creator_context(&input.session_handle)
             .await;
+        let continuation_kind = write_stdin_continuation_kind(&input);
         let invocation = self.begin_invocation(
             "write_stdin",
             &input,
             &request_meta,
-            target_created_by_agent_id,
+            target_creator,
+            Some(continuation_kind),
         )?;
         let result = self
             .execute_tool_output(ServiceRequest::WriteStdin { input }, invocation.clone())
@@ -293,10 +302,24 @@ impl ZodexMcpService {
         Parameters(input): Parameters<ApplyPatchInput>,
         request_meta: RequestMetaObject,
     ) -> Result<String, String> {
-        let invocation = self.begin_invocation("apply_patch", &input, &request_meta, None)?;
+        let invocation = self.begin_invocation("apply_patch", &input, &request_meta, None, None)?;
         let result = self.execute_apply_patch(input, invocation.clone()).await;
         self.complete_invocation(&invocation, &result);
         result
+    }
+}
+
+fn write_stdin_continuation_kind(input: &WriteStdinInput) -> InvocationContinuationKind {
+    if input.kill_process.unwrap_or(false) {
+        InvocationContinuationKind::Kill
+    } else if input
+        .chars
+        .as_deref()
+        .is_some_and(|chars| !chars.is_empty())
+    {
+        InvocationContinuationKind::Stdin
+    } else {
+        InvocationContinuationKind::Poll
     }
 }
 

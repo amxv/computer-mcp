@@ -1,7 +1,8 @@
 use anyhow::{Context, Result, bail};
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use serde_json::Value;
 
-pub const HISTORY_SCHEMA_VERSION: u32 = 3;
+pub const HISTORY_SCHEMA_VERSION: u32 = 4;
 
 pub(super) const SCHEMA_V1: &str = r#"
 CREATE TABLE agents (
@@ -108,11 +109,38 @@ CREATE INDEX invocation_file_evidence_after_path_idx
 ON invocation_file_evidence(path_after, invocation_id);
 "#;
 
-const SCHEMA_V3: &str = r#"
+pub(super) const SCHEMA_V3: &str = r#"
 ALTER TABLE invocation_file_evidence ADD COLUMN destination_before_state TEXT
     CHECK(destination_before_state IS NULL OR destination_before_state IN ('missing', 'text', 'unavailable'));
 ALTER TABLE invocation_file_evidence ADD COLUMN destination_before_text TEXT;
 ALTER TABLE invocation_file_evidence ADD COLUMN destination_before_reason TEXT;
+"#;
+
+const SCHEMA_V4: &str = r#"
+ALTER TABLE invocations ADD COLUMN target_created_by_invocation_id INTEGER
+    REFERENCES invocations(id) ON DELETE SET NULL;
+ALTER TABLE invocations ADD COLUMN continuation_kind TEXT
+    CHECK(continuation_kind IS NULL OR continuation_kind IN ('poll', 'stdin', 'kill'));
+ALTER TABLE invocations ADD COLUMN process_state TEXT
+    CHECK(process_state IS NULL OR process_state IN ('running', 'exited', 'incomplete'));
+ALTER TABLE invocations ADD COLUMN process_started_at_ms INTEGER;
+ALTER TABLE invocations ADD COLUMN process_ended_at_ms INTEGER;
+ALTER TABLE invocations ADD COLUMN process_updated_at_ms INTEGER;
+ALTER TABLE invocations ADD COLUMN process_exit_code INTEGER;
+ALTER TABLE invocations ADD COLUMN process_termination_reason TEXT
+    CHECK(process_termination_reason IS NULL OR process_termination_reason IN ('exit', 'timeout', 'killed'));
+ALTER TABLE invocations ADD COLUMN process_cwd TEXT;
+ALTER TABLE invocations ADD COLUMN process_incomplete_reason TEXT;
+
+CREATE INDEX invocations_continuation_parent_kind_idx
+ON invocations(target_created_by_invocation_id, continuation_kind, id)
+WHERE target_created_by_invocation_id IS NOT NULL;
+CREATE INDEX invocations_completed_changed_idx
+ON invocations(completed_at_ms, id)
+WHERE completed_at_ms IS NOT NULL;
+CREATE INDEX invocations_process_updated_idx
+ON invocations(process_updated_at_ms, id)
+WHERE process_updated_at_ms IS NOT NULL;
 "#;
 
 pub(super) fn configure_writer(connection: &Connection) -> Result<()> {
@@ -223,6 +251,23 @@ pub(super) fn initialize_or_migrate(connection: &mut Connection) -> Result<()> {
         transaction
             .commit()
             .context("failed to commit Local history schema v3")?;
+        version = 3;
+    }
+
+    if version == 3 {
+        let transaction = connection
+            .transaction()
+            .context("failed to start Local history schema-v4 transaction")?;
+        transaction
+            .execute_batch(SCHEMA_V4)
+            .context("failed to create Local history schema v4")?;
+        backfill_v4_continuations(&transaction)?;
+        transaction
+            .pragma_update(None, "user_version", 4)
+            .context("failed to publish Local history schema version 4")?;
+        transaction
+            .commit()
+            .context("failed to commit Local history schema v4")?;
     }
 
     let version = user_version(connection)?;
@@ -232,6 +277,100 @@ pub(super) fn initialize_or_migrate(connection: &mut Connection) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn backfill_v4_continuations(transaction: &Transaction<'_>) -> Result<()> {
+    let continuations = {
+        let mut statement = transaction
+            .prepare(
+                "SELECT id, args_json, target_session_handle
+                 FROM invocations
+                 WHERE tool_name = 'write_stdin'
+                 ORDER BY id ASC",
+            )
+            .context("failed to prepare legacy Local continuation backfill")?;
+        statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            })
+            .context("failed to query legacy Local continuations")?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("failed to decode legacy Local continuations")?
+    };
+
+    for (invocation_id, args_json, target_session_handle) in continuations {
+        if let Some(kind) = legacy_continuation_kind(&args_json)? {
+            transaction
+                .execute(
+                    "UPDATE invocations SET continuation_kind = ?2 WHERE id = ?1",
+                    params![invocation_id, kind],
+                )
+                .with_context(|| {
+                    format!(
+                        "failed to backfill continuation kind for Local invocation {invocation_id}"
+                    )
+                })?;
+        }
+
+        let Some(target_session_handle) = target_session_handle else {
+            continue;
+        };
+        let parent_candidates = {
+            let mut statement = transaction
+                .prepare(
+                    "SELECT id FROM invocations
+                     WHERE tool_name = 'exec_command'
+                       AND result_session_handle = ?1
+                       AND id < ?2
+                     ORDER BY id DESC
+                     LIMIT 2",
+                )
+                .context("failed to prepare legacy Local continuation-parent backfill")?;
+            statement
+                .query_map(params![target_session_handle, invocation_id], |row| {
+                    row.get(0)
+                })
+                .context("failed to query legacy Local continuation parents")?
+                .collect::<rusqlite::Result<Vec<i64>>>()
+                .context("failed to decode legacy Local continuation parents")?
+        };
+        if let [parent_id] = parent_candidates.as_slice() {
+            transaction
+                .execute(
+                    "UPDATE invocations SET target_created_by_invocation_id = ?2 WHERE id = ?1",
+                    params![invocation_id, parent_id],
+                )
+                .with_context(|| {
+                    format!(
+                        "failed to backfill continuation parent for Local invocation {invocation_id}"
+                    )
+                })?;
+        }
+    }
+    Ok(())
+}
+
+fn legacy_continuation_kind(args_json: &str) -> Result<Option<&'static str>> {
+    let value: Value = serde_json::from_str(args_json)
+        .context("failed to parse legacy Local write_stdin arguments during schema migration")?;
+    let Some(object) = value.as_object() else {
+        return Ok(None);
+    };
+
+    match object.get("kill_process") {
+        Some(Value::Bool(true)) => return Ok(Some("kill")),
+        Some(Value::Bool(false) | Value::Null) | None => {}
+        Some(_) => return Ok(None),
+    }
+    match object.get("chars") {
+        Some(Value::String(chars)) if !chars.is_empty() => Ok(Some("stdin")),
+        Some(Value::String(_) | Value::Null) | None => Ok(Some("poll")),
+        Some(_) => Ok(None),
+    }
 }
 
 pub(super) fn verify_readable_schema(connection: &Connection) -> Result<()> {

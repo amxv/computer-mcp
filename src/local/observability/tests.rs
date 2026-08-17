@@ -17,9 +17,10 @@ use crate::local::{
     HistoryQuery, LocalHistoryReader, LocalHistoryRuntime, LocalHistoryRuntimeConfig, LocalPaths,
     ensure_observability_bearer,
 };
+use crate::protocol::TerminationReason;
 use crate::session::{
-    OwnedProcess, OwnedProcessObserver, ProcessBirthIdentity, ProcessIdentity, SessionOutputChunk,
-    SessionOutputCompletion, SessionOutputObserver,
+    OwnedProcess, OwnedProcessEnd, OwnedProcessObserver, ProcessBirthIdentity, ProcessIdentity,
+    SessionOutputChunk, SessionOutputCompletion, SessionOutputObserver,
 };
 
 use super::server::{build_router, start_local_observability_server};
@@ -357,8 +358,13 @@ async fn api_is_loopback_bearer_read_only_agent_aware_and_secret_free() {
         "no-store"
     );
 
-    history.process_ended(&process).unwrap();
-    history.process_ended(&unattributed_process).unwrap();
+    let end = OwnedProcessEnd::exited(
+        0,
+        TerminationReason::Exit,
+        second_workdir.display().to_string(),
+    );
+    history.process_ended(&process, &end).unwrap();
+    history.process_ended(&unattributed_process, &end).unwrap();
     drop(app);
     history.shutdown_blocking().unwrap();
 }

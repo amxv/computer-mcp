@@ -11,7 +11,10 @@ use crate::invocation::{
     ProviderCallMetadata,
 };
 use crate::local::{LocalHistoryRuntime, LocalHistoryRuntimeConfig};
-use crate::session::{OwnedProcess, OwnedProcessObserver, ProcessBirthIdentity, ProcessIdentity};
+use crate::protocol::TerminationReason;
+use crate::session::{
+    OwnedProcess, OwnedProcessEnd, OwnedProcessObserver, ProcessBirthIdentity, ProcessIdentity,
+};
 
 use super::server::build_router;
 
@@ -85,7 +88,12 @@ async fn recovery_list_includes_preexisting_active_process_creator_only_while_ac
         "an active process creator that predates the recovery window must remain recoverable"
     );
 
-    history.process_ended(&process).unwrap();
+    history
+        .process_ended(
+            &process,
+            &OwnedProcessEnd::exited(0, TerminationReason::Exit, workdir.display().to_string()),
+        )
+        .unwrap();
     let ended = request_json(&app, cutoff).await;
     assert!(
         ended["invocations"].as_array().unwrap().is_empty(),

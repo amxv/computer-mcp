@@ -6,11 +6,12 @@ use crate::config::Config;
 use crate::invocation::{InvocationContext, ProviderCallMetadata};
 use crate::protocol::{CommandStatus, ExecCommandInput, TerminationReason, WriteStdinInput};
 
+use super::{
+    OwnedProcess, OwnedProcessEnd, OwnedProcessObserver, SessionManager, SessionOrigin,
+    SessionOutputChunk, SessionOutputObserver, SessionRuntimePolicy,
+};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use super::{ProcessInspector, SystemProcessInspector};
-use super::{
-    SessionManager, SessionOrigin, SessionOutputChunk, SessionOutputObserver, SessionRuntimePolicy,
-};
 
 fn workdir() -> String {
     std::env::current_dir().unwrap().display().to_string()
@@ -77,6 +78,273 @@ impl SessionOutputObserver for CapturingOutputObserver {
     fn observe_output(&self, chunk: SessionOutputChunk) {
         self.chunks.lock().unwrap().push(chunk);
     }
+}
+
+#[derive(Default)]
+struct CapturingProcessObserver {
+    ended: Mutex<Vec<(u64, OwnedProcessEnd)>>,
+}
+
+impl OwnedProcessObserver for CapturingProcessObserver {
+    fn process_started(&self, _process: &OwnedProcess) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn process_ended(&self, process: &OwnedProcess, end: &OwnedProcessEnd) -> anyhow::Result<()> {
+        self.ended
+            .lock()
+            .unwrap()
+            .push((process.internal_session_id, end.clone()));
+        Ok(())
+    }
+}
+
+impl CapturingProcessObserver {
+    fn ended(&self) -> Vec<(u64, OwnedProcessEnd)> {
+        self.ended.lock().unwrap().clone()
+    }
+}
+
+#[derive(Default)]
+struct RejectingProcessObserver {
+    ended: Mutex<Vec<OwnedProcessEnd>>,
+}
+
+impl OwnedProcessObserver for RejectingProcessObserver {
+    fn process_started(&self, _process: &OwnedProcess) -> anyhow::Result<()> {
+        anyhow::bail!("injected process ownership admission failure")
+    }
+
+    fn process_ended(&self, _process: &OwnedProcess, end: &OwnedProcessEnd) -> anyhow::Result<()> {
+        self.ended.lock().unwrap().push(end.clone());
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn process_end_observer_is_exactly_once_across_reaper_eviction_and_initial_completion() {
+    let observer = Arc::new(CapturingProcessObserver::default());
+    let policy = local_policy().with_process_observer(observer.clone());
+    let mgr = SessionManager::with_policy(1, 20_000, policy);
+    let cfg = Config::default();
+
+    let yielded = mgr
+        .exec_command(
+            ExecCommandInput {
+                cmd: "sleep 0.15; exit 7".to_string(),
+                yield_time_ms: Some(20),
+                workdir: workdir(),
+                timeout_ms: Some(60_000),
+            },
+            &cfg,
+            SessionOrigin::direct(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(yielded.status, CommandStatus::Running);
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while observer.ended().is_empty() && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let first_end = observer.ended();
+    assert_eq!(first_end.len(), 1);
+    assert_eq!(first_end[0].0, 1);
+    assert_eq!(first_end[0].1.exit_code, Some(7));
+    assert_eq!(
+        first_end[0].1.termination_reason,
+        Some(TerminationReason::Exit)
+    );
+    assert!(first_end[0].1.incomplete_reason.is_none());
+    assert!(
+        first_end[0]
+            .1
+            .final_cwd
+            .as_deref()
+            .is_some_and(|cwd| !cwd.is_empty())
+    );
+
+    let immediate = mgr
+        .exec_command(
+            ExecCommandInput {
+                cmd: "exit 0".to_string(),
+                yield_time_ms: Some(2_000),
+                workdir: workdir(),
+                timeout_ms: Some(60_000),
+            },
+            &cfg,
+            SessionOrigin::direct(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(immediate.status, CommandStatus::Exited);
+    let ended = observer.ended();
+    assert_eq!(ended.iter().filter(|(id, _)| *id == 1).count(), 1);
+    assert_eq!(ended.iter().filter(|(id, _)| *id == 2).count(), 1);
+    let immediate_end = ended.iter().find(|(id, _)| *id == 2).unwrap();
+    assert_eq!(immediate_end.1.exit_code, Some(0));
+    assert_eq!(
+        immediate_end.1.termination_reason,
+        Some(TerminationReason::Exit)
+    );
+
+    mgr.shutdown_all().await.unwrap();
+    let ended = observer.ended();
+    assert_eq!(ended.iter().filter(|(id, _)| *id == 1).count(), 1);
+    assert_eq!(ended.iter().filter(|(id, _)| *id == 2).count(), 1);
+}
+
+#[tokio::test]
+async fn process_end_observer_matches_kill_timeout_and_shutdown_reasons() {
+    let killed_observer = Arc::new(CapturingProcessObserver::default());
+    let killed_mgr = SessionManager::with_policy(
+        8,
+        20_000,
+        local_policy().with_process_observer(killed_observer.clone()),
+    );
+    let cfg = Config::default();
+    let running = killed_mgr
+        .exec_command(
+            ExecCommandInput {
+                cmd: "sleep 30".to_string(),
+                yield_time_ms: Some(20),
+                workdir: workdir(),
+                timeout_ms: Some(60_000),
+            },
+            &cfg,
+            SessionOrigin::direct(),
+        )
+        .await
+        .unwrap();
+    let killed = killed_mgr
+        .write_stdin(
+            WriteStdinInput {
+                session_handle: running.session_handle.unwrap(),
+                chars: None,
+                yield_time_ms: Some(6_000),
+                kill_process: Some(true),
+            },
+            &cfg,
+        )
+        .await
+        .unwrap();
+    let killed_ends = killed_observer.ended();
+    assert_eq!(killed_ends.len(), 1);
+    assert_eq!(killed_ends[0].1.exit_code, killed.exit_code);
+    assert_eq!(
+        killed_ends[0].1.termination_reason,
+        Some(TerminationReason::Killed)
+    );
+    killed_mgr.shutdown_all().await.unwrap();
+    assert_eq!(killed_observer.ended().len(), 1);
+
+    let timeout_observer = Arc::new(CapturingProcessObserver::default());
+    let timeout_mgr = SessionManager::with_policy(
+        8,
+        20_000,
+        local_policy().with_process_observer(timeout_observer.clone()),
+    );
+    let timeout_cfg = Config {
+        default_exec_timeout_ms: 1_000,
+        max_exec_timeout_ms: 1_000,
+        ..Config::default()
+    };
+    let timed_out = timeout_mgr
+        .exec_command(
+            ExecCommandInput {
+                cmd: "sleep 30".to_string(),
+                yield_time_ms: Some(2_000),
+                workdir: workdir(),
+                timeout_ms: Some(1_000),
+            },
+            &timeout_cfg,
+            SessionOrigin::direct(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        timed_out.termination_reason,
+        Some(TerminationReason::Timeout)
+    );
+    let timeout_ends = timeout_observer.ended();
+    assert_eq!(timeout_ends.len(), 1);
+    assert_eq!(
+        timeout_ends[0].1.termination_reason,
+        Some(TerminationReason::Timeout)
+    );
+    timeout_mgr.shutdown_all().await.unwrap();
+    assert_eq!(timeout_observer.ended().len(), 1);
+
+    let shutdown_observer = Arc::new(CapturingProcessObserver::default());
+    let shutdown_mgr = SessionManager::with_policy(
+        8,
+        20_000,
+        local_policy()
+            .with_process_observer(shutdown_observer.clone())
+            .with_shutdown_grace(Duration::from_millis(300)),
+    );
+    let running = shutdown_mgr
+        .exec_command(
+            ExecCommandInput {
+                cmd: "sleep 30".to_string(),
+                yield_time_ms: Some(20),
+                workdir: workdir(),
+                timeout_ms: Some(60_000),
+            },
+            &cfg,
+            SessionOrigin::direct(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(running.status, CommandStatus::Running);
+    shutdown_mgr.shutdown_all().await.unwrap();
+    let shutdown_ends = shutdown_observer.ended();
+    assert_eq!(shutdown_ends.len(), 1);
+    assert_eq!(
+        shutdown_ends[0].1.termination_reason,
+        Some(TerminationReason::Killed)
+    );
+}
+
+#[tokio::test]
+async fn process_start_failure_rolls_back_with_incomplete_end_evidence() {
+    let observer = Arc::new(RejectingProcessObserver::default());
+    let mgr = SessionManager::with_policy(
+        8,
+        20_000,
+        local_policy().with_process_observer(observer.clone()),
+    );
+    let error = mgr
+        .exec_command(
+            ExecCommandInput {
+                cmd: "sleep 30".to_string(),
+                yield_time_ms: Some(20),
+                workdir: workdir(),
+                timeout_ms: Some(60_000),
+            },
+            &Config::default(),
+            SessionOrigin::direct(),
+        )
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("process ownership"));
+    let ended = observer.ended.lock().unwrap();
+    assert_eq!(ended.len(), 1);
+    assert!(ended[0].exit_code.is_none());
+    assert!(ended[0].termination_reason.is_none());
+    assert!(
+        ended[0]
+            .final_cwd
+            .as_deref()
+            .is_some_and(|cwd| !cwd.is_empty())
+    );
+    assert!(
+        ended[0]
+            .incomplete_reason
+            .as_deref()
+            .unwrap()
+            .contains("admission failed")
+    );
 }
 
 #[tokio::test]
@@ -279,7 +547,10 @@ async fn multi_session_shutdown_uses_one_shared_grace_window() {
 async fn whole_runtime_shutdown_keeps_background_job_owned_after_shell_exit() {
     let dir = tempfile::tempdir().unwrap();
     let background_pid_file = dir.path().join("background.pid");
-    let policy = local_policy().with_shutdown_grace(Duration::from_millis(300));
+    let observer = Arc::new(CapturingProcessObserver::default());
+    let policy = local_policy()
+        .with_process_observer(observer.clone())
+        .with_shutdown_grace(Duration::from_millis(300));
     let mgr = SessionManager::with_policy(8, 20_000, policy);
     let cfg = Config::default();
 
@@ -348,9 +619,19 @@ async fn whole_runtime_shutdown_keeps_background_job_owned_after_shell_exit() {
         counts.running, 1,
         "an exited shell with a live owned background process must remain non-evictable"
     );
+    assert!(
+        observer.ended().is_empty(),
+        "process ownership must not end merely because the shell leader exited while an owned group member remains"
+    );
 
     let shutdown = mgr.shutdown_all().await.unwrap();
     assert_eq!(shutdown.sessions_signaled, 1);
+    let ended = observer.ended();
+    assert_eq!(ended.len(), 1);
+    assert_eq!(
+        ended[0].1.termination_reason,
+        Some(TerminationReason::Killed)
+    );
 
     let deadline = Instant::now() + Duration::from_secs(1);
     while inspector.identity(background_pid).unwrap().is_some() && Instant::now() < deadline {

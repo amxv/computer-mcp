@@ -8,6 +8,7 @@ use tokio::process::Command;
 
 use crate::config::Config;
 use crate::invocation::InvocationContext;
+use crate::protocol::TerminationReason;
 
 use super::{ProcessIdentity, ProcessInspector, SystemProcessInspector};
 
@@ -43,9 +44,51 @@ pub struct OwnedProcess {
     pub created_by: InvocationContext,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SessionCreatorContext {
+    pub agent_id: Option<Arc<str>>,
+    pub invocation_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnedProcessEnd {
+    pub exit_code: Option<i32>,
+    pub termination_reason: Option<TerminationReason>,
+    pub final_cwd: Option<String>,
+    pub incomplete_reason: Option<String>,
+}
+
+impl OwnedProcessEnd {
+    pub fn exited(
+        exit_code: i32,
+        termination_reason: TerminationReason,
+        final_cwd: String,
+    ) -> Self {
+        Self {
+            exit_code: Some(exit_code),
+            termination_reason: Some(termination_reason),
+            final_cwd: Some(final_cwd),
+            incomplete_reason: None,
+        }
+    }
+
+    pub fn incomplete(reason: impl Into<String>, final_cwd: Option<String>) -> Self {
+        Self {
+            exit_code: None,
+            termination_reason: None,
+            final_cwd,
+            incomplete_reason: Some(reason.into()),
+        }
+    }
+
+    pub fn is_complete(&self) -> bool {
+        self.incomplete_reason.is_none()
+    }
+}
+
 pub trait OwnedProcessObserver: Send + Sync {
     fn process_started(&self, process: &OwnedProcess) -> Result<()>;
-    fn process_ended(&self, process: &OwnedProcess) -> Result<()>;
+    fn process_ended(&self, process: &OwnedProcess, end: &OwnedProcessEnd) -> Result<()>;
 }
 
 #[derive(Clone)]
@@ -218,7 +261,7 @@ impl OwnedProcessObserver for NoopOwnedProcessObserver {
         Ok(())
     }
 
-    fn process_ended(&self, _process: &OwnedProcess) -> Result<()> {
+    fn process_ended(&self, _process: &OwnedProcess, _end: &OwnedProcessEnd) -> Result<()> {
         Ok(())
     }
 }
