@@ -31,6 +31,7 @@ const EVENT_TYPES = [
   'process_ended',
   'gap',
 ] as const
+const HISTORY_PAGE_SIZE = 20
 const RECOVERY_PAGE_SIZE = 50
 const SEEN_SEQUENCE_LIMIT = 1_024
 
@@ -125,10 +126,13 @@ export function createRuntimeConnection(
   const hydratedAgents = new Set<string>()
   const hydratingAgents = new Set<string>()
   const seenSequences = new Set<number>()
-  const seenSequenceOrder: number[] = []
+  const seenSequenceOrder = new Array<number>(SEEN_SEQUENCE_LIMIT)
+  let seenSequenceCount = 0
+  let seenSequenceCursor = 0
   const detailVersions = new Map<string, number>()
   const detailPendingWatermarks = new Map<string, number>()
   const detailQueue = new Set<string>()
+  let nextDetailVersion = 1
   let detailFrame: number | undefined
   let agentRefreshFrame: number | undefined
   let activeSource: EventSourceLike | undefined
@@ -144,12 +148,16 @@ export function createRuntimeConnection(
 
   const rememberSequence = (sequence: number) => {
     if (seenSequences.has(sequence)) return false
-    seenSequences.add(sequence)
-    seenSequenceOrder.push(sequence)
-    while (seenSequenceOrder.length > SEEN_SEQUENCE_LIMIT) {
-      const removed = seenSequenceOrder.shift()
+    if (seenSequenceCount < SEEN_SEQUENCE_LIMIT) {
+      seenSequenceOrder[seenSequenceCount] = sequence
+      seenSequenceCount += 1
+    } else {
+      const removed = seenSequenceOrder[seenSequenceCursor]
       if (removed !== undefined) seenSequences.delete(removed)
+      seenSequenceOrder[seenSequenceCursor] = sequence
+      seenSequenceCursor = (seenSequenceCursor + 1) % SEEN_SEQUENCE_LIMIT
     }
+    seenSequences.add(sequence)
     return true
   }
 
@@ -171,7 +179,7 @@ export function createRuntimeConnection(
         agentId: input.agentId,
         beforeMs: input.beforeMs,
         cursor: input.cursor,
-        limit: RECOVERY_PAGE_SIZE,
+        limit: HISTORY_PAGE_SIZE,
       },
       runtimeId(),
     )
@@ -281,19 +289,24 @@ export function createRuntimeConnection(
   const finishDetailRefresh = (presentationId: string, version: number) => {
     if (detailVersions.get(presentationId) === version) {
       detailPendingWatermarks.delete(presentationId)
+      detailVersions.delete(presentationId)
     }
   }
 
   const refreshDetail = async (presentationId: string, version: number) => {
     try {
       const detail = await api.fetchTimelineDetail(presentationId, runtimeId())
+      if (detailVersions.get(presentationId) !== version) return
       const agentId = detail.record.agent_id
       if (agentId && visibleAgentIds().includes(agentId)) {
         ensureController(agentId).upsert(detail.record, true)
       }
       finishDetailRefresh(presentationId, version)
     } catch (error) {
-      setConnectionError(`Timeline refresh failed: ${messageFrom(error)}`)
+      if (detailVersions.get(presentationId) === version) {
+        detailVersions.delete(presentationId)
+        setConnectionError(`Timeline refresh failed: ${messageFrom(error)}`)
+      }
     }
   }
 
@@ -316,7 +329,7 @@ export function createRuntimeConnection(
       presentationId,
       previous === undefined ? event.emitted_at_ms : Math.min(previous, event.emitted_at_ms),
     )
-    detailVersions.set(presentationId, (detailVersions.get(presentationId) ?? 0) + 1)
+    detailVersions.set(presentationId, nextDetailVersion++)
     detailQueue.add(presentationId)
     if (detailFrame === undefined) detailFrame = requestAnimationFrame(flushDetailQueue)
   }
@@ -327,7 +340,8 @@ export function createRuntimeConnection(
     hydratedAgents.clear()
     hydratingAgents.clear()
     seenSequences.clear()
-    seenSequenceOrder.length = 0
+    seenSequenceCount = 0
+    seenSequenceCursor = 0
     detailQueue.clear()
     detailVersions.clear()
     detailPendingWatermarks.clear()

@@ -30,9 +30,12 @@ export class LiveOutputBuffer {
   readonly maximumBytes: number
   readonly maximumChunks: number
   private chunks: DisplayOutputChunk[] = []
+  private readonly sequences = new Set<number>()
   private bytes = 0
   private droppedPrefix = false
   private lastSequence: number | undefined
+  private materialized = ''
+  private materializedDirty = false
 
   constructor(maximumBytes = 96 * 1024, maximumChunks = 2_048) {
     this.maximumBytes = maximumBytes
@@ -40,8 +43,7 @@ export class LiveOutputBuffer {
   }
 
   append(sequence: number, text: string): AppendOutputResult {
-    const existing = this.chunks.find((chunk) => chunk.sequence === sequence)
-    if (existing) {
+    if (this.sequences.has(sequence)) {
       return { added: false, duplicate: true, sequenceGap: false }
     }
     const sequenceGap =
@@ -62,10 +64,12 @@ export class LiveOutputBuffer {
       )
       if (remaining.length !== this.chunks.length) this.droppedPrefix = true
       this.chunks = remaining
+      this.rebuildSequenceSet()
       this.recount()
+      this.materializedDirty = true
     }
     for (const chunk of chunks) {
-      if (!this.chunks.some((existing) => existing.sequence === chunk.sequence)) {
+      if (!this.sequences.has(chunk.sequence)) {
         this.insertChunk(chunk)
       }
     }
@@ -74,14 +78,21 @@ export class LiveOutputBuffer {
   }
 
   materialize() {
-    return this.chunks.map((chunk) => chunk.text).join('')
+    if (this.materializedDirty) {
+      this.materialized = this.chunks.map((chunk) => chunk.text).join('')
+      this.materializedDirty = false
+    }
+    return this.materialized
   }
 
   clear() {
     this.chunks = []
+    this.sequences.clear()
     this.bytes = 0
     this.lastSequence = undefined
     this.droppedPrefix = false
+    this.materialized = ''
+    this.materializedDirty = false
   }
 
   hasDroppedPrefix() {
@@ -122,12 +133,19 @@ export class LiveOutputBuffer {
       sequence: chunk.sequence,
       text: utf8Suffix(chunk.text, this.maximumBytes),
     }
-    const index = this.chunks.findIndex(
-      (existing) => existing.sequence > normalized.sequence,
-    )
-    if (index < 0) this.chunks.push(normalized)
-    else this.chunks.splice(index, 0, normalized)
+    const last = this.chunks.at(-1)
+    if (!last || last.sequence < normalized.sequence) {
+      this.chunks.push(normalized)
+    } else {
+      const index = this.chunks.findIndex(
+        (existing) => existing.sequence > normalized.sequence,
+      )
+      if (index < 0) this.chunks.push(normalized)
+      else this.chunks.splice(index, 0, normalized)
+    }
+    this.sequences.add(normalized.sequence)
     this.bytes += utf8ByteLength(normalized.text)
+    this.materializedDirty = true
   }
 
   private trim() {
@@ -136,14 +154,17 @@ export class LiveOutputBuffer {
       (this.bytes > this.maximumBytes || this.chunks.length > this.maximumChunks)
     ) {
       const removed = this.chunks.shift()!
+      this.sequences.delete(removed.sequence)
       this.bytes -= utf8ByteLength(removed.text)
       this.droppedPrefix = true
+      this.materializedDirty = true
     }
     if (this.chunks.length === 1 && this.bytes > this.maximumBytes) {
       const only = this.chunks[0]!
       only.text = utf8Suffix(only.text, this.maximumBytes)
       this.bytes = utf8ByteLength(only.text)
       this.droppedPrefix = true
+      this.materializedDirty = true
     }
     this.lastSequence = this.chunks.at(-1)?.sequence
   }
@@ -154,5 +175,10 @@ export class LiveOutputBuffer {
       0,
     )
     this.lastSequence = this.chunks.at(-1)?.sequence
+  }
+
+  private rebuildSequenceSet() {
+    this.sequences.clear()
+    for (const chunk of this.chunks) this.sequences.add(chunk.sequence)
   }
 }

@@ -328,4 +328,83 @@ describe('runtime connection', () => {
     expect(sources.at(-1)?.url).toBe('api/events?output_agent_ids=c333')
     runtime.dispose()
   })
+
+  it('ignores an older overlapping detail response after a newer refresh wins', async () => {
+    const sources: FakeEventSource[] = []
+    const detailResolvers: Array<(detail: ApiTimelineDetail) => void> = []
+    const api: RuntimeApi = {
+      fetchStatus: async () => status(),
+      fetchCurrentAgents: async () => ({ agents: [agent('a111')] }),
+      fetchTimeline: async (_query, runtimeId) => page(runtimeId, []),
+      fetchTimelineDetail: (presentationId, runtimeId) =>
+        new Promise<ApiTimelineDetail>((resolve) => {
+          detailResolvers.push(resolve)
+        }).then((detail) => ({ ...detail, runtime_id: runtimeId, record: { ...detail.record, presentation_id: presentationId } })),
+      fetchOutputMetadata: async () => {
+        throw new Error('output metadata not expected')
+      },
+      fetchOutputPage: async () => {
+        throw new Error('output page not expected')
+      },
+      openEventSource: (url) => {
+        const source = new FakeEventSource(url)
+        sources.push(source)
+        return source
+      },
+    }
+    const runtime = createRuntimeConnection({
+      initialStatus: status(),
+      initialAgents: [agent('a111')],
+      initialVisibleAgentIds: ['a111'],
+      viewerAttachWatermarkMs: 1_000,
+      api,
+    })
+    const controller = runtime.controllerFor('a111')
+    const currentSummary = () => {
+      const current = controller.record('inv-3')
+      return current?.kind === 'generic' ? current.summary : undefined
+    }
+    runtime.start()
+    sources[0]!.open()
+    await vi.waitFor(() => expect(runtime.connectionState()).toBe('connected'))
+
+    const refresh = (sequence: number) =>
+      liveEvent({
+        sequence,
+        event_type: 'presentation_updated',
+        agent_id: 'a111',
+        invocation_id: 3,
+        presentation_id: 'inv-3',
+      })
+    sources[0]!.emit(refresh(1))
+    await vi.waitFor(() => expect(detailResolvers).toHaveLength(1))
+    sources[0]!.emit(refresh(2))
+    await vi.waitFor(() => expect(detailResolvers).toHaveLength(2))
+
+    const newer = {
+      ...record(3, 'a111'),
+      summary: 'newer detail',
+    } as PresentationRecord
+    detailResolvers[1]!({
+      schema_version: 1,
+      presentation_version: 2,
+      runtime_id: 'runtime-one',
+      record: newer,
+    })
+    await vi.waitFor(() => expect(currentSummary()).toBe('newer detail'))
+
+    const older = {
+      ...record(3, 'a111'),
+      summary: 'older detail',
+    } as PresentationRecord
+    detailResolvers[0]!({
+      schema_version: 1,
+      presentation_version: 2,
+      runtime_id: 'runtime-one',
+      record: older,
+    })
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(currentSummary()).toBe('newer detail')
+    runtime.dispose()
+  })
 })

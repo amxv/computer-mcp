@@ -280,6 +280,7 @@ describe('independent virtualized Agent timeline', () => {
     scroll.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -180 }))
     scroll.dispatchEvent(new Event('scroll', { bubbles: true }))
     await vi.waitFor(() => expect(controller.following()).toBe(false))
+    await vi.waitFor(() => expect(container.textContent).toContain('Scroll to bottom'))
     const pausedAnchorBefore = firstVisibleCard(scroll)
     expect(pausedAnchorBefore).toBeDefined()
     const pausedAnchorId = pausedAnchorBefore!.element.dataset.presentationId
@@ -305,6 +306,9 @@ describe('independent virtualized Agent timeline', () => {
     await vi.waitFor(() => expect(controller.following()).toBe(true))
     await vi.waitFor(() => expect(distanceFromEnd(scroll)).toBeLessThanOrEqual(3))
     expect(controller.unseenCount()).toBe(0)
+    await vi.waitFor(() =>
+      expect(container.querySelector('.new-activity-button')).toBeNull(),
+    )
 
     scroll.scrollTop = Math.max(120, scroll.scrollHeight - scroll.clientHeight - 260)
     scroll.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -260 }))

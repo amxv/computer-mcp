@@ -1,4 +1,4 @@
-import { createEffect, createSignal } from 'solid-js'
+import { Show, createEffect, createSignal } from 'solid-js'
 
 import type {
   LiveboardPreferences,
@@ -6,6 +6,7 @@ import type {
   ThemePreference,
 } from '../api/client'
 import { CloseIcon, CogIcon } from './icons'
+import { createDrawerPresence } from './drawerPresence'
 
 export function SettingsDrawer(props: {
   open: boolean
@@ -16,10 +17,11 @@ export function SettingsDrawer(props: {
 }) {
   const [editorDraft, setEditorDraft] = createSignal(props.preferences.editor_command)
   let closeButton: HTMLButtonElement | undefined
+  const presence = createDrawerPresence(() => props.open)
 
   createEffect(() => setEditorDraft(props.preferences.editor_command))
   createEffect(() => {
-    if (props.open) queueMicrotask(() => closeButton?.focus())
+    if (presence.visible()) queueMicrotask(() => closeButton?.focus())
   })
 
   const saveEditor = () => {
@@ -34,24 +36,25 @@ export function SettingsDrawer(props: {
   }
 
   return (
-    <div
-      class="drawer-backdrop"
-      classList={{ 'drawer-backdrop-open': props.open }}
-      aria-hidden={!props.open}
-      inert={!props.open}
-      onPointerDown={(event) => {
-        if (props.open && event.target === event.currentTarget) props.onClose()
-      }}
-      onKeyDown={(event) => {
-        if (props.open && event.key === 'Escape') props.onClose()
-      }}
-    >
-      <aside
-        class="agent-drawer settings-drawer"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="settings-drawer-title"
+    <Show when={presence.present()}>
+      <div
+        class="drawer-backdrop"
+        classList={{ 'drawer-backdrop-open': presence.visible() }}
+        aria-hidden={!props.open}
+        inert={!props.open}
+        onPointerDown={(event) => {
+          if (props.open && event.target === event.currentTarget) props.onClose()
+        }}
+        onKeyDown={(event) => {
+          if (props.open && event.key === 'Escape') props.onClose()
+        }}
       >
+        <aside
+          class="agent-drawer settings-drawer"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="settings-drawer-title"
+        >
           <header class="drawer-header">
             <div class="drawer-title-row">
               <CogIcon />
@@ -210,7 +213,8 @@ export function SettingsDrawer(props: {
               </div>
             </section>
           </div>
-      </aside>
-    </div>
+        </aside>
+      </div>
+    </Show>
   )
 }

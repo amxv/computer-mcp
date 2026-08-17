@@ -9,6 +9,7 @@ import {
 
 import type { ApiAgent, LiveboardPreferences } from '../api/client'
 import { AgentsIcon, ChevronDownIcon, CloseIcon } from '../ui/icons'
+import { createDrawerPresence } from '../ui/drawerPresence'
 import {
   agentActivity,
   relativeActivityLabel,
@@ -155,26 +156,28 @@ function AgentDrawerRow(props: {
 
 export function AgentDrawer(props: AgentDrawerProps) {
   let closeButton: HTMLButtonElement | undefined
+  const presence = createDrawerPresence(() => props.open)
   createEffect(() => {
-    if (props.open) queueMicrotask(() => closeButton?.focus())
+    if (presence.visible()) queueMicrotask(() => closeButton?.focus())
   })
 
   const isFull = () => props.visibleIds.length >= props.preferences.max_visible_agents
 
   return (
-    <div
-      class="drawer-backdrop"
-      classList={{ 'drawer-backdrop-open': props.open }}
-      aria-hidden={!props.open}
-      inert={!props.open}
-      onPointerDown={(event) => {
-        if (props.open && event.target === event.currentTarget) props.onClose()
-      }}
-      onKeyDown={(event) => {
-        if (props.open && event.key === 'Escape') props.onClose()
-      }}
-    >
-      <aside class="agent-drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title">
+    <Show when={presence.present()}>
+      <div
+        class="drawer-backdrop"
+        classList={{ 'drawer-backdrop-open': presence.visible() }}
+        aria-hidden={!props.open}
+        inert={!props.open}
+        onPointerDown={(event) => {
+          if (props.open && event.target === event.currentTarget) props.onClose()
+        }}
+        onKeyDown={(event) => {
+          if (props.open && event.key === 'Escape') props.onClose()
+        }}
+      >
+        <aside class="agent-drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title">
         <header class="drawer-header">
           <div class="drawer-title-row">
             <AgentsIcon />
@@ -213,7 +216,8 @@ export function AgentDrawer(props: AgentDrawerProps) {
             </For>
           </Show>
         </div>
-      </aside>
-    </div>
+        </aside>
+      </div>
+    </Show>
   )
 }

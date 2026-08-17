@@ -24,6 +24,7 @@ export function AgentTimeline(props: {
   let userScrollIntentUntil = 0
   let lastMeasuredTotalSize = 0
   let followResizeFrame: number | undefined
+  let followSettleFrame: number | undefined
   let returnToLiveFrame: number | undefined
   const [atLiveEnd, setAtLiveEnd] = createSignal(true)
 
@@ -51,6 +52,10 @@ export function AgentTimeline(props: {
       cancelAnimationFrame(followResizeFrame)
       followResizeFrame = undefined
     }
+    if (followSettleFrame !== undefined) {
+      cancelAnimationFrame(followSettleFrame)
+      followSettleFrame = undefined
+    }
     if (returnToLiveFrame !== undefined) {
       cancelAnimationFrame(returnToLiveFrame)
       returnToLiveFrame = undefined
@@ -69,7 +74,7 @@ export function AgentTimeline(props: {
     getScrollElement: () => scrollElement ?? null,
     estimateSize: () => 88,
     getItemKey: (index) => props.controller.orderedIds()[index] ?? `missing-${index}`,
-    overscan: 5,
+    overscan: 3,
     gap: 8,
     paddingStart: 46,
     paddingEnd: 14,
@@ -90,6 +95,18 @@ export function AgentTimeline(props: {
         if (!scrollElement?.isConnected) return
         if (grew && props.controller.following() && !hasUserScrollIntent()) {
           scrollElement.scrollTop = scrollElement.scrollHeight
+          if (followSettleFrame !== undefined) cancelAnimationFrame(followSettleFrame)
+          followSettleFrame = requestAnimationFrame(() => {
+            followSettleFrame = undefined
+            if (
+              scrollElement?.isConnected &&
+              props.controller.following() &&
+              !hasUserScrollIntent()
+            ) {
+              scrollElement.scrollTop = scrollElement.scrollHeight
+              syncLiveEndState()
+            }
+          })
         }
         syncLiveEndState()
       })
@@ -99,6 +116,7 @@ export function AgentTimeline(props: {
 
   onCleanup(() => {
     if (followResizeFrame !== undefined) cancelAnimationFrame(followResizeFrame)
+    if (followSettleFrame !== undefined) cancelAnimationFrame(followSettleFrame)
     if (returnToLiveFrame !== undefined) cancelAnimationFrame(returnToLiveFrame)
   })
 
