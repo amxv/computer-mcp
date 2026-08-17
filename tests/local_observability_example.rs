@@ -68,7 +68,7 @@ fn documented_python_observer_client_authenticates_and_consumes_sse() {
                 )
                 .unwrap();
             } else if expected_path.starts_with("/v1/timeline?") {
-                let body = r#"{"schema_version":1,"presentation_version":2,"runtime_id":"fixture","records":[],"has_more":false,"next_cursor":null}"#;
+                let body = r#"{"schema_version":1,"presentation_version":3,"runtime_id":"fixture","records":[],"has_more":false,"next_cursor":null}"#;
                 write!(
                     stream,
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -77,7 +77,7 @@ fn documented_python_observer_client_authenticates_and_consumes_sse() {
                 )
                 .unwrap();
             } else {
-                let payload = r#"{"schema_version":2,"runtime_id":"fixture","sequence":1,"emitted_at_ms":3,"event_type":"invocation_started","agent_id":"k7m2","invocation_id":7,"presentation_id":"inv-7","presentation_revision":1,"payload":{"tool_name":"exec_command"}}"#;
+                let payload = r#"{"schema_version":2,"runtime_id":"fixture","sequence":1,"emitted_at_ms":3,"event_type":"invocation_started","agent_id":"k7m2","invocation_id":7,"presentation_id":"inv-7","presentation_revision":3,"payload":{"tool_name":"exec_command"}}"#;
                 let body = format!("id: 1\nevent: invocation_started\ndata: {payload}\n\n");
                 write!(
                     stream,
@@ -97,7 +97,7 @@ fn documented_python_observer_client_authenticates_and_consumes_sse() {
     fs::write(
         &discovery,
         format!(
-            r#"{{"schema_version":1,"runtime_id":"fixture","pid":1,"start_directory":"/tmp","started_at":"2026-08-16T00:00:00Z","expires_at":null,"observability":{{"api_version":1,"presentation_version":2,"base_url":"http://{addr}","bearer_token_path":{},"history_available":true,"sse_available":true}}}}"#,
+            r#"{{"schema_version":1,"runtime_id":"fixture","pid":1,"start_directory":"/tmp","started_at":"2026-08-16T00:00:00Z","expires_at":null,"observability":{{"api_version":1,"presentation_version":3,"base_url":"http://{addr}","bearer_token_path":{},"history_available":true,"sse_available":true}}}}"#,
             serde_json::to_string(&bearer).unwrap()
         ),
     )

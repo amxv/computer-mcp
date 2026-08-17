@@ -177,7 +177,7 @@ async fn timeline_routes_are_lazy_filtered_cursor_paginated_and_auditable() {
     );
     let first = body_json(first_response).await;
     assert_eq!(first["schema_version"], 1);
-    assert_eq!(first["presentation_version"], 2);
+    assert_eq!(first["presentation_version"], 3);
     assert_eq!(first["records"].as_array().unwrap().len(), 2);
     assert_eq!(first["has_more"], true);
     let cursor = first["next_cursor"].as_str().unwrap();
@@ -251,6 +251,21 @@ async fn timeline_routes_are_lazy_filtered_cursor_paginated_and_auditable() {
     assert_eq!(detail["record"]["polls"]["count"], 12);
     assert!(!detail.to_string().contains("POLL-EXACT-SECRET"));
 
+    let batch = body_json(
+        request(
+            &app,
+            &format!(
+                "/v1/timeline/diffs?presentation_ids=inv-{command_id},inv-{}",
+                generic_b.invocation_id.unwrap()
+            ),
+            Some(TOKEN),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(batch["presentation_version"], 3);
+    assert_eq!(batch["records"].as_array().unwrap().len(), 2);
+
     let checkpoints = body_json(
         request(
             &app,
@@ -281,6 +296,8 @@ async fn timeline_routes_are_lazy_filtered_cursor_paginated_and_auditable() {
 
     let malformed = request(&app, "/v1/timeline?cursor=not_base64!!", Some(TOKEN)).await;
     assert_eq!(malformed.status(), StatusCode::BAD_REQUEST);
+    let bad_projection = request(&app, "/v1/timeline?diffs=maybe", Some(TOKEN)).await;
+    assert_eq!(bad_projection.status(), StatusCode::BAD_REQUEST);
     let newer_cursor = URL_SAFE_NO_PAD.encode(
         serde_json::to_vec(&json!({
             "version": 2,

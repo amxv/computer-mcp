@@ -4,7 +4,7 @@ use rusqlite::Connection;
 use tempfile::tempdir;
 
 use super::query::{HistoryQuery, LocalHistoryReader};
-use super::schema::{HISTORY_SCHEMA_VERSION, SCHEMA_V1, SCHEMA_V2, SCHEMA_V3};
+use super::schema::{HISTORY_SCHEMA_VERSION, SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4};
 use super::store::HistoryStore;
 
 #[test]
@@ -45,6 +45,14 @@ fn schema_v1_migrates_forward_to_current_file_evidence_schema() {
         )
         .unwrap();
     assert_eq!(table_count, 1);
+    let materialization_table_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'presentation_materializations'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(materialization_table_count, 1);
 }
 
 #[test]
@@ -215,5 +223,92 @@ fn schema_v3_migrates_continuation_identity_and_keeps_ambiguous_parents_nullable
     assert!(
         retained_parent.is_none(),
         "retention/deletion must null continuation parent identity rather than leave a dangling FK"
+    );
+}
+
+#[test]
+fn schema_v5_invalidates_materialized_presentations_when_invocation_truth_changes() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("history.sqlite3");
+    let store = HistoryStore::open(path.clone(), Arc::from("materialization-runtime")).unwrap();
+    drop(store);
+    let connection = Connection::open(path).unwrap();
+    connection
+        .execute(
+            "INSERT INTO invocations(
+                correlation_id, tool_name, args_json, started_at_ms,
+                evidence_state, capture_state
+             ) VALUES ('materialized-root', 'exec_command', '{}', 10, 'complete', 'complete')",
+            [],
+        )
+        .unwrap();
+    let root_id = connection.last_insert_rowid();
+    connection
+        .execute(
+            "INSERT INTO presentation_materializations(
+                root_invocation_id, presentation_version, materialized_at_ms, summary_json, full_json
+             ) VALUES (?1, 3, 20, '{}', NULL)",
+            [root_id],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE invocations SET result_status = 'running' WHERE id = ?1",
+            [root_id],
+        )
+        .unwrap();
+    let remaining: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM presentation_materializations WHERE root_invocation_id = ?1",
+            [root_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(remaining, 0);
+}
+
+#[test]
+fn schema_v4_migrates_to_materialization_cache_without_eager_backfill() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("history.sqlite3");
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .pragma_update(None, "auto_vacuum", "INCREMENTAL")
+        .unwrap();
+    let _: String = connection
+        .query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))
+        .unwrap();
+    for schema in [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4] {
+        connection.execute_batch(schema).unwrap();
+    }
+    connection
+        .execute(
+            "INSERT INTO invocations(
+                correlation_id, tool_name, args_json, started_at_ms, completed_at_ms,
+                outcome_kind, result_json, evidence_state, capture_state
+             ) VALUES ('legacy-v4', 'test_tool', '{}', 1, 2, 'success', '{}',
+                       'complete', 'not_applicable')",
+            [],
+        )
+        .unwrap();
+    connection.pragma_update(None, "user_version", 4).unwrap();
+    drop(connection);
+
+    drop(HistoryStore::open(path.clone(), Arc::from("migration-runtime")).unwrap());
+    let connection = Connection::open(path).unwrap();
+    let version: u32 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, HISTORY_SCHEMA_VERSION);
+    let materialized: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM presentation_materializations",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        materialized, 0,
+        "schema migration must not build historical diffs"
     );
 }

@@ -170,6 +170,7 @@ fn renders_structured_file_diff_and_write_mode() {
         added: 1,
         removed: 1,
         diff_truncated: false,
+        diff_lines_included: true,
         lines: vec![
             PresentationDiffLine {
                 kind: "remove".to_owned(),

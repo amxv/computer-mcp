@@ -7,6 +7,7 @@ import {
   type DiffHighlighter,
 } from '../diff/HighlightWorkerClient'
 import { TimelineCard } from './TimelineCard'
+import { ArrowDownIcon } from '../ui/icons'
 
 const END_THRESHOLD_PX = 40
 const HISTORY_TRIGGER_PX = 72
@@ -306,9 +307,12 @@ export function AgentTimeline(props: {
       </div>
       <Show when={!atLiveEnd() || props.controller.unseenCount() > 0}>
         <button type="button" class="new-activity-button" onClick={returnToLive}>
-          {props.controller.unseenCount() > 0
-            ? `↓ ${props.controller.unseenCount()} new`
-            : 'Scroll to bottom'}
+          <ArrowDownIcon />
+          <span>
+            {props.controller.unseenCount() > 0
+              ? `${props.controller.unseenCount()} new`
+              : 'Scroll to bottom'}
+          </span>
         </button>
       </Show>
       <Show when={props.controller.historyError()}>

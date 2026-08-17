@@ -821,6 +821,7 @@ fn build_file_change(
         added: diff.added,
         removed: diff.removed,
         diff_truncated: diff.truncated,
+        diff_lines_included: true,
         lines: diff.lines,
     })
 }
@@ -886,6 +887,7 @@ fn build_same_path_net_change(
         added: diff.added,
         removed: diff.removed,
         diff_truncated: diff.truncated,
+        diff_lines_included: true,
         lines: diff.lines,
     })
 }

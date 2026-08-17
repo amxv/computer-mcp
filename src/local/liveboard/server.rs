@@ -120,6 +120,7 @@ fn build_router(capability: &str, state: Arc<LiveboardState>, security: Security
         .route("/api/agents", get(proxy_agents))
         .route("/api/agents/{id}", get(proxy_agent))
         .route("/api/timeline", get(proxy_timeline))
+        .route("/api/timeline/diffs", get(proxy_timeline_diffs))
         .route(
             "/api/timeline/{presentation_id}",
             get(proxy_timeline_detail),
@@ -259,6 +260,7 @@ macro_rules! fixed_proxy {
 fixed_proxy!(proxy_status, "v1/status");
 fixed_proxy!(proxy_agents, "v1/agents");
 fixed_proxy!(proxy_timeline, "v1/timeline");
+fixed_proxy!(proxy_timeline_diffs, "v1/timeline/diffs");
 fixed_proxy!(proxy_events, "v1/events");
 
 async fn proxy_agent(

@@ -160,6 +160,13 @@
   text-transform: capitalize;
 }
 
+.diff-loading {
+  border-top: 1px solid var(--border);
+  padding: 8px 10px;
+  color: var(--faint);
+  font-size: 8.5px;
+}
+
 .diff-body {
   max-height: 360px;
   overflow: auto;

@@ -61,8 +61,11 @@ export interface PresentationFileChange {
   added: number
   removed: number
   diff_truncated: boolean
+  diff_lines_included: boolean
   lines: PresentationDiffLine[]
 }
+
+export type DiffProjection = 'summary' | 'full'
 
 interface PresentationRecordBase {
   presentation_id: string
@@ -144,6 +147,13 @@ export interface ApiTimelineDetail {
   presentation_version: number
   runtime_id: string
   record: PresentationRecord
+}
+
+export interface ApiTimelineDiffBatch {
+  schema_version: number
+  presentation_version: number
+  runtime_id: string
+  records: PresentationRecord[]
 }
 
 export interface OutputMetadata {
@@ -331,7 +341,7 @@ export async function patchPreferences(
 }
 
 export const OBSERVER_API_VERSION = 1
-export const PRESENTATION_VERSION = 2
+export const PRESENTATION_VERSION = 3
 export const LIVE_EVENT_VERSION = 2
 
 export function validateStatus(status: ApiStatus): void {
@@ -373,6 +383,19 @@ export function validateTimelineDetail(
   }
 }
 
+export function validateTimelineDiffBatch(
+  batch: ApiTimelineDiffBatch,
+  runtimeId: string,
+): void {
+  if (
+    batch.schema_version !== OBSERVER_API_VERSION ||
+    batch.presentation_version !== PRESENTATION_VERSION ||
+    batch.runtime_id !== runtimeId
+  ) {
+    throw new Error('Local timeline diff batch belongs to an incompatible or changed runtime')
+  }
+}
+
 export function validateLiveEvent(event: HistoryLiveEvent): void {
   if (event.schema_version !== LIVE_EVENT_VERSION) {
     throw new Error('Local live-event version is incompatible with this Liveboard')
@@ -400,6 +423,16 @@ export async function fetchTimelineDetail(
   )
   validateTimelineDetail(detail, runtimeId)
   return detail
+}
+
+export async function fetchTimelineDiffBatch(
+  presentationIds: readonly string[],
+  runtimeId: string,
+): Promise<ApiTimelineDiffBatch> {
+  const params = new URLSearchParams({ presentation_ids: presentationIds.join(',') })
+  const batch = await fetchJson<ApiTimelineDiffBatch>(`api/timeline/diffs?${params.toString()}`)
+  validateTimelineDiffBatch(batch, runtimeId)
+  return batch
 }
 
 export async function fetchOutputMetadata(
@@ -488,6 +521,7 @@ export interface TimelineQuery {
   cursor?: string
   beforeMs?: number
   recoverySinceMs?: number
+  diffs?: DiffProjection
 }
 
 export async function fetchTimeline(
@@ -502,15 +536,36 @@ export async function fetchTimeline(
   if (query.recoverySinceMs !== undefined) {
     params.set('recovery_since_ms', String(query.recoverySinceMs))
   }
+  if (query.diffs) params.set('diffs', query.diffs)
   const page = await fetchJson<ApiTimelinePage>(`api/timeline?${params.toString()}`)
   validateTimelinePage(page, runtimeId)
   return page
 }
 
-export function eventStreamUrl(outputAgentIds: readonly string[]): string {
+export function eventStreamUrl(
+  outputAgentIds: readonly string[],
+  diffs: DiffProjection = 'full',
+): string {
   const params = new URLSearchParams()
   params.set('output_agent_ids', outputAgentIds.join(','))
+  params.set('diffs', diffs)
   return `api/events?${params.toString()}`
+}
+
+export function presentationRecordFromLiveEvent(
+  event: HistoryLiveEvent,
+): PresentationRecord | undefined {
+  const record = event.payload.record
+  if (!record || typeof record !== 'object') return undefined
+  const presentation = record as Partial<PresentationRecord>
+  if (
+    typeof presentation.presentation_id !== 'string' ||
+    presentation.presentation_id !== event.presentation_id ||
+    typeof presentation.kind !== 'string'
+  ) {
+    throw new Error('Local live presentation payload is malformed')
+  }
+  return record as PresentationRecord
 }
 
 export async function loadBootstrap() {

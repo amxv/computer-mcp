@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use serde_json::json;
 use tracing::{error, warn};
 
@@ -17,24 +17,24 @@ use crate::local::file_evidence::{
     CompletedFileEvidence, PendingFileEvidence, complete_file_evidence, prepare_file_evidence,
 };
 use crate::local::presentation::PRESENTATION_SCHEMA_VERSION;
-use crate::session::{
-    OwnedProcess, OwnedProcessEnd, OwnedProcessObserver, SessionOutputChunk,
-    SessionOutputCompletion, SessionOutputObserver,
-};
+use crate::session::{SessionOutputChunk, SessionOutputCompletion, SessionOutputObserver};
 
 use super::events::{HistoryEventHub, HistoryLiveEvent};
 use super::live_display::LiveDisplayStreams;
+use super::materialized::refresh_and_emit_presentation;
 use super::store::{
     HistoryStore, OutputEvent, distinct_invocation_ids, mark_retention_error_best_effort,
     normalize_declared_workdir, now_ms,
 };
 
 mod output_queue;
+mod process_observer;
 
 const DEFAULT_OUTPUT_QUEUE_CAPACITY: usize = 4096;
 const OUTPUT_BATCH_LIMIT: usize = 128;
 const OUTPUT_BATCH_WAIT: Duration = Duration::from_millis(25);
 const RETENTION_MIN_INTERVAL: Duration = Duration::from_secs(30);
+const MATERIALIZATION_BACKFILL_INTERVAL: Duration = Duration::from_millis(250);
 // Remote MCP ingress and command-session shutdown are already closed before
 // this evidence-only drain runs. Give the detached PTY reader enough room to
 // observe EOF even on a heavily loaded host, while retaining a hard bound so
@@ -200,6 +200,12 @@ enum WorkerMessage {
         outcome: InvocationOutcome,
         file_evidence: Vec<CompletedFileEvidence>,
     },
+    RefreshPresentation {
+        root_invocation_id: i64,
+        invocation_id: Option<i64>,
+        source: &'static str,
+        emit_live: bool,
+    },
     #[cfg(test)]
     Barrier(std::sync::mpsc::Sender<()>),
     Shutdown,
@@ -306,6 +312,33 @@ impl LocalHistoryRuntime {
         &self,
     ) -> (u64, tokio::sync::broadcast::Receiver<HistoryLiveEvent>) {
         (self.events.current_sequence(), self.events.subscribe())
+    }
+
+    pub(crate) fn live_presentation(
+        &self,
+        root_invocation_id: i64,
+        projection: super::HistoryDiffProjection,
+    ) -> Option<Arc<crate::local::presentation::PresentationRecord>> {
+        self.events.presentation(root_invocation_id, projection)
+    }
+
+    fn queue_presentation_refresh(
+        &self,
+        root_invocation_id: Option<i64>,
+        invocation_id: Option<i64>,
+        source: &'static str,
+        emit_live: bool,
+    ) {
+        let Some(root_invocation_id) = root_invocation_id else {
+            return;
+        };
+        self.events.clear_presentation(root_invocation_id);
+        let _ = self.sender.try_send(WorkerMessage::RefreshPresentation {
+            root_invocation_id,
+            invocation_id,
+            source,
+            emit_live,
+        });
     }
 
     #[cfg(test)]
@@ -476,7 +509,7 @@ impl InvocationEvidenceRecorder for LocalHistoryRuntime {
                         || json!({"normalized_workdir": new_workdir}),
                     );
                 }
-                self.events.emit_with(
+                let emit_live = self.events.emit_with(
                     "invocation_started",
                     agent_id,
                     invocation_id,
@@ -508,6 +541,14 @@ impl InvocationEvidenceRecorder for LocalHistoryRuntime {
                             error = %error,
                         ),
                     }
+                }
+                if presentation_root_invocation_id == invocation_id {
+                    self.queue_presentation_refresh(
+                        presentation_root_invocation_id,
+                        invocation_id,
+                        "invocation_started",
+                        emit_live,
+                    );
                 }
                 Ok(context)
             }
@@ -555,11 +596,23 @@ impl InvocationEvidenceRecorder for LocalHistoryRuntime {
         match self.store.complete(context, outcome.clone()) {
             Ok(completion) => {
                 persist_completed_file_evidence(&self.store, invocation_id, &file_evidence);
-                self.events.emit_invocation_completion(
+                let emit_live = self.events.emit_invocation_completion(
                     context,
                     &outcome,
                     completion.presentation_root_invocation_id,
                 );
+                if let Some(root_invocation_id) = completion.presentation_root_invocation_id {
+                    self.events.clear_presentation(root_invocation_id);
+                    refresh_and_emit_presentation(
+                        &self.store,
+                        &self.events,
+                        root_invocation_id,
+                        Some(invocation_id),
+                        context.agent_id.as_deref(),
+                        "invocation_completed",
+                        emit_live,
+                    );
+                }
                 self.health
                     .maintenance_requested
                     .store(true, Ordering::Release);
@@ -617,130 +670,6 @@ impl SessionOutputObserver for LocalHistoryRuntime {
     }
 }
 
-impl OwnedProcessObserver for LocalHistoryRuntime {
-    fn process_started(&self, process: &OwnedProcess) -> Result<()> {
-        let invocation_id = process
-            .created_by
-            .invocation_id
-            .context("active Local process is missing durable creator invocation ID")?;
-        if let Err(error) = self.store.process_started(invocation_id) {
-            self.health.degrade_persisting(
-                &self.store,
-                format!("process lifecycle start persistence failed: {error}"),
-            );
-            return Err(error);
-        }
-        if let Err(error) = self.store.protect_active_process_invocation(invocation_id) {
-            self.health.degrade_persisting(
-                &self.store,
-                format!("active process retention protection failed: {error}"),
-            );
-            return Err(error);
-        }
-        self.active_process_invocation_ids
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(invocation_id);
-        let active_process_count = self.active_process_count.fetch_add(1, Ordering::AcqRel) + 1;
-        let agent_id = process.created_by.agent_id.as_deref();
-        let agent_active_process_count = agent_id.map(|agent_id| {
-            let mut counts = self
-                .active_process_counts
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let count = counts.entry(agent_id.to_string()).or_default();
-            *count = count.saturating_add(1);
-            *count
-        });
-        self.events.emit_with(
-            "process_started",
-            agent_id,
-            Some(invocation_id),
-            Some(invocation_id),
-            Some(PRESENTATION_SCHEMA_VERSION),
-            || {
-                json!({
-                    "active_process_count": active_process_count,
-                    "agent_active_process_count": agent_active_process_count,
-                })
-            },
-        );
-        Ok(())
-    }
-
-    fn process_ended(&self, process: &OwnedProcess, end: &OwnedProcessEnd) -> Result<()> {
-        let Some(invocation_id) = process.created_by.invocation_id else {
-            return Ok(());
-        };
-        let lifecycle_result = self.store.process_ended(invocation_id, end);
-        if let Err(error) = &lifecycle_result {
-            self.health.degrade_persisting(
-                &self.store,
-                format!("process lifecycle end persistence failed: {error}"),
-            );
-        }
-        let retention_result = self
-            .store
-            .unprotect_active_process_invocation(invocation_id);
-        let was_active = self
-            .active_process_invocation_ids
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(&invocation_id);
-        let active_process_count = if was_active {
-            self.active_process_count
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
-                    Some(count.saturating_sub(1))
-                })
-                .unwrap_or(0)
-                .saturating_sub(1)
-        } else {
-            self.active_process_count.load(Ordering::Acquire)
-        };
-        let agent_id = process.created_by.agent_id.as_deref();
-        let agent_active_process_count = agent_id.map(|agent_id| {
-            let mut counts = self
-                .active_process_counts
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let count = counts.entry(agent_id.to_string()).or_default();
-            if was_active {
-                *count = count.saturating_sub(1);
-            }
-            let active = *count;
-            if active == 0 {
-                counts.remove(agent_id);
-            }
-            active
-        });
-        if lifecycle_result.is_ok() {
-            self.events.emit_with(
-                "process_ended",
-                agent_id,
-                Some(invocation_id),
-                Some(invocation_id),
-                Some(PRESENTATION_SCHEMA_VERSION),
-                || {
-                    json!({
-                        "active_process_count": active_process_count,
-                        "agent_active_process_count": agent_active_process_count,
-                    })
-                },
-            );
-            self.events.emit_with(
-                "presentation_updated",
-                agent_id,
-                Some(invocation_id),
-                Some(invocation_id),
-                Some(PRESENTATION_SCHEMA_VERSION),
-                || json!({"source": "process_ended"}),
-            );
-        }
-        lifecycle_result?;
-        retention_result
-    }
-}
-
 fn run_worker(
     receiver: Receiver<WorkerMessage>,
     store: Arc<HistoryStore>,
@@ -754,13 +683,17 @@ fn run_worker(
     // this worker, so future maintenance can honor the normal coalescing
     // interval instead of racing the first evidence messages.
     let mut last_maintenance = Some(Instant::now());
+    let mut last_materialization_backfill = None;
+    let mut materialization_backfill_complete = false;
     let mut live_display = LiveDisplayStreams::new();
     while !shutdown {
         let mut messages = Vec::with_capacity(OUTPUT_BATCH_LIMIT);
         match receiver.recv_timeout(OUTPUT_BATCH_WAIT) {
-            Ok(message @ (WorkerMessage::Output(_) | WorkerMessage::Complete { .. })) => {
-                messages.push(message)
-            }
+            Ok(
+                message @ (WorkerMessage::Output(_)
+                | WorkerMessage::Complete { .. }
+                | WorkerMessage::RefreshPresentation { .. }),
+            ) => messages.push(message),
             #[cfg(test)]
             Ok(message @ WorkerMessage::Barrier(_)) => messages.push(message),
             Ok(WorkerMessage::Shutdown) => shutdown = true,
@@ -769,9 +702,11 @@ fn run_worker(
         }
         while messages.len() < OUTPUT_BATCH_LIMIT {
             match receiver.try_recv() {
-                Ok(message @ (WorkerMessage::Output(_) | WorkerMessage::Complete { .. })) => {
-                    messages.push(message)
-                }
+                Ok(
+                    message @ (WorkerMessage::Output(_)
+                    | WorkerMessage::Complete { .. }
+                    | WorkerMessage::RefreshPresentation { .. }),
+                ) => messages.push(message),
                 #[cfg(test)]
                 Ok(message @ WorkerMessage::Barrier(_)) => messages.push(message),
                 Ok(WorkerMessage::Shutdown) => {
@@ -786,7 +721,34 @@ fn run_worker(
             }
         }
 
+        let idle = messages.is_empty();
         process_messages(messages, &store, &health, &events, &mut live_display);
+
+        let backfill_due = !materialization_backfill_complete
+            && idle
+            && last_materialization_backfill
+                .map(|last: Instant| last.elapsed() >= MATERIALIZATION_BACKFILL_INTERVAL)
+                .unwrap_or(true);
+        if backfill_due {
+            last_materialization_backfill = Some(Instant::now());
+            let backfill_budget = max_size_bytes.saturating_mul(9) / 10;
+            match store.physical_size() {
+                Ok(size) if size < backfill_budget => {
+                    match store.backfill_presentation_materializations(1) {
+                        Ok(0) => materialization_backfill_complete = true,
+                        Ok(_) => {}
+                        Err(error) => {
+                            warn!(event = "local_presentation_backfill_failed", error = %error)
+                        }
+                    }
+                }
+                Ok(_) => {}
+                Err(error) => warn!(
+                    event = "local_presentation_backfill_size_check_failed",
+                    error = %error,
+                ),
+            }
+        }
 
         let maintenance_due = health.maintenance_requested.load(Ordering::Acquire)
             && last_maintenance
@@ -815,6 +777,9 @@ fn process_messages(
     live_display: &mut LiveDisplayStreams,
 ) {
     let mut output_events = Vec::new();
+    let mut dirty_presentations = HashMap::<i64, (Option<i64>, Option<String>, bool)>::new();
+    #[cfg(test)]
+    let mut barriers = Vec::new();
     for message in messages {
         match message {
             WorkerMessage::Output(event) => output_events.push(event),
@@ -839,19 +804,45 @@ fn process_messages(
                         if let Some(invocation_id) = invocation_id {
                             persist_completed_file_evidence(store, invocation_id, &file_evidence);
                         }
-                        events.emit_invocation_completion(
+                        let emit_live = events.emit_invocation_completion(
                             &context,
                             &outcome,
                             completion.presentation_root_invocation_id,
                         );
+                        if let Some(root_invocation_id) = completion.presentation_root_invocation_id
+                        {
+                            events.clear_presentation(root_invocation_id);
+                            dirty_presentations.insert(
+                                root_invocation_id,
+                                (
+                                    invocation_id,
+                                    context.agent_id.as_deref().map(str::to_owned),
+                                    emit_live,
+                                ),
+                            );
+                        }
                         health.maintenance_requested.store(true, Ordering::Release);
                     }
                 }
             }
+            WorkerMessage::RefreshPresentation {
+                root_invocation_id,
+                invocation_id,
+                source,
+                emit_live,
+            } => refresh_and_emit_presentation(
+                store,
+                events,
+                root_invocation_id,
+                invocation_id,
+                None,
+                source,
+                emit_live,
+            ),
             #[cfg(test)]
             WorkerMessage::Barrier(acknowledge) => {
                 flush_output_events(&mut output_events, store, health, events, live_display);
-                let _ = acknowledge.send(());
+                barriers.push(acknowledge);
             }
             WorkerMessage::Shutdown => {
                 unreachable!("shutdown messages are consumed by the worker loop")
@@ -859,6 +850,21 @@ fn process_messages(
         }
     }
     flush_output_events(&mut output_events, store, health, events, live_display);
+    for (root_invocation_id, (invocation_id, fallback_agent_id, emit_live)) in dirty_presentations {
+        refresh_and_emit_presentation(
+            store,
+            events,
+            root_invocation_id,
+            invocation_id,
+            fallback_agent_id.as_deref(),
+            "invocation_completed",
+            emit_live,
+        );
+    }
+    #[cfg(test)]
+    for acknowledge in barriers {
+        let _ = acknowledge.send(());
+    }
     if !health.accepting_new.load(Ordering::Acquire) {
         health.persist_degraded_state(store);
     }

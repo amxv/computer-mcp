@@ -3,6 +3,7 @@ mod events;
 mod file_store;
 mod lifecycle;
 mod live_display;
+mod materialized;
 mod output_display;
 mod query;
 mod schema;
@@ -37,6 +38,7 @@ pub use schema::HISTORY_SCHEMA_VERSION;
 pub use worker::{LocalHistoryRuntime, LocalHistoryRuntimeConfig};
 
 pub(crate) use events::{HISTORY_LIVE_EVENT_SCHEMA_VERSION, HistoryLiveEvent};
+pub(crate) use materialized::HistoryDiffProjection;
 pub(crate) use query::{HistoryAgentRecord, HistoryOutputChunk, HistoryOutputMetadata};
 pub(crate) use store::normalize_declared_workdir;
 pub(crate) use timeline::{HistoryTimelineCheckpoint, HistoryTimelineMode, HistoryTimelineQuery};

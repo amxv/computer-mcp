@@ -50,13 +50,13 @@ function emptyOutputPage(): ApiOutputPage {
   }
 }
 
-function controller() {
+function controller(requestFullPresentation: (presentationId: string) => void = () => undefined) {
   return createAgentStreamController({
     agentId: 'a111',
     attachWatermarkMs: 2_000,
     loadHistoryPage: async () => ({
       schema_version: 1,
-      presentation_version: 2,
+      presentation_version: 3,
       runtime_id: 'runtime-one',
       records: [],
       has_more: false,
@@ -64,6 +64,7 @@ function controller() {
     }),
     loadOutputMetadata: async () => noOutputMetadata(),
     loadDisplayOutputPage: async () => emptyOutputPage(),
+    requestFullPresentation,
   })
 }
 
@@ -80,6 +81,7 @@ function change(
     added: 1,
     removed: 1,
     diff_truncated: false,
+    diff_lines_included: true,
     lines: [{ kind: 'context', old_line: 1, new_line: 1, text: 'source' }],
     ...overrides,
   }
@@ -362,6 +364,32 @@ describe('file change cards', () => {
     expect(container.textContent).toContain('Diff preview truncated at the server display bound.')
     expect(container.textContent).toContain('Evidence incomplete · snapshot unavailable')
     expect(container.querySelector('.file-change-card-degraded')).not.toBeNull()
+  })
+
+  it('requests a summary-only diff body only when that diff becomes expanded', async () => {
+    const requestFullPresentation = vi.fn()
+    const stream = controller(requestFullPresentation)
+    stream.setDiffExpansionDefault(false)
+    const highlighter = new ImmediateHighlighter()
+    const value = record([
+      change('edited', '/repo/src/summary.ts', {
+        diff_lines_included: false,
+        lines: [],
+      }),
+    ])
+    const container = mount(() => value, stream, highlighter)
+    expect(requestFullPresentation).not.toHaveBeenCalled()
+    expect(container.textContent).not.toContain('Loading diff…')
+
+    container.querySelector<HTMLElement>(
+      '[data-diff-key="inv-40:file-change:0"] .file-change-header',
+    )!.click()
+    await vi.waitFor(() =>
+      expect(requestFullPresentation).toHaveBeenCalledWith('inv-40'),
+    )
+    expect(requestFullPresentation).toHaveBeenCalledTimes(1)
+    expect(container.textContent).toContain('Loading diff…')
+    expect(highlighter.calls).toHaveLength(0)
   })
 
   it('rejects a late highlight response for an older content revision', async () => {

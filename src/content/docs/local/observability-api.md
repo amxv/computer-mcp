@@ -67,7 +67,7 @@ The relevant shape is:
   "expires_at": "2026-08-17T08:00:00Z",
   "observability": {
     "api_version": 1,
-    "presentation_version": 2,
+    "presentation_version": 3,
     "base_url": "http://127.0.0.1:54321",
     "bearer_token_path": "/Users/me/.local/state/zodex/local/credentials/observability-bearer",
     "history_available": true,
@@ -124,6 +124,7 @@ GET /v1/agents
 GET /v1/agents/{id}
 
 GET /v1/timeline
+GET /v1/timeline/diffs
 GET /v1/timeline/{presentation_id}
 GET /v1/timeline/{presentation_id}/checkpoints
 
@@ -167,7 +168,7 @@ Returns observer versions, `runtime_id`, durable history health, current-runtime
 {
   "schema_version": 1,
   "api_version": 1,
-  "presentation_version": 2,
+  "presentation_version": 3,
   "runtime_id": "...",
   "history": {
     "database_exists": true,
@@ -221,6 +222,7 @@ Query fields:
 | `workdir` | Optional absolute declared-workdir filter. |
 | `before_ms` | History boundary for older-page traversal. |
 | `recovery_since_ms` | Durable reconnect window that also keeps relevant active roots visible. |
+| `diffs` | `full` (default) returns bounded diff rows in the same response; `summary` returns file operations, exact paths, and line counts without the rows. |
 
 `before_ms` and `recovery_since_ms` cannot be combined. Cursors are bound to the query mode; do not reuse a history cursor as a recovery cursor or vice versa.
 
@@ -229,7 +231,7 @@ Response:
 ```json
 {
   "schema_version": 1,
-  "presentation_version": 2,
+  "presentation_version": 3,
   "runtime_id": "...",
   "records": [],
   "has_more": true,
@@ -239,7 +241,7 @@ Response:
 
 Each record is one canonical **presentation root** with a stable `presentation_id`. A root may summarize several logical MCP invocations—for example a command plus repeated process polls.
 
-### Presentation v2 common fields
+### Presentation v3 common fields
 
 ```json
 {
@@ -271,7 +273,7 @@ Presentation kinds:
 | `kind` | Main normalized fields |
 | --- | --- |
 | `command` | `command`, `status`, `effective_cwd`, `exit_code`, `termination_reason`, bounded presentation `output`, optional folded `polls` |
-| `file_changes` | `source_tool`, canonical `changes[]` with operation/path/count/diff rows |
+| `file_changes` | `source_tool`, canonical `changes[]` with operation/path/count data and optionally projected diff rows |
 | `stdin` | target handle, bounded chars, creator Agent, `cross_agent`, result status |
 | `kill` | target handle, creator Agent, `cross_agent`, result status |
 | `poll_aggregate` | target handle, count, final status, caller Agents, cross-Agent state |
@@ -290,6 +292,7 @@ Do not rebuild these semantics from raw tool arguments in the client.
   "added": 4,
   "removed": 2,
   "diff_truncated": false,
+  "diff_lines_included": true,
   "lines": [
     { "kind": "context", "old_line": 10, "new_line": 10, "text": "..." },
     { "kind": "remove", "old_line": 11, "new_line": null, "text": "..." },
@@ -298,7 +301,17 @@ Do not rebuild these semantics from raw tool arguments in the client.
 }
 ```
 
-Operations are `created`, `edited`, `deleted`, or `renamed`. Optional write mode is `overwrite` or `append`. `diff_truncated` means the server deliberately bounded display evidence; do not silently present it as a complete diff.
+Operations are `created`, `edited`, `deleted`, or `renamed`. Optional write mode is `overwrite` or `append`. `diff_truncated` means the server deliberately bounded display evidence; do not silently present it as a complete diff. With `diffs=summary`, `diff_lines_included` is `false` and `lines` is empty while operation, path, `added`, `removed`, and truncation metadata remain canonical.
+
+File-change presentations are materialized from durable evidence once and persisted as both summary and full projections. `diffs=full` therefore does not trigger per-card diff recomputation or follow-up requests; it is the right mode when a UI expands diffs by default. `diffs=summary` avoids transferring/storing rows when diffs are collapsed by default.
+
+To hydrate several already-loaded summary records in one round trip, use:
+
+```text
+GET /v1/timeline/diffs?presentation_ids=inv-123,inv-456
+```
+
+The endpoint accepts up to 100 presentation IDs and returns their current full canonical records. Prefer one batch when a UI switches multiple collapsed diffs to expanded rather than issuing one detail request per card.
 
 ## Timeline detail
 
@@ -311,7 +324,7 @@ Returns the current canonical record for one stable `presentation_id`:
 ```json
 {
   "schema_version": 1,
-  "presentation_version": 2,
+  "presentation_version": 3,
   "runtime_id": "...",
   "record": { "presentation_id": "inv-123", "kind": "command" }
 }
@@ -442,10 +455,14 @@ Live event v2:
   "agent_id": "k7m2",
   "invocation_id": 123,
   "presentation_id": "inv-123",
-  "presentation_revision": 2,
-  "payload": {}
+  "presentation_revision": 3,
+  "payload": {
+    "record": { "presentation_id": "inv-123", "kind": "command" }
+  }
 }
 ```
+
+The live stream defaults to `diffs=summary`. Use `?diffs=full` when expanded file diffs should arrive in the same SSE event. The first-party Liveboard chooses this from its saved diff-expansion preference.
 
 Current event types include:
 
@@ -462,7 +479,7 @@ process_ended
 gap
 ```
 
-Metadata/lifecycle payloads are deliberately compact notifications. Refetch canonical timeline/detail state when a material presentation update arrives instead of treating every SSE payload as a full record.
+Metadata/lifecycle payloads are deliberately compact notifications. `presentation_updated` carries the current canonical record in `payload.record`; its file-diff projection follows the subscriber's `diffs=full|summary` query. This lets a live UI update the card without a detail GET. Refetch durable timeline state after a `gap`, or if a presentation update cannot be materialized.
 
 `output` carries display-safe live text plus output sequence and display state, for example:
 

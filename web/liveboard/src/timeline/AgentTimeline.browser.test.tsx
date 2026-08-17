@@ -42,7 +42,7 @@ function generic(
 function page(records: PresentationRecord[]): ApiTimelinePage {
   return {
     schema_version: 1,
-    presentation_version: 2,
+    presentation_version: 3,
     runtime_id: 'runtime-browser',
     records,
     has_more: false,
@@ -80,6 +80,7 @@ function fileChange(id: number, agentId: string): PresentationRecord {
         added: 1,
         removed: 0,
         diff_truncated: false,
+        diff_lines_included: true,
         lines: [
           {
             kind: 'add',
@@ -299,7 +300,10 @@ describe('independent virtualized Agent timeline', () => {
         scroll.getBoundingClientRect().top
       expect(Math.abs(offsetAfter - pausedAnchorOffset)).toBeLessThan(4)
     })
-    expect(container.textContent).toContain('↓ 1 new')
+    expect(container.textContent).toContain('1 new')
+    expect(
+      container.querySelector('.new-activity-button .lucide-arrow-down'),
+    ).not.toBeNull()
 
     const newButton = container.querySelector<HTMLButtonElement>('.new-activity-button')!
     newButton.click()

@@ -150,7 +150,7 @@ describe('Liveboard board shell', () => {
           return Response.json({
             schema_version: 1,
             api_version: 1,
-            presentation_version: 2,
+            presentation_version: 3,
             runtime_id: 'runtime-board-browser',
             current_runtime_agent_count: agents.length,
             active_process_count: 1,
@@ -254,9 +254,22 @@ describe('Liveboard board shell', () => {
       ).toBe(true),
     )
     await vi.waitFor(() => expect(document.body.textContent).toContain('release checks'))
+    const aliasedColumn = element<HTMLElement>('[data-agent-id="e555"]')
+    const alias = element<HTMLElement>('[data-agent-id="e555"] .agent-alias')
+    const agentId = element<HTMLElement>('[data-agent-id="e555"] .agent-id')
+    expect(agentId.textContent).toBe('e555')
+    const aliasBox = alias.getBoundingClientRect()
+    const idBox = agentId.getBoundingClientRect()
     expect(
-      element<HTMLElement>('[data-agent-id="e555"] .agent-id').textContent,
-    ).toBe('e555')
+      Math.abs((aliasBox.top + aliasBox.bottom) / 2 - (idBox.top + idBox.bottom) / 2),
+    ).toBeLessThan(1)
+
+    const activityTime = aliasedColumn.querySelector<HTMLElement>('.activity-time')!
+    const workdirBadges = aliasedColumn.querySelector<HTMLElement>('.workdir-badges')!
+    const workdirGap =
+      workdirBadges.getBoundingClientRect().left - activityTime.getBoundingClientRect().right
+    expect(workdirGap).toBeGreaterThanOrEqual(0)
+    expect(workdirGap).toBeLessThanOrEqual(8)
 
     const patchCountBeforeReorderDrag = patches.length
     const reorderHandle = element<HTMLButtonElement>(

@@ -16,7 +16,7 @@ describe('Liveboard browser bootstrap', () => {
       'api/status': {
         schema_version: 1,
         api_version: 1,
-        presentation_version: 2,
+        presentation_version: 3,
         runtime_id: 'runtime-browser-smoke',
         current_runtime_agent_count: 1,
         active_process_count: 2,

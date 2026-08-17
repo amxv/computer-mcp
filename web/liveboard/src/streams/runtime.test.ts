@@ -30,7 +30,7 @@ function status(runtimeId = 'runtime-one'): ApiStatus {
   return {
     schema_version: 1,
     api_version: 1,
-    presentation_version: 2,
+    presentation_version: 3,
     runtime_id: runtimeId,
     current_runtime_agent_count: 2,
     active_process_count: 0,
@@ -63,10 +63,40 @@ function record(id: number, agentId: string, startedAtMs = id * 10): Presentatio
   }
 }
 
+function fileRecord(
+  id: number,
+  agentId: string,
+  diffLinesIncluded: boolean,
+): PresentationRecord {
+  return {
+    ...record(id, agentId),
+    kind: 'file_changes',
+    source_tool: 'apply_patch',
+    changes: [
+      {
+        operation: 'edited',
+        path: `/repo/file-${id}.ts`,
+        old_path: null,
+        write_mode: null,
+        added: 1,
+        removed: 1,
+        diff_truncated: false,
+        diff_lines_included: diffLinesIncluded,
+        lines: diffLinesIncluded
+          ? [
+              { kind: 'remove', old_line: 1, new_line: null, text: 'before' },
+              { kind: 'add', old_line: null, new_line: 1, text: 'after' },
+            ]
+          : [],
+      },
+    ],
+  } as PresentationRecord
+}
+
 function page(runtimeId: string, records: PresentationRecord[]): ApiTimelinePage {
   return {
     schema_version: 1,
-    presentation_version: 2,
+    presentation_version: 3,
     runtime_id: runtimeId,
     records,
     has_more: false,
@@ -84,7 +114,7 @@ function liveEvent(input: Partial<HistoryLiveEvent> & Pick<HistoryLiveEvent, 'se
     agent_id: input.agent_id ?? null,
     invocation_id: input.invocation_id ?? null,
     presentation_id: input.presentation_id ?? null,
-    presentation_revision: input.presentation_revision ?? 2,
+    presentation_revision: input.presentation_revision ?? 3,
     payload: input.payload ?? {},
   } satisfies HistoryLiveEvent
 }
@@ -160,11 +190,17 @@ describe('runtime connection', () => {
         detailRequests.push(presentationId)
         return {
           schema_version: 1,
-          presentation_version: 2,
+          presentation_version: 3,
           runtime_id: runtimeId,
           record: details.get(presentationId)!,
         }
       },
+      fetchTimelineDiffBatch: async (_presentationIds, runtimeId) => ({
+        schema_version: 1,
+        presentation_version: 3,
+        runtime_id: runtimeId,
+        records: [],
+      }),
       fetchOutputMetadata: async () => {
         throw new Error('output metadata not expected')
       },
@@ -187,7 +223,7 @@ describe('runtime connection', () => {
     })
     const firstController = runtime.controllerFor('a111')
     runtime.start()
-    expect(sources[0]?.url).toBe('api/events?output_agent_ids=a111')
+    expect(sources[0]?.url).toBe('api/events?output_agent_ids=a111&diffs=full')
     sources[0]!.open()
     await vi.waitFor(() => expect(runtime.connectionState()).toBe('connected'))
     expect(firstController.orderedIds()).toEqual(['inv-1'])
@@ -196,6 +232,7 @@ describe('runtime connection', () => {
       recoverySinceMs: 1_000,
       cursor: undefined,
       limit: 50,
+      diffs: 'full',
     })
     expect(timelineQueries.some((query) => query.agentId === 'b222')).toBe(false)
 
@@ -225,7 +262,7 @@ describe('runtime connection', () => {
 
     runtime.setVisibleAgentIds(['a111', 'b222'])
     await vi.waitFor(() => expect(sources).toHaveLength(2))
-    expect(sources[1]?.url).toBe('api/events?output_agent_ids=a111%2Cb222')
+    expect(sources[1]?.url).toBe('api/events?output_agent_ids=a111%2Cb222&diffs=full')
     expect(sources[0]?.closed).toBe(false)
     await vi.waitFor(() =>
       expect(timelineQueries.some((query) => query.agentId === 'b222')).toBe(true),
@@ -255,9 +292,15 @@ describe('runtime connection', () => {
       },
       fetchTimelineDetail: async (presentationId, runtimeId) => ({
         schema_version: 1,
-        presentation_version: 2,
+        presentation_version: 3,
         runtime_id: runtimeId,
         record: record(Number(presentationId.slice(4)), 'a111'),
+      }),
+      fetchTimelineDiffBatch: async (_presentationIds, runtimeId) => ({
+        schema_version: 1,
+        presentation_version: 3,
+        runtime_id: runtimeId,
+        records: [],
       }),
       fetchOutputMetadata: async () => {
         throw new Error('output metadata not expected')
@@ -325,7 +368,7 @@ describe('runtime connection', () => {
 
     runtime.setVisibleAgentIds(['c333'])
     await vi.waitFor(() => expect(sources.length).toBeGreaterThanOrEqual(2))
-    expect(sources.at(-1)?.url).toBe('api/events?output_agent_ids=c333')
+    expect(sources.at(-1)?.url).toBe('api/events?output_agent_ids=c333&diffs=full')
     runtime.dispose()
   })
 
@@ -340,6 +383,12 @@ describe('runtime connection', () => {
         new Promise<ApiTimelineDetail>((resolve) => {
           detailResolvers.push(resolve)
         }).then((detail) => ({ ...detail, runtime_id: runtimeId, record: { ...detail.record, presentation_id: presentationId } })),
+      fetchTimelineDiffBatch: async (_presentationIds, runtimeId) => ({
+        schema_version: 1,
+        presentation_version: 3,
+        runtime_id: runtimeId,
+        records: [],
+      }),
       fetchOutputMetadata: async () => {
         throw new Error('output metadata not expected')
       },
@@ -387,7 +436,7 @@ describe('runtime connection', () => {
     } as PresentationRecord
     detailResolvers[1]!({
       schema_version: 1,
-      presentation_version: 2,
+      presentation_version: 3,
       runtime_id: 'runtime-one',
       record: newer,
     })
@@ -399,12 +448,107 @@ describe('runtime connection', () => {
     } as PresentationRecord
     detailResolvers[0]!({
       schema_version: 1,
-      presentation_version: 2,
+      presentation_version: 3,
       runtime_id: 'runtime-one',
       record: older,
     })
     await new Promise((resolve) => setTimeout(resolve, 5))
     expect(currentSummary()).toBe('newer detail')
+    runtime.dispose()
+  })
+
+  it('projects summary diffs live, skips detail GETs, batches body hydration, and hands over projection', async () => {
+    const sources: FakeEventSource[] = []
+    const detailRequests: string[] = []
+    const batchRequests: string[][] = []
+    const api: RuntimeApi = {
+      fetchStatus: async () => status(),
+      fetchCurrentAgents: async () => ({ agents: [agent('a111')] }),
+      fetchTimeline: async (_query, runtimeId) =>
+        page(runtimeId, [fileRecord(10, 'a111', false)]),
+      fetchTimelineDetail: async (presentationId, runtimeId) => {
+        detailRequests.push(presentationId)
+        return {
+          schema_version: 1,
+          presentation_version: 3,
+          runtime_id: runtimeId,
+          record: fileRecord(Number(presentationId.slice(4)), 'a111', true),
+        }
+      },
+      fetchTimelineDiffBatch: async (presentationIds, runtimeId) => {
+        batchRequests.push([...presentationIds])
+        return {
+          schema_version: 1,
+          presentation_version: 3,
+          runtime_id: runtimeId,
+          records: presentationIds.map((id) =>
+            fileRecord(Number(id.slice(4)), 'a111', true),
+          ),
+        }
+      },
+      fetchOutputMetadata: async () => {
+        throw new Error('output metadata not expected')
+      },
+      fetchOutputPage: async () => {
+        throw new Error('output page not expected')
+      },
+      openEventSource: (url) => {
+        const source = new FakeEventSource(url)
+        sources.push(source)
+        return source
+      },
+    }
+    const runtime = createRuntimeConnection({
+      initialStatus: status(),
+      initialAgents: [agent('a111')],
+      initialVisibleAgentIds: ['a111'],
+      initialDiffProjection: 'summary',
+      viewerAttachWatermarkMs: 1_000,
+      api,
+    })
+    const controller = runtime.controllerFor('a111')
+    runtime.start()
+    expect(sources[0]?.url).toBe('api/events?output_agent_ids=a111&diffs=summary')
+    sources[0]!.open()
+    await vi.waitFor(() => expect(runtime.connectionState()).toBe('connected'))
+    const initialSummary = controller.record('inv-10')
+    expect(
+      initialSummary?.kind === 'file_changes'
+        ? initialSummary.changes[0]?.diff_lines_included
+        : undefined,
+    ).toBe(false)
+
+    const live = fileRecord(11, 'a111', false)
+    sources[0]!.emit(
+      liveEvent({
+        sequence: 1,
+        event_type: 'presentation_updated',
+        agent_id: 'a111',
+        invocation_id: 11,
+        presentation_id: 'inv-11',
+        payload: { record: live },
+      }),
+    )
+    await vi.waitFor(() => expect(controller.orderedIds()).toContain('inv-11'))
+    expect(detailRequests).toHaveLength(0)
+
+    controller.requestFullPresentation('inv-10')
+    controller.requestFullPresentation('inv-11')
+    await vi.waitFor(() => expect(batchRequests).toHaveLength(1))
+    expect(batchRequests[0]).toEqual(['inv-10', 'inv-11'])
+    await vi.waitFor(() => {
+      const current = controller.record('inv-11')
+      expect(current?.kind).toBe('file_changes')
+      expect(current?.kind === 'file_changes' && current.changes[0]?.diff_lines_included).toBe(true)
+    })
+
+    runtime.setDiffProjection('full')
+    await vi.waitFor(() => expect(sources).toHaveLength(2))
+    expect(sources[1]?.url).toBe('api/events?output_agent_ids=a111&diffs=full')
+    runtime.setDiffProjection('summary')
+    const dropped = controller.record('inv-11')
+    expect(dropped?.kind === 'file_changes' && dropped.changes[0]?.diff_lines_included).toBe(false)
+    expect(dropped?.kind === 'file_changes' ? dropped.changes[0]?.lines : undefined).toEqual([])
     runtime.dispose()
   })
 })

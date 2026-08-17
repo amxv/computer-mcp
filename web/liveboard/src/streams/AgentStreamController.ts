@@ -39,6 +39,7 @@ interface AgentStreamControllerOptions {
     cursor: number,
     limit: number,
   ) => Promise<ApiOutputPage>
+  requestFullPresentation?: (presentationId: string) => void
 }
 
 export interface AgentStreamController {
@@ -77,6 +78,8 @@ export interface AgentStreamController {
   diffExpanded: (diffKey: string) => Accessor<boolean>
   toggleDiffExpansion: (diffKey: string) => void
   setDiffExpansionDefault: (expanded: boolean) => void
+  requestFullPresentation: (presentationId: string) => void
+  dropDiffBodies: () => void
   setFollowing: (following: boolean) => void
   returnToLive: () => void
   loadEarlier: () => Promise<number>
@@ -333,6 +336,22 @@ export function createAgentStreamController(
       if (diffExpansionDefault() === expanded) return
       setDiffExpansionDefaultSignal(expanded)
       for (const slot of diffExpansion.values()) slot.setOverride(undefined)
+    },
+    requestFullPresentation: options.requestFullPresentation ?? (() => undefined),
+    dropDiffBodies: () => {
+      for (const slot of cards.values()) {
+        const record = slot.record()
+        if (record.kind !== 'file_changes') continue
+        if (!record.changes.some((change) => change.diff_lines_included)) continue
+        slot.setRecord({
+          ...record,
+          changes: record.changes.map((change) => ({
+            ...change,
+            diff_lines_included: false,
+            lines: [],
+          })),
+        })
+      }
     },
     setFollowing,
     returnToLive: () => setFollowing(true),

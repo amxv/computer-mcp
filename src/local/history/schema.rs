@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde_json::Value;
 
-pub const HISTORY_SCHEMA_VERSION: u32 = 4;
+pub const HISTORY_SCHEMA_VERSION: u32 = 5;
 
 pub(super) const SCHEMA_V1: &str = r#"
 CREATE TABLE agents (
@@ -116,7 +116,7 @@ ALTER TABLE invocation_file_evidence ADD COLUMN destination_before_text TEXT;
 ALTER TABLE invocation_file_evidence ADD COLUMN destination_before_reason TEXT;
 "#;
 
-const SCHEMA_V4: &str = r#"
+pub(super) const SCHEMA_V4: &str = r#"
 ALTER TABLE invocations ADD COLUMN target_created_by_invocation_id INTEGER
     REFERENCES invocations(id) ON DELETE SET NULL;
 ALTER TABLE invocations ADD COLUMN continuation_kind TEXT
@@ -141,6 +141,105 @@ WHERE completed_at_ms IS NOT NULL;
 CREATE INDEX invocations_process_updated_idx
 ON invocations(process_updated_at_ms, id)
 WHERE process_updated_at_ms IS NOT NULL;
+"#;
+
+pub(super) const SCHEMA_V5: &str = r#"
+CREATE TABLE presentation_materializations (
+    root_invocation_id INTEGER PRIMARY KEY REFERENCES invocations(id) ON DELETE CASCADE,
+    presentation_version INTEGER NOT NULL,
+    materialized_at_ms INTEGER NOT NULL,
+    summary_json TEXT NOT NULL,
+    full_json TEXT
+);
+
+CREATE TRIGGER presentation_materializations_invalidate_invocation_insert
+AFTER INSERT ON invocations
+WHEN NEW.continuation_kind = 'poll'
+BEGIN
+    DELETE FROM presentation_materializations
+    WHERE root_invocation_id = CASE
+        WHEN NEW.target_created_by_invocation_id IS NOT NULL
+            THEN NEW.target_created_by_invocation_id
+        WHEN NEW.target_session_handle IS NOT NULL
+            THEN (
+                SELECT MIN(i.id) FROM invocations i
+                WHERE i.continuation_kind = 'poll'
+                  AND i.target_created_by_invocation_id IS NULL
+                  AND i.target_session_handle = NEW.target_session_handle
+            )
+        ELSE NEW.id
+    END;
+END;
+
+CREATE TRIGGER presentation_materializations_invalidate_invocation_update
+AFTER UPDATE ON invocations
+BEGIN
+    DELETE FROM presentation_materializations
+    WHERE root_invocation_id = CASE
+        WHEN OLD.continuation_kind = 'poll' AND OLD.target_created_by_invocation_id IS NOT NULL
+            THEN OLD.target_created_by_invocation_id
+        WHEN OLD.continuation_kind = 'poll' AND OLD.target_session_handle IS NOT NULL
+            THEN (
+                SELECT MIN(i.id) FROM invocations i
+                WHERE i.continuation_kind = 'poll'
+                  AND i.target_created_by_invocation_id IS NULL
+                  AND i.target_session_handle = OLD.target_session_handle
+            )
+        ELSE OLD.id
+    END;
+    DELETE FROM presentation_materializations
+    WHERE root_invocation_id = CASE
+        WHEN NEW.continuation_kind = 'poll' AND NEW.target_created_by_invocation_id IS NOT NULL
+            THEN NEW.target_created_by_invocation_id
+        WHEN NEW.continuation_kind = 'poll' AND NEW.target_session_handle IS NOT NULL
+            THEN (
+                SELECT MIN(i.id) FROM invocations i
+                WHERE i.continuation_kind = 'poll'
+                  AND i.target_created_by_invocation_id IS NULL
+                  AND i.target_session_handle = NEW.target_session_handle
+            )
+        ELSE NEW.id
+    END;
+END;
+
+CREATE TRIGGER presentation_materializations_invalidate_invocation_delete
+AFTER DELETE ON invocations
+BEGIN
+    DELETE FROM presentation_materializations
+    WHERE root_invocation_id = CASE
+        WHEN OLD.continuation_kind = 'poll' AND OLD.target_created_by_invocation_id IS NOT NULL
+            THEN OLD.target_created_by_invocation_id
+        ELSE OLD.id
+    END;
+    DELETE FROM presentation_materializations
+    WHERE OLD.continuation_kind = 'poll'
+      AND OLD.target_created_by_invocation_id IS NULL
+      AND OLD.target_session_handle IS NOT NULL
+      AND root_invocation_id = (
+          SELECT MIN(i.id) FROM invocations i
+          WHERE i.continuation_kind = 'poll'
+            AND i.target_created_by_invocation_id IS NULL
+            AND i.target_session_handle = OLD.target_session_handle
+      );
+END;
+
+CREATE TRIGGER presentation_materializations_invalidate_file_evidence_insert
+AFTER INSERT ON invocation_file_evidence
+BEGIN
+    DELETE FROM presentation_materializations WHERE root_invocation_id = NEW.invocation_id;
+END;
+
+CREATE TRIGGER presentation_materializations_invalidate_file_evidence_update
+AFTER UPDATE ON invocation_file_evidence
+BEGIN
+    DELETE FROM presentation_materializations WHERE root_invocation_id = NEW.invocation_id;
+END;
+
+CREATE TRIGGER presentation_materializations_invalidate_file_evidence_delete
+AFTER DELETE ON invocation_file_evidence
+BEGIN
+    DELETE FROM presentation_materializations WHERE root_invocation_id = OLD.invocation_id;
+END;
 "#;
 
 pub(super) fn configure_writer(connection: &Connection) -> Result<()> {
@@ -268,6 +367,22 @@ pub(super) fn initialize_or_migrate(connection: &mut Connection) -> Result<()> {
         transaction
             .commit()
             .context("failed to commit Local history schema v4")?;
+        version = 4;
+    }
+
+    if version == 4 {
+        let transaction = connection
+            .transaction()
+            .context("failed to start Local history schema-v5 transaction")?;
+        transaction
+            .execute_batch(SCHEMA_V5)
+            .context("failed to create Local history schema v5")?;
+        transaction
+            .pragma_update(None, "user_version", 5)
+            .context("failed to publish Local history schema version 5")?;
+        transaction
+            .commit()
+            .context("failed to commit Local history schema v5")?;
     }
 
     let version = user_version(connection)?;

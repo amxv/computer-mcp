@@ -192,7 +192,7 @@ function FileChangeItem(props: {
       copyFeedbackTimeout = undefined
     }, 2_000)
   }
-  const canExpand = () => props.change.lines.length > 0
+  const canExpand = () => !props.change.diff_lines_included || props.change.lines.length > 0
   const canOpenFile = () => props.change.operation !== 'deleted'
   const openFile = async () => {
     setOpenError(undefined)
@@ -206,6 +206,12 @@ function FileChangeItem(props: {
     if (!canExpand()) return
     props.controller.toggleDiffExpansion(diffKey())
   }
+
+  createEffect(() => {
+    if (expanded() && !props.change.diff_lines_included) {
+      props.controller.requestFullPresentation(props.record.presentation_id)
+    }
+  })
 
   return (
     <section
@@ -256,7 +262,7 @@ function FileChangeItem(props: {
         <button
           type="button"
           class="diff-copy-button"
-          disabled={props.change.lines.length === 0}
+          disabled={!props.change.diff_lines_included || props.change.lines.length === 0}
           aria-label={copied() ? `Diff copied for ${props.change.path}` : `Copy diff for ${props.change.path}`}
           title={copied() ? 'Copied' : 'Copy diff'}
           onClick={() => void copy()}
@@ -271,11 +277,16 @@ function FileChangeItem(props: {
         {(mode) => <div class="diff-write-mode">{mode()}</div>}
       </Show>
       <Show when={expanded()}>
-        <DiffBody
-          change={props.change}
-          subjectKey={diffKey()}
-          highlighter={props.highlighter}
-        />
+        <Show
+          when={props.change.diff_lines_included}
+          fallback={<div class="diff-loading">Loading diff…</div>}
+        >
+          <DiffBody
+            change={props.change}
+            subjectKey={diffKey()}
+            highlighter={props.highlighter}
+          />
+        </Show>
       </Show>
     </section>
   )

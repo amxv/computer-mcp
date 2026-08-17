@@ -8,9 +8,12 @@ import {
   fetchStatus,
   fetchTimeline,
   fetchTimelineDetail,
+  fetchTimelineDiffBatch,
+  presentationRecordFromLiveEvent,
   validateLiveEvent,
   type ApiAgent,
   type ApiStatus,
+  type DiffProjection,
   type HistoryLiveEvent,
   type TimelineQuery,
 } from '../api/client'
@@ -60,6 +63,10 @@ export interface RuntimeApi {
     presentationId: string,
     runtimeId: string,
   ) => ReturnType<typeof fetchTimelineDetail>
+  fetchTimelineDiffBatch: (
+    presentationIds: readonly string[],
+    runtimeId: string,
+  ) => ReturnType<typeof fetchTimelineDiffBatch>
   fetchOutputMetadata: (
     invocationId: number,
     runtimeId: string,
@@ -79,6 +86,7 @@ export interface RuntimeConnection {
   connectionError: Accessor<string | undefined>
   visibleAgentIds: Accessor<string[]>
   setVisibleAgentIds: (ids: readonly string[]) => void
+  setDiffProjection: (projection: DiffProjection) => void
   controllerFor: (agentId: string) => AgentStreamController
   start: () => void
   dispose: () => void
@@ -88,6 +96,7 @@ interface RuntimeConnectionOptions {
   initialStatus: ApiStatus
   initialAgents: readonly ApiAgent[]
   initialVisibleAgentIds: readonly string[]
+  initialDiffProjection?: DiffProjection
   viewerAttachWatermarkMs: number
   api?: RuntimeApi
 }
@@ -97,6 +106,7 @@ const browserRuntimeApi: RuntimeApi = {
   fetchCurrentAgents,
   fetchTimeline,
   fetchTimelineDetail,
+  fetchTimelineDiffBatch,
   fetchOutputMetadata,
   fetchOutputPage,
   openEventSource: (url) => new EventSource(url),
@@ -122,6 +132,9 @@ export function createRuntimeConnection(
   const [visibleAgentIds, setVisibleIds] = createSignal<string[]>([
     ...options.initialVisibleAgentIds,
   ])
+  const [diffProjection, setDiffProjectionSignal] = createSignal<DiffProjection>(
+    options.initialDiffProjection ?? 'full',
+  )
   const controllers = new Map<string, AgentStreamController>()
   const hydratedAgents = new Set<string>()
   const hydratingAgents = new Set<string>()
@@ -134,6 +147,10 @@ export function createRuntimeConnection(
   const detailQueue = new Set<string>()
   let nextDetailVersion = 1
   let detailFrame: number | undefined
+  const fullPresentationQueue = new Set<string>()
+  const fullPresentationVersions = new Map<string, number>()
+  let nextFullPresentationVersion = 1
+  let fullPresentationFrame: number | undefined
   let agentRefreshFrame: number | undefined
   let activeSource: EventSourceLike | undefined
   let pendingSource: EventSourceLike | undefined
@@ -180,6 +197,7 @@ export function createRuntimeConnection(
         beforeMs: input.beforeMs,
         cursor: input.cursor,
         limit: HISTORY_PAGE_SIZE,
+        diffs: diffProjection(),
       },
       runtimeId(),
     )
@@ -200,6 +218,7 @@ export function createRuntimeConnection(
             recoverySinceMs: sinceMs,
             cursor,
             limit: RECOVERY_PAGE_SIZE,
+            diffs: diffProjection(),
           },
           runtimeId(),
         )
@@ -228,6 +247,7 @@ export function createRuntimeConnection(
           { cursor, limit, view: 'display' },
           runtimeId(),
         ),
+      requestFullPresentation,
     })
     controllers.set(agentId, controller)
     if (initialRecoveryComplete && !hydratedAgents.has(agentId)) {
@@ -293,6 +313,72 @@ export function createRuntimeConnection(
     }
   }
 
+  const invalidateFullPresentationRequest = (presentationId: string) => {
+    fullPresentationQueue.delete(presentationId)
+    fullPresentationVersions.delete(presentationId)
+  }
+
+  const flushFullPresentationQueue = () => {
+    fullPresentationFrame = undefined
+    if (disposed || fullPresentationQueue.size === 0) return
+    const ids = [...fullPresentationQueue].slice(0, 100)
+    for (const id of ids) fullPresentationQueue.delete(id)
+    const versions = new Map(
+      ids.map((id) => [id, fullPresentationVersions.get(id) ?? 0] as const),
+    )
+    void api
+      .fetchTimelineDiffBatch(ids, runtimeId())
+      .then((batch) => {
+        const returned = new Set<string>()
+        for (const record of batch.records) {
+          const presentationId = record.presentation_id
+          returned.add(presentationId)
+          const expected = versions.get(presentationId)
+          if (
+            expected === undefined ||
+            fullPresentationVersions.get(presentationId) !== expected
+          ) {
+            continue
+          }
+          fullPresentationVersions.delete(presentationId)
+          const agentId = record.agent_id
+          if (agentId && visibleAgentIds().includes(agentId)) {
+            ensureController(agentId).upsert(record, false)
+          }
+        }
+        for (const [presentationId, expected] of versions) {
+          if (returned.has(presentationId)) continue
+          if (fullPresentationVersions.get(presentationId) === expected) {
+            fullPresentationVersions.delete(presentationId)
+          }
+        }
+      })
+      .catch((error) => {
+        let relevant = false
+        for (const [presentationId, expected] of versions) {
+          if (fullPresentationVersions.get(presentationId) === expected) {
+            fullPresentationVersions.delete(presentationId)
+            relevant = true
+          }
+        }
+        if (relevant) setConnectionError(`Diff hydration failed: ${messageFrom(error)}`)
+      })
+      .finally(() => {
+        if (!disposed && fullPresentationQueue.size > 0 && fullPresentationFrame === undefined) {
+          fullPresentationFrame = requestAnimationFrame(flushFullPresentationQueue)
+        }
+      })
+  }
+
+  function requestFullPresentation(presentationId: string) {
+    if (disposed || fullPresentationVersions.has(presentationId)) return
+    fullPresentationVersions.set(presentationId, nextFullPresentationVersion++)
+    fullPresentationQueue.add(presentationId)
+    if (fullPresentationFrame === undefined) {
+      fullPresentationFrame = requestAnimationFrame(flushFullPresentationQueue)
+    }
+  }
+
   const refreshDetail = async (presentationId: string, version: number) => {
     try {
       const detail = await api.fetchTimelineDetail(presentationId, runtimeId())
@@ -345,6 +431,8 @@ export function createRuntimeConnection(
     detailQueue.clear()
     detailVersions.clear()
     detailPendingWatermarks.clear()
+    fullPresentationQueue.clear()
+    fullPresentationVersions.clear()
     setRuntimeId(nextRuntimeId)
     setAgents([...nextAgents])
     setVisibleIds((ids) => ids.filter((id) => nextAgents.some((agent) => agent.id === id)))
@@ -480,15 +568,28 @@ export function createRuntimeConnection(
         return
       }
 
-      if (
-        event.event_type === 'invocation_started' ||
-        event.event_type === 'invocation_completed' ||
-        event.event_type === 'presentation_updated' ||
-        event.event_type === 'process_started' ||
-        event.event_type === 'process_ended'
-      ) {
+      if (event.event_type === 'presentation_updated') {
+        const presentationId = event.presentation_id
+        if (presentationId) invalidateFullPresentationRequest(presentationId)
+        const record = presentationRecordFromLiveEvent(event)
+        if (record) {
+          if (presentationId) {
+            detailQueue.delete(presentationId)
+            detailVersions.delete(presentationId)
+            detailPendingWatermarks.delete(presentationId)
+          }
+          const agentId = record.agent_id ?? event.agent_id
+          if (agentId && visibleAgentIds().includes(agentId)) {
+            ensureController(agentId).upsert(record, true)
+          }
+          return
+        }
         scheduleDetailRefresh(event)
+        return
       }
+
+      // Lifecycle events update the Agent summary immediately. Canonical card
+      // state arrives on the materialized `presentation_updated` event.
     } catch (error) {
       setConnectionError(`Live event rejected: ${messageFrom(error)}`)
     }
@@ -502,7 +603,7 @@ export function createRuntimeConnection(
 
   const openSource = (purpose: 'initial' | 'handover') => {
     if (disposed) return
-    const source = api.openEventSource(eventStreamUrl(visibleAgentIds()))
+    const source = api.openEventSource(eventStreamUrl(visibleAgentIds(), diffProjection()))
     if (purpose === 'initial') activeSource = source
     attachListeners(source)
     let openedOnce = false
@@ -565,6 +666,21 @@ export function createRuntimeConnection(
     requestHandover()
   }
 
+  const setDiffProjection = (projection: DiffProjection) => {
+    if (projection === diffProjection()) return
+    setDiffProjectionSignal(projection)
+    if (projection === 'summary') {
+      if (fullPresentationFrame !== undefined) {
+        cancelAnimationFrame(fullPresentationFrame)
+        fullPresentationFrame = undefined
+      }
+      fullPresentationQueue.clear()
+      fullPresentationVersions.clear()
+      for (const controller of controllers.values()) controller.dropDiffBodies()
+    }
+    requestHandover()
+  }
+
   return {
     runtimeId,
     agents,
@@ -572,6 +688,7 @@ export function createRuntimeConnection(
     connectionError,
     visibleAgentIds,
     setVisibleAgentIds,
+    setDiffProjection,
     controllerFor: ensureController,
     start: () => {
       if (started || disposed) return
@@ -585,6 +702,7 @@ export function createRuntimeConnection(
       pendingSource?.close()
       if (pendingRetry !== undefined) clearTimeout(pendingRetry)
       if (detailFrame !== undefined) cancelAnimationFrame(detailFrame)
+      if (fullPresentationFrame !== undefined) cancelAnimationFrame(fullPresentationFrame)
       if (agentRefreshFrame !== undefined) cancelAnimationFrame(agentRefreshFrame)
       for (const controller of controllers.values()) controller.dispose()
       controllers.clear()

@@ -22,8 +22,9 @@ use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_util::sync::CancellationToken;
 
 use crate::local::history::{
-    HISTORY_LIVE_EVENT_SCHEMA_VERSION, HistoryLiveEvent, HistoryTimelineCursor,
-    HistoryTimelineMode, HistoryTimelineQuery, LocalHistoryReader, normalize_declared_workdir,
+    HISTORY_LIVE_EVENT_SCHEMA_VERSION, HistoryDiffProjection, HistoryLiveEvent,
+    HistoryTimelineCursor, HistoryTimelineMode, HistoryTimelineQuery, LocalHistoryReader,
+    normalize_declared_workdir,
 };
 use crate::local::presentation::{PRESENTATION_SCHEMA_VERSION, build_presentation};
 use crate::local::{HistoryQuery, LocalHistoryRuntime};
@@ -31,8 +32,8 @@ use crate::local::{HistoryQuery, LocalHistoryRuntime};
 use super::model::{
     ApiAgent, ApiAgentDetail, ApiAgentList, ApiError, ApiInvocationDetail, ApiInvocationList,
     ApiLogicalInvocation, ApiOutputMetadataDocument, ApiOutputPage, ApiStatusDocument,
-    ApiTimelineCheckpointPage, ApiTimelineDetail, ApiTimelinePage, LOCAL_OBSERVABILITY_API_VERSION,
-    presentation_version, schema_version,
+    ApiTimelineCheckpointPage, ApiTimelineDetail, ApiTimelineDiffBatch, ApiTimelinePage,
+    LOCAL_OBSERVABILITY_API_VERSION, presentation_version, schema_version,
 };
 
 const DEFAULT_INVOCATION_LIMIT: usize = 50;
@@ -129,6 +130,7 @@ pub(super) fn build_router(history: Arc<LocalHistoryRuntime>, token: HeaderValue
         )
         .route("/v1/invocations/{id}/output", get(invocation_output))
         .route("/v1/timeline", get(timeline))
+        .route("/v1/timeline/diffs", get(timeline_diffs))
         .route("/v1/timeline/{presentation_id}", get(timeline_detail))
         .route(
             "/v1/timeline/{presentation_id}/checkpoints",
@@ -415,6 +417,7 @@ struct TimelineQuery {
     workdir: Option<String>,
     before_ms: Option<i64>,
     recovery_since_ms: Option<i64>,
+    diffs: Option<String>,
 }
 
 async fn timeline(
@@ -436,6 +439,8 @@ async fn timeline(
         validate_agent_id(agent_id)?;
     }
     let normalized_workdir = normalize_api_workdir(query.workdir.as_deref())?;
+    let diff_projection =
+        parse_diff_projection(query.diffs.as_deref(), HistoryDiffProjection::Full)?;
     let cursor = query
         .cursor
         .as_deref()
@@ -475,6 +480,7 @@ async fn timeline(
                 cursor,
                 agent_id: query.agent_id,
                 normalized_workdir,
+                diff_projection,
                 mode,
             },
         )
@@ -504,6 +510,40 @@ async fn timeline_detail(
         presentation_version: PRESENTATION_SCHEMA_VERSION,
         runtime_id: state.history.runtime_id().to_string(),
         record,
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+struct TimelineDiffBatchQuery {
+    presentation_ids: String,
+}
+
+async fn timeline_diffs(
+    State(state): State<Arc<ApiState>>,
+    Query(query): Query<TimelineDiffBatchQuery>,
+) -> Result<Json<ApiTimelineDiffBatch>, ApiFailure> {
+    let values = if query.presentation_ids.is_empty() {
+        Vec::new()
+    } else {
+        query.presentation_ids.split(',').collect::<Vec<_>>()
+    };
+    if values.len() > MAX_TIMELINE_LIMIT {
+        return Err(bad_request(format!(
+            "presentation_ids accepts at most {MAX_TIMELINE_LIMIT} IDs"
+        )));
+    }
+    let root_ids = values
+        .into_iter()
+        .map(parse_presentation_id)
+        .collect::<Result<Vec<_>, _>>()?;
+    let path = state.history.database_path().to_path_buf();
+    let records =
+        run_blocking(move || LocalHistoryReader::timeline_details(&path, &root_ids)).await?;
+    Ok(Json(ApiTimelineDiffBatch {
+        schema_version: schema_version(),
+        presentation_version: PRESENTATION_SCHEMA_VERSION,
+        runtime_id: state.history.runtime_id().to_string(),
+        records,
     }))
 }
 
@@ -561,6 +601,7 @@ struct EventQuery {
     agent_id: Option<String>,
     include_output: Option<bool>,
     output_agent_ids: Option<String>,
+    diffs: Option<String>,
 }
 
 enum OutputSelection {
@@ -572,6 +613,7 @@ enum OutputSelection {
 struct EventFilter {
     agent_id: Option<String>,
     output: OutputSelection,
+    diff_projection: HistoryDiffProjection,
 }
 
 async fn events(
@@ -580,6 +622,7 @@ async fn events(
 ) -> Result<Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>>, ApiFailure> {
     let filter = event_filter(query)?;
     let runtime_id = state.history.runtime_id().to_string();
+    let history = state.history.clone();
     let (sequence, receiver) = state.history.subscribe_live_events();
     let mut last_global_sequence = sequence;
     let gap_agent_id = filter.agent_id.clone();
@@ -589,7 +632,16 @@ async fn events(
             if !filter.allows(&event) {
                 return None;
             }
-            Some(Ok(sse_event(&event)))
+            let record = if event.event_type == "presentation_updated" {
+                event
+                    .presentation_id
+                    .as_deref()
+                    .and_then(presentation_root_id)
+                    .and_then(|root_id| history.live_presentation(root_id, filter.diff_projection))
+            } else {
+                None
+            };
+            Some(Ok(sse_event(&event, record.as_deref())))
         }
         Err(BroadcastStreamRecvError::Lagged(skipped)) => {
             last_global_sequence = last_global_sequence.saturating_add(skipped);
@@ -661,9 +713,12 @@ fn event_filter(query: EventQuery) -> Result<EventFilter, ApiFailure> {
     } else {
         OutputSelection::All
     };
+    let diff_projection =
+        parse_diff_projection(query.diffs.as_deref(), HistoryDiffProjection::Summary)?;
     Ok(EventFilter {
         agent_id: query.agent_id,
         output,
+        diff_projection,
     })
 }
 
@@ -685,11 +740,42 @@ fn parse_output_agent_ids(value: &str) -> Result<HashSet<String>, ApiFailure> {
     Ok(result)
 }
 
-fn sse_event(event: &HistoryLiveEvent) -> Event {
+fn sse_event(
+    event: &HistoryLiveEvent,
+    presentation: Option<&crate::local::presentation::PresentationRecord>,
+) -> Event {
+    let mut event = event.clone();
+    if let Some(presentation) = presentation
+        && let Some(payload) = event.payload.as_object_mut()
+    {
+        payload.insert(
+            "record".to_string(),
+            serde_json::to_value(presentation).expect("Local presentation must serialize"),
+        );
+    }
     Event::default()
         .id(event.sequence.to_string())
         .event(event.event_type.clone())
-        .data(serde_json::to_string(event).expect("Local live event must serialize"))
+        .data(serde_json::to_string(&event).expect("Local live event must serialize"))
+}
+
+fn parse_diff_projection(
+    value: Option<&str>,
+    default: HistoryDiffProjection,
+) -> Result<HistoryDiffProjection, ApiFailure> {
+    match value {
+        None => Ok(default),
+        Some("full") => Ok(HistoryDiffProjection::Full),
+        Some("summary") => Ok(HistoryDiffProjection::Summary),
+        _ => Err(bad_request("diffs must be `full` or `summary`")),
+    }
+}
+
+fn presentation_root_id(value: &str) -> Option<i64> {
+    value
+        .strip_prefix("inv-")
+        .and_then(|raw| raw.parse::<i64>().ok())
+        .filter(|id| *id > 0)
 }
 
 async fn bearer_auth_no_store(

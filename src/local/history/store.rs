@@ -487,6 +487,10 @@ impl HistoryStore {
 
         self.reclaim_pages()?;
         let mut over_budget = physical_store_size(&self.path)? > max_size_bytes;
+        if over_budget && self.discard_presentation_materializations()? > 0 {
+            self.reclaim_pages()?;
+            over_budget = physical_store_size(&self.path)? > max_size_bytes;
+        }
         while over_budget {
             let deleted = {
                 let mut connection = self.lock_connection();

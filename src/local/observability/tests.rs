@@ -574,7 +574,7 @@ async fn sse_starts_now_filters_live_events_and_surfaces_recoverable_lag() {
     let response = request(
         &app,
         Method::GET,
-        &format!("/v1/events?agent_id={agent_id}"),
+        &format!("/v1/events?agent_id={agent_id}&diffs=full"),
         Some(TOKEN),
     )
     .await;
@@ -721,6 +721,14 @@ async fn sse_starts_now_filters_live_events_and_surfaces_recoverable_lag() {
 
     let patch_path = workdir.join("patch-target.txt");
     std::fs::write(&patch_path, "before\n").unwrap();
+    let summary_response = request(
+        &app,
+        Method::GET,
+        &format!("/v1/events?agent_id={agent_id}&diffs=summary"),
+        Some(TOKEN),
+    )
+    .await;
+    let mut summary_stream = summary_response.into_body().into_data_stream();
     let patch = history
         .begin(
             provider_context("target-provider"),
@@ -736,10 +744,13 @@ async fn sse_starts_now_filters_live_events_and_surfaces_recoverable_lag() {
     let patch_id = patch.invocation_id.unwrap();
     let patch_started =
         next_sse_frame_containing(&mut stream, "\"tool_name\":\"apply_patch\"").await;
+    let summary_patch_started =
+        next_sse_frame_containing(&mut summary_stream, "\"tool_name\":\"apply_patch\"").await;
     assert!(
         patch_started.contains(&format!("\"invocation_id\":{patch_id}")),
         "{patch_started}"
     );
+    assert!(summary_patch_started.contains(&format!("\"invocation_id\":{patch_id}")));
     std::fs::write(&patch_path, "after\n").unwrap();
     history
         .complete(
@@ -747,11 +758,17 @@ async fn sse_starts_now_filters_live_events_and_surfaces_recoverable_lag() {
             InvocationOutcome::Success(json!({"status":"exited"})),
         )
         .unwrap();
-    let patch_updated = next_sse_frame_containing(&mut stream, "event: presentation_updated").await;
+    let patch_updated = next_sse_frame_containing(&mut stream, "\"kind\":\"file_changes\"").await;
+    let summary_patch_updated =
+        next_sse_frame_containing(&mut summary_stream, "\"kind\":\"file_changes\"").await;
     assert!(
         patch_updated.contains(&format!("\"invocation_id\":{patch_id}")),
         "{patch_updated}"
     );
+    assert!(patch_updated.contains("\"diff_lines_included\":true"));
+    assert!(patch_updated.contains("\"text\":\"after\""));
+    assert!(summary_patch_updated.contains("\"diff_lines_included\":false"));
+    assert!(!summary_patch_updated.contains("\"text\":\"after\""));
     wait_for_invocation(&history, patch_id);
     let patch_detail = body_json(
         request(
@@ -818,6 +835,7 @@ async fn sse_starts_now_filters_live_events_and_surfaces_recoverable_lag() {
     assert_eq!(recovered.status(), StatusCode::OK);
 
     drop(stream);
+    drop(summary_stream);
     drop(lag_stream);
     drop(app);
     assert_eq!(history.live_event_subscriber_count(), 0);
@@ -903,9 +921,10 @@ async fn two_agent_sse_filters_are_independent_and_global_stream_keeps_unattribu
     assert!(b_frame.contains(&agent_b));
     assert!(!b_frame.contains(&agent_a));
 
-    let global_a = next_sse_frame(&mut global).await;
-    let global_b = next_sse_frame(&mut global).await;
-    let global_unattributed = next_sse_frame(&mut global).await;
+    let global_a = next_sse_frame_containing(&mut global, "\"tool_name\":\"agent-a-only\"").await;
+    let global_b = next_sse_frame_containing(&mut global, "\"tool_name\":\"agent-b-only\"").await;
+    let global_unattributed =
+        next_sse_frame_containing(&mut global, "\"tool_name\":\"unattributed-live\"").await;
     assert!(global_a.contains("\"tool_name\":\"agent-a-only\""));
     assert!(global_b.contains("\"tool_name\":\"agent-b-only\""));
     assert!(global_unattributed.contains("\"tool_name\":\"unattributed-live\""));

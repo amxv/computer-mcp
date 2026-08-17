@@ -15,7 +15,7 @@ from pathlib import Path
 
 
 API_VERSION = 1
-PRESENTATION_VERSION = 2
+PRESENTATION_VERSION = 3
 EVENT_VERSION = 2
 AGENT_ID = re.compile(r"^[a-z0-9]{4}$")
 
@@ -57,7 +57,7 @@ def authorized_request(url: str, token: str) -> urllib.request.Request:
         headers={
             "Authorization": f"Bearer {token}",
             "Accept": "application/json, text/event-stream",
-            "User-Agent": "zodex-local-observer-example/2",
+            "User-Agent": "zodex-local-observer-example/3",
         },
     )
 

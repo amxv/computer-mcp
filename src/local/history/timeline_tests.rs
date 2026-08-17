@@ -61,6 +61,7 @@ fn history_query(limit: usize, cursor: Option<HistoryTimelineCursor>) -> History
         cursor,
         agent_id: None,
         normalized_workdir: None,
+        diff_projection: HistoryDiffProjection::Full,
         mode: HistoryTimelineMode::History { before_ms: None },
     }
 }
@@ -157,6 +158,7 @@ fn timeline_folds_large_poll_families_keeps_real_stdin_and_bulk_file_evidence() 
             ),
         )
         .unwrap();
+    let patch_id = patch.invocation_id.unwrap();
     std::fs::write(&patch_path, "fn value() -> i32 { 2 }\n").unwrap();
     complete(&history, &patch, json!({"status": "exited"}));
     history.flush_for_test().unwrap();
@@ -214,12 +216,52 @@ fn timeline_folds_large_poll_families_keeps_real_stdin_and_bulk_file_evidence() 
             assert_eq!(changes[0].operation, PresentationFileOperation::Edited);
             assert_eq!(changes[0].added, 1);
             assert_eq!(changes[0].removed, 1);
+            assert!(changes[0].diff_lines_included);
+            assert!(!changes[0].lines.is_empty());
         }
         _ => unreachable!(),
     }
     let serialized = serde_json::to_string(&page).unwrap();
     assert!(!serialized.contains("INITIAL-RESULT-MUST-NOT-BE-IN-TIMELINE"));
     assert!(!serialized.contains("CUMULATIVE-POLL-SECRET"));
+
+    let mut summary_query = history_query(20, None);
+    summary_query.diff_projection = HistoryDiffProjection::Summary;
+    let summary_page = LocalHistoryReader::timeline(&database, &summary_query).unwrap();
+    let summary_file = summary_page
+        .records
+        .iter()
+        .find(|record| record.primary_invocation_id == patch_id)
+        .unwrap();
+    match &summary_file.kind {
+        PresentationKind::FileChanges { changes, .. } => {
+            assert_eq!(changes.len(), 1);
+            assert_eq!(changes[0].added, 1);
+            assert_eq!(changes[0].removed, 1);
+            assert!(!changes[0].diff_lines_included);
+            assert!(changes[0].lines.is_empty());
+        }
+        other => panic!("expected summary file presentation, got {other:?}"),
+    }
+    let hydrated = LocalHistoryReader::timeline_details(&database, &[patch_id]).unwrap();
+    assert_eq!(hydrated.len(), 1);
+    match &hydrated[0].kind {
+        PresentationKind::FileChanges { changes, .. } => {
+            assert!(changes[0].diff_lines_included);
+            assert!(!changes[0].lines.is_empty());
+        }
+        other => panic!("expected hydrated file presentation, got {other:?}"),
+    }
+    let connection = Connection::open(&database).unwrap();
+    let materialized: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM presentation_materializations WHERE root_invocation_id = ?1",
+            [patch_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(materialized, 1);
+    drop(connection);
 
     let detail = LocalHistoryReader::timeline_detail(&database, command_id)
         .unwrap()
@@ -364,6 +406,7 @@ fn recovery_pages_past_one_hundred_roots_and_refreshes_parent_for_new_poll() {
                 cursor: cursor.clone(),
                 agent_id: None,
                 normalized_workdir: None,
+                diff_projection: HistoryDiffProjection::Full,
                 mode: HistoryTimelineMode::Recovery {
                     since_ms: 0,
                     active_process_invocation_ids: Vec::new(),
@@ -428,6 +471,7 @@ fn recovery_pages_past_one_hundred_roots_and_refreshes_parent_for_new_poll() {
             cursor: None,
             agent_id: None,
             normalized_workdir: None,
+            diff_projection: HistoryDiffProjection::Full,
             mode: HistoryTimelineMode::Recovery {
                 since_ms: cutoff,
                 active_process_invocation_ids: Vec::new(),
@@ -452,6 +496,7 @@ fn recovery_pages_past_one_hundred_roots_and_refreshes_parent_for_new_poll() {
             cursor: None,
             agent_id: None,
             normalized_workdir: None,
+            diff_projection: HistoryDiffProjection::Full,
             mode: HistoryTimelineMode::Recovery {
                 since_ms: i64::MAX / 4,
                 active_process_invocation_ids: large_active_set,

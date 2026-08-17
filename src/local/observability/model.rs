@@ -178,6 +178,14 @@ pub(crate) struct ApiTimelineDetail {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct ApiTimelineDiffBatch {
+    pub schema_version: u32,
+    pub presentation_version: u32,
+    pub runtime_id: String,
+    pub records: Vec<PresentationRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct ApiTimelineCheckpointPage {
     pub schema_version: u32,
     pub presentation_version: u32,

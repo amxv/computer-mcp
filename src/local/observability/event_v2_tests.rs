@@ -95,6 +95,30 @@ async fn next_sse_json(stream: &mut BodyDataStream) -> Value {
     serde_json::from_str(data).unwrap()
 }
 
+async fn assert_no_output_event_within(stream: &mut BodyDataStream, duration: Duration) {
+    let deadline = tokio::time::Instant::now() + duration;
+    loop {
+        let frame = match tokio::time::timeout_at(deadline, stream.next()).await {
+            Err(_) => return,
+            Ok(None) => return,
+            Ok(Some(frame)) => frame.expect("failed to read SSE frame"),
+        };
+        let text = String::from_utf8(frame.to_vec()).unwrap();
+        let data = text
+            .lines()
+            .find_map(|line| line.strip_prefix("data: "))
+            .unwrap_or_else(|| panic!("SSE frame was missing data: {text}"));
+        let event: Value = serde_json::from_str(data).unwrap();
+        assert!(
+            !matches!(
+                event["event_type"].as_str(),
+                Some("output" | "output_complete")
+            ),
+            "output selection leaked a PTY event: {event}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn canonical_event_identity_maps_polls_to_parent_and_process_end_refreshes_command() {
     let dir = tempdir().unwrap();
@@ -331,11 +355,20 @@ async fn public_sse_keeps_global_metadata_but_selects_output_and_preserves_strea
     });
     history.flush_for_test().unwrap();
 
-    let frames = [
-        next_sse_json(&mut selected).await,
-        next_sse_json(&mut selected).await,
-        next_sse_json(&mut selected).await,
-    ];
+    let mut frames = Vec::new();
+    while frames.len() < 8
+        && !(frames.iter().any(|event: &Value| {
+            event["event_type"] == "invocation_started"
+                && event["invocation_id"] == metadata_a.invocation_id.unwrap()
+        }) && frames.iter().any(|event: &Value| {
+            event["event_type"] == "invocation_started"
+                && event["invocation_id"] == metadata_b.invocation_id.unwrap()
+        }) && frames.iter().any(|event: &Value| {
+            event["event_type"] == "output" && event["payload"]["output_sequence"] == 1
+        }))
+    {
+        frames.push(next_sse_json(&mut selected).await);
+    }
     assert!(frames.iter().any(|event| {
         event["event_type"] == "invocation_started"
             && event["agent_id"] == agent_a
@@ -346,9 +379,16 @@ async fn public_sse_keeps_global_metadata_but_selects_output_and_preserves_strea
             && event["agent_id"] == agent_b
             && event["invocation_id"] == metadata_b.invocation_id.unwrap()
     }));
+    assert!(
+        frames
+            .iter()
+            .filter(|event| event["event_type"] == "output")
+            .all(|event| event["agent_id"] == agent_a),
+        "an A-only output subscription must never leak Agent B output: {frames:?}"
+    );
     let output = frames
         .iter()
-        .find(|event| event["event_type"] == "output")
+        .find(|event| event["event_type"] == "output" && event["payload"]["output_sequence"] == 1)
         .unwrap();
     assert_eq!(output["agent_id"], agent_a);
     assert_eq!(output["invocation_id"], command_a_id);
@@ -366,7 +406,15 @@ async fn public_sse_keeps_global_metadata_but_selects_output_and_preserves_strea
         text: "uncertain".to_string(),
     });
     history.flush_for_test().unwrap();
-    let degraded = next_sse_json(&mut selected).await;
+    let degraded = loop {
+        let event = next_sse_json(&mut selected).await;
+        if event["event_type"] == "output" {
+            assert_eq!(event["agent_id"], agent_a);
+            if event["payload"]["output_sequence"] == 3 {
+                break event;
+            }
+        }
+    };
     assert_eq!(degraded["event_type"], "output");
     assert_eq!(degraded["payload"]["output_sequence"], 3);
     assert_eq!(degraded["payload"]["text"], "");
@@ -417,12 +465,7 @@ async fn public_sse_keeps_global_metadata_but_selects_output_and_preserves_strea
         empty_metadata["invocation_id"],
         metadata_empty.invocation_id.unwrap()
     );
-    assert!(
-        tokio::time::timeout(Duration::from_millis(100), empty.next())
-            .await
-            .is_err(),
-        "an explicit empty output selection must suppress PTY events"
-    );
+    assert_no_output_event_within(&mut empty, Duration::from_millis(100)).await;
 
     let no_output_response = request(&app, "/v1/events?include_output=false").await;
     assert_eq!(no_output_response.status(), StatusCode::OK);
@@ -447,12 +490,7 @@ async fn public_sse_keeps_global_metadata_but_selects_output_and_preserves_strea
         no_output_metadata["invocation_id"],
         metadata_no_output.invocation_id.unwrap()
     );
-    assert!(
-        tokio::time::timeout(Duration::from_millis(100), no_output.next())
-            .await
-            .is_err(),
-        "include_output=false must suppress PTY events"
-    );
+    assert_no_output_event_within(&mut no_output, Duration::from_millis(100)).await;
 
     let too_many = (0..33)
         .map(|index| format!("a{index:03}"))

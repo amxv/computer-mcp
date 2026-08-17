@@ -87,7 +87,7 @@ function controller() {
     attachWatermarkMs: 2_000,
     loadHistoryPage: async () => ({
       schema_version: 1,
-      presentation_version: 2,
+      presentation_version: 3,
       runtime_id: 'runtime-one',
       records: [],
       has_more: false,
@@ -397,7 +397,7 @@ describe('command card', () => {
       attachWatermarkMs: 2_000,
       loadHistoryPage: async () => ({
         schema_version: 1,
-        presentation_version: 2,
+        presentation_version: 3,
         runtime_id: 'runtime-one',
         records: [],
         has_more: false,
@@ -578,7 +578,7 @@ describe('command card', () => {
         if (path.startsWith('api/timeline/inv-10/checkpoints')) {
           return Response.json({
             schema_version: 1,
-            presentation_version: 2,
+            presentation_version: 3,
             runtime_id: 'runtime-one',
             presentation_id: 'inv-10',
             checkpoints: [
@@ -601,7 +601,7 @@ describe('command card', () => {
         if (path === 'api/invocations/10') {
           return Response.json({
             schema_version: 1,
-            presentation_version: 2,
+            presentation_version: 3,
             runtime_id: 'runtime-one',
             invocation: {
               id: 10,

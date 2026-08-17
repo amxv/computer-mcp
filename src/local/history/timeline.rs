@@ -12,12 +12,13 @@ use crate::local::presentation::{
     sanitize_display_text,
 };
 
+use super::materialized::load_materialized;
 use super::query::{map_file_evidence_at, open_read_only};
 use super::schema::readable_schema_version;
 use super::timeline_polls::{load_handle_poll_aggregates, load_parent_poll_aggregates};
-use super::{HistoryTimelineCursor, LocalHistoryReader};
+use super::{HistoryDiffProjection, HistoryTimelineCursor, LocalHistoryReader};
 
-const ROOTS_CTE: &str = r#"
+pub(super) const ROOTS_CTE: &str = r#"
 WITH roots(root_id, representative_id, root_started_at_ms, orphan_kind, orphan_handle) AS (
     SELECT i.id, i.id, i.started_at_ms, 0, NULL
     FROM invocations i
@@ -94,6 +95,7 @@ pub(crate) struct HistoryTimelineQuery {
     pub cursor: Option<HistoryTimelineCursor>,
     pub agent_id: Option<String>,
     pub normalized_workdir: Option<String>,
+    pub diff_projection: HistoryDiffProjection,
     pub mode: HistoryTimelineMode,
 }
 
@@ -175,7 +177,7 @@ impl LocalHistoryReader {
         if matches!(query.mode, HistoryTimelineMode::History { .. }) {
             roots.reverse();
         }
-        let records = hydrate_roots(&connection, &roots)?;
+        let records = hydrate_roots(&connection, &roots, query.diff_projection)?;
         Ok(HistoryTimelinePage {
             records,
             has_more,
@@ -204,7 +206,53 @@ impl LocalHistoryReader {
         let Some(root) = root else {
             return Ok(None);
         };
-        Ok(hydrate_roots(&connection, &[root])?.pop())
+        let mut materialized =
+            load_materialized(&connection, &[root.root_id], HistoryDiffProjection::Full)?;
+        if let Some(record) = materialized.remove(&root.root_id) {
+            return Ok(Some(record));
+        }
+        Ok(timeline_detail_uncached_from_root(&connection, root)?.into())
+    }
+
+    pub(crate) fn timeline_details(
+        path: &Path,
+        presentation_root_ids: &[i64],
+    ) -> Result<Vec<PresentationRecord>> {
+        if !path.exists() || presentation_root_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let connection = open_read_only(path)?;
+        require_timeline_schema(&connection)?;
+        let placeholders = std::iter::repeat_n("?", presentation_root_ids.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "{ROOTS_CTE}
+             SELECT root_id, representative_id, root_started_at_ms, orphan_kind, orphan_handle
+             FROM roots WHERE root_id IN ({placeholders})"
+        );
+        let parameters = presentation_root_ids
+            .iter()
+            .copied()
+            .map(SqlValue::Integer)
+            .collect::<Vec<_>>();
+        let mut statement = connection
+            .prepare(&sql)
+            .context("failed to prepare canonical Local timeline batch-detail roots")?;
+        let roots = statement
+            .query_map(params_from_iter(parameters), map_root_without_change)
+            .context("failed to query canonical Local timeline batch-detail roots")?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("failed to decode canonical Local timeline batch-detail roots")?;
+        let mut by_id = roots
+            .into_iter()
+            .map(|root| (root.root_id, root))
+            .collect::<HashMap<_, _>>();
+        let ordered = presentation_root_ids
+            .iter()
+            .filter_map(|root_id| by_id.remove(root_id))
+            .collect::<Vec<_>>();
+        hydrate_roots(&connection, &ordered, HistoryDiffProjection::Full)
     }
 
     pub(crate) fn timeline_checkpoints(
@@ -571,6 +619,56 @@ fn root_cursor(query: &HistoryTimelineQuery, root: &TimelineRoot) -> HistoryTime
 fn hydrate_roots(
     connection: &Connection,
     roots: &[TimelineRoot],
+    projection: HistoryDiffProjection,
+) -> Result<Vec<PresentationRecord>> {
+    if roots.is_empty() {
+        return Ok(Vec::new());
+    }
+    let root_ids = roots.iter().map(|root| root.root_id).collect::<Vec<_>>();
+    let mut materialized = load_materialized(connection, &root_ids, projection)?;
+    if materialized.len() == roots.len() {
+        return roots
+            .iter()
+            .map(|root| {
+                materialized.remove(&root.root_id).with_context(|| {
+                    format!("materialized Local timeline lost root {}", root.root_id)
+                })
+            })
+            .collect();
+    }
+    let missing = roots
+        .iter()
+        .filter(|root| !materialized.contains_key(&root.root_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    let hydrated = hydrate_roots_uncached(connection, &missing)?;
+    let mut hydrated_by_root = missing
+        .iter()
+        .map(|root| root.root_id)
+        .zip(hydrated)
+        .collect::<HashMap<_, _>>();
+    roots
+        .iter()
+        .map(|root| {
+            if let Some(record) = materialized.remove(&root.root_id) {
+                return Ok(record);
+            }
+            let record = hydrated_by_root
+                .remove(&root.root_id)
+                .with_context(|| format!("hydrated Local timeline lost root {}", root.root_id))?;
+            Ok(match projection {
+                HistoryDiffProjection::Summary => {
+                    crate::local::presentation::project_diff_lines(&record, false)
+                }
+                HistoryDiffProjection::Full => record,
+            })
+        })
+        .collect()
+}
+
+fn hydrate_roots_uncached(
+    connection: &Connection,
+    roots: &[TimelineRoot],
 ) -> Result<Vec<PresentationRecord>> {
     if roots.is_empty() {
         return Ok(Vec::new());
@@ -637,6 +735,32 @@ fn hydrate_roots(
     }
 
     Ok(build_presentation_inputs(&ordered_inputs, &[]).records)
+}
+
+pub(super) fn timeline_detail_uncached(
+    connection: &Connection,
+    presentation_root_id: i64,
+) -> Result<Option<PresentationRecord>> {
+    let sql = format!(
+        "{ROOTS_CTE}
+         SELECT root_id, representative_id, root_started_at_ms, orphan_kind, orphan_handle
+         FROM roots WHERE root_id = ?1 LIMIT 1"
+    );
+    let root = connection
+        .query_row(&sql, [presentation_root_id], map_root_without_change)
+        .optional()
+        .context("failed to query canonical Local timeline detail root")?;
+    root.map(|root| timeline_detail_uncached_from_root(connection, root))
+        .transpose()
+}
+
+fn timeline_detail_uncached_from_root(
+    connection: &Connection,
+    root: TimelineRoot,
+) -> Result<PresentationRecord> {
+    hydrate_roots_uncached(connection, &[root])?
+        .pop()
+        .context("canonical Local timeline detail root produced no presentation")
 }
 
 fn load_lean_inputs(

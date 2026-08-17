@@ -1,4 +1,5 @@
 import agentsSvg from 'lucide-static/icons/users.svg?raw'
+import arrowDownSvg from 'lucide-static/icons/arrow-down.svg?raw'
 import checkSvg from 'lucide-static/icons/check.svg?raw'
 import chevronDownSvg from 'lucide-static/icons/chevron-down.svg?raw'
 import chevronUpSvg from 'lucide-static/icons/chevron-up.svg?raw'
@@ -30,6 +31,9 @@ export function AgentsIcon() {
   return <RawLucideIcon svg={agentsSvg} />
 }
 
+export function ArrowDownIcon() {
+  return <RawLucideIcon svg={arrowDownSvg} />
+}
 
 export function UserIcon() {
   return <RawLucideIcon svg={userSvg} />

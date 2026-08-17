@@ -46,7 +46,7 @@ function page(
 ): ApiTimelinePage {
   return {
     schema_version: 1,
-    presentation_version: 2,
+    presentation_version: 3,
     runtime_id: 'runtime-one',
     records,
     has_more: hasMore,

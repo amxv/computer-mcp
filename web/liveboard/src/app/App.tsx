@@ -42,11 +42,15 @@ function LiveboardWorkspace(props: {
       props.bootstrap.agents.agents,
       props.bootstrap.preferences,
     ),
+    initialDiffProjection: props.bootstrap.preferences.diffs_expanded ? 'full' : 'summary',
     viewerAttachWatermarkMs: props.viewerAttachWatermarkMs,
   })
   let mutationQueue: Promise<void> = Promise.resolve()
 
   createEffect(() => applyTheme(preferences().theme))
+  createEffect(() =>
+    runtime.setDiffProjection(preferences().diffs_expanded ? 'full' : 'summary'),
+  )
   onMount(() => runtime.start())
   onCleanup(() => runtime.dispose())
 

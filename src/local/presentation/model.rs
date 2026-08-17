@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-pub const PRESENTATION_SCHEMA_VERSION: u32 = 2;
+pub const PRESENTATION_SCHEMA_VERSION: u32 = 3;
 pub(crate) const PRESENTATION_RAW_INVOCATION_ID_SAMPLE_LIMIT: usize = 32;
 
 pub(crate) fn presentation_id_for_root(primary_invocation_id: i64) -> String {
@@ -121,7 +121,24 @@ pub struct PresentationFileChange {
     pub added: usize,
     pub removed: usize,
     pub diff_truncated: bool,
+    pub diff_lines_included: bool,
     pub lines: Vec<PresentationDiffLine>,
+}
+
+pub(crate) fn project_diff_lines(
+    record: &PresentationRecord,
+    include_lines: bool,
+) -> PresentationRecord {
+    let mut projected = record.clone();
+    if let PresentationKind::FileChanges { changes, .. } = &mut projected.kind {
+        for change in changes {
+            change.diff_lines_included = include_lines;
+            if !include_lines {
+                change.lines.clear();
+            }
+        }
+    }
+    projected
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
