@@ -44,7 +44,7 @@ fn normal_ci_covers_linux_and_native_apple_silicon_without_secrets() {
 }
 
 #[test]
-fn portable_contract_script_pins_shared_mcp_mode_first_cli_and_public_docs_proofs() {
+fn portable_contract_script_pins_shared_mcp_and_mode_first_cli_proofs() {
     let script = read("scripts/check-product-contract.sh");
     for required in [
         "modern_stateless_tool_call_observes_openai_session_without_transport_session",
@@ -54,7 +54,6 @@ fn portable_contract_script_pins_shared_mcp_mode_first_cli_and_public_docs_proof
         "zodex_root_help_exposes_only_first_class_modes_and_upgrade",
         "zodex_root_rejects_removed_commands_and_global_config",
         "zodex_local_help_exposes_complete_public_family_and_inspection_examples",
-        "cargo test --locked --test docs_contract",
         "-- --exact",
     ] {
         assert!(

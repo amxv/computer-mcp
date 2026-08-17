@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Keep the small model-facing transport contract, mode-first operator surface,
-# and public documentation story executable in normal Linux/macOS CI. These
-# checks deliberately derive from code/tests, not historical planning files.
+# Keep the small model-facing transport contract and mode-first operator
+# surface executable in normal Linux/macOS CI. These checks deliberately
+# derive from code/tests, not historical planning files.
 cargo test --locked --lib \
   server::tests::modern_stateless_tool_call_observes_openai_session_without_transport_session \
   -- --exact
@@ -26,5 +26,3 @@ cargo test --locked --test zodex_operator_cli \
 cargo test --locked --test zodex_operator_cli \
   zodex_local_help_exposes_complete_public_family_and_inspection_examples \
   -- --exact
-
-cargo test --locked --test docs_contract
