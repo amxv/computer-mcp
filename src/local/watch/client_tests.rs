@@ -18,11 +18,11 @@ use tokio_util::sync::CancellationToken;
 use super::super::{LocalObservabilityDiscovery, LocalPaths, LocalRuntimeDiscovery};
 use super::client::{NETWORK_EVENT_CAPACITY, ObserverClient, WatchNetworkEvent};
 use super::model::{ConnectionState, WatchApp, WatchEffect, WatchOptions, WatchScope};
-use super::test_support::{RUNTIME_ID, agent, bootstrap, command_detail};
+use super::test_support::{RUNTIME_ID, agent, bootstrap, command_detail, poll_detail};
 use super::{RestoreGuard, Subscription, apply_live_update, handle_network_event, valid_agent_id};
 use crate::local::history::HistoryLiveEvent;
 use crate::local::observability::{
-    ApiAgentList, ApiInvocationDetail, ApiInvocationList, ApiStatusDocument,
+    ApiAgentList, ApiInvocationDetail, ApiInvocationList, ApiStatusDocument, ApiTimelineDetail,
 };
 use crate::local::{PRESENTATION_SCHEMA_VERSION, PresentationDocument};
 
@@ -90,6 +90,7 @@ impl FakeObserver {
             .route("/v1/agents", get(fake_agents))
             .route("/v1/invocations", get(fake_invocations))
             .route("/v1/invocations/{id}", get(fake_invocation))
+            .route("/v1/timeline/{presentation_id}", get(fake_timeline))
             .route("/v1/events", get(fake_events))
             .with_state(state.clone())
             .layer(middleware::from_fn_with_state(
@@ -172,6 +173,9 @@ async fn fake_agents(State(_): State<FakeState>) -> Json<ApiAgentList> {
 }
 
 async fn fake_invocation(Path(id): Path<i64>) -> Json<ApiInvocationDetail> {
+    if id == 4 {
+        return Json(poll_detail(4, "m4n8", "fake-poll-handle"));
+    }
     let agent_id = if id == 1 { "k7m2" } else { "m4n8" };
     Json(command_detail(
         id,
@@ -180,6 +184,27 @@ async fn fake_invocation(Path(id): Path<i64>) -> Json<ApiInvocationDetail> {
         "running",
         None,
     ))
+}
+
+async fn fake_timeline(Path(presentation_id): Path<String>) -> Json<ApiTimelineDetail> {
+    let id = presentation_id
+        .strip_prefix("inv-")
+        .unwrap()
+        .parse::<i64>()
+        .unwrap();
+    let detail = command_detail(
+        id,
+        Some("m4n8"),
+        &format!("echo canonical-parent-{id}"),
+        "running",
+        None,
+    );
+    Json(ApiTimelineDetail {
+        schema_version: crate::local::LOCAL_OBSERVABILITY_API_VERSION,
+        presentation_version: PRESENTATION_SCHEMA_VERSION,
+        runtime_id: RUNTIME_ID.to_owned(),
+        record: detail.presentation.records[0].clone(),
+    })
 }
 
 async fn fake_invocations(Query(query): Query<HashMap<String, String>>) -> Json<ApiInvocationList> {
@@ -229,7 +254,8 @@ async fn fake_events(Query(query): Query<HashMap<String, String>>) -> impl IntoR
         event_type: "invocation_started".to_owned(),
         agent_id: Some(agent_id),
         invocation_id: Some(invocation_id),
-        presentation_revision: Some(1),
+        presentation_id: Some(format!("inv-{invocation_id}")),
+        presentation_revision: Some(PRESENTATION_SCHEMA_VERSION),
         payload: json!({}),
     };
     let body = format!(
@@ -401,7 +427,8 @@ async fn first_live_reference_fetches_only_that_invocation_and_gap_recovers_miss
         event_type: "invocation_started".to_owned(),
         agent_id: Some("m4n8".to_owned()),
         invocation_id: Some(2),
-        presentation_revision: Some(1),
+        presentation_id: Some("inv-2".to_owned()),
+        presentation_revision: Some(PRESENTATION_SCHEMA_VERSION),
         payload: json!({}),
     };
     let effects = apply_live_update(&client, &mut app, &live).await;
@@ -417,6 +444,7 @@ async fn first_live_reference_fetches_only_that_invocation_and_gap_recovers_miss
     let gap = HistoryLiveEvent {
         event_type: "gap".to_owned(),
         invocation_id: None,
+        presentation_id: None,
         sequence: 8,
         payload: json!({"skipped_events": 5}),
         ..live
@@ -447,6 +475,61 @@ async fn first_live_reference_fetches_only_that_invocation_and_gap_recovers_miss
     assert_eq!(
         app.recovery_notice(),
         Some("live event gap recovered from durable history")
+    );
+}
+
+#[tokio::test]
+async fn poll_event_uses_canonical_timeline_detail_without_recovery_list() {
+    let fake = FakeObserver::start().await;
+    let (client, bootstrap) = ObserverClient::discover(&fake.paths).await.unwrap();
+    let mut app = WatchApp::new(
+        &bootstrap,
+        WatchOptions {
+            agent: Some("m4n8".to_owned()),
+            all: false,
+        },
+    );
+    fake.clear_requests();
+
+    let live = HistoryLiveEvent {
+        schema_version: crate::local::history::HISTORY_LIVE_EVENT_SCHEMA_VERSION,
+        runtime_id: RUNTIME_ID.to_owned(),
+        sequence: 4,
+        emitted_at_ms: 1_000,
+        event_type: "presentation_updated".to_owned(),
+        agent_id: Some("m4n8".to_owned()),
+        invocation_id: Some(4),
+        presentation_id: Some("inv-2".to_owned()),
+        presentation_revision: Some(PRESENTATION_SCHEMA_VERSION),
+        payload: json!({}),
+    };
+    let effects = apply_live_update(&client, &mut app, &live).await;
+    assert!(effects.is_empty());
+    assert!(
+        app.knows_invocation(4),
+        "exact poll detail remains cached for raw audit"
+    );
+    let cards = app.visible_cards();
+    assert_eq!(cards.len(), 1);
+    assert_eq!(cards[0].record.presentation_id, "inv-2");
+    assert_eq!(cards[0].record.primary_invocation_id, 2);
+
+    let requests = fake.requests();
+    assert!(
+        requests
+            .iter()
+            .any(|(_, path, _)| path == "/v1/invocations/4")
+    );
+    assert!(
+        requests
+            .iter()
+            .any(|(_, path, _)| path == "/v1/timeline/inv-2")
+    );
+    assert!(
+        requests
+            .iter()
+            .all(|(_, path, _)| !path.starts_with("/v1/invocations?")),
+        "canonical presentation identity removes the context-poor poll recovery-list workaround"
     );
 }
 

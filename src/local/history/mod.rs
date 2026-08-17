@@ -1,6 +1,8 @@
+mod event_identity;
 mod events;
 mod file_store;
 mod lifecycle;
+mod live_display;
 mod output_display;
 mod query;
 mod schema;

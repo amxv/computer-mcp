@@ -9,7 +9,7 @@ use super::model::{
     PRESENTATION_RAW_INVOCATION_ID_SAMPLE_LIMIT, PRESENTATION_SCHEMA_VERSION, PresentationAgent,
     PresentationDocument, PresentationEvidence, PresentationFileChange, PresentationFileOperation,
     PresentationKind, PresentationPollSummary, PresentationRecord, PresentationWorkdir,
-    PresentationWriteMode,
+    PresentationWriteMode, presentation_id_for_root,
 };
 use super::sanitize::{sanitize_display_text, sanitize_preview};
 use super::{PresentationInput, PresentationOrphanPollInput, PresentationPollAggregateInput};
@@ -494,7 +494,7 @@ fn record_with_kind(
     kind: PresentationKind,
 ) -> PresentationRecord {
     PresentationRecord {
-        presentation_id: presentation_id(identity.primary_invocation_id),
+        presentation_id: presentation_id_for_root(identity.primary_invocation_id),
         primary_invocation_id: identity.primary_invocation_id,
         raw_evidence_count: identity.raw_evidence_count,
         raw_invocation_ids: identity.raw_invocation_ids,
@@ -522,10 +522,6 @@ fn record_with_kind(
         evidence: evidence_for(record),
         kind,
     }
-}
-
-fn presentation_id(primary_invocation_id: i64) -> String {
-    format!("inv-{primary_invocation_id}")
 }
 
 fn evidence_for(record: &PresentationInput) -> PresentationEvidence {

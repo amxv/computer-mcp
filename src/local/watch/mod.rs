@@ -9,6 +9,7 @@ mod model_tests;
 mod render;
 #[cfg(test)]
 mod render_tests;
+mod sse;
 #[cfg(test)]
 mod test_support;
 
@@ -199,7 +200,9 @@ async fn apply_live_update(
         }
     } else if let Some(invocation_id) = invocation_id {
         if !known {
-            if let Err(error) = merge_live_detail(client, app, invocation_id).await {
+            if let Err(error) =
+                merge_live_detail(client, app, invocation_id, live.presentation_id.as_deref()).await
+            {
                 app.set_degraded(format!(
                     "live invocation {invocation_id} could not be loaded: {error:#}"
                 ));
@@ -211,7 +214,8 @@ async fn apply_live_update(
         } else if matches!(
             live.event_type.as_str(),
             "presentation_updated" | "invocation_completed"
-        ) && let Err(error) = merge_live_detail(client, app, invocation_id).await
+        ) && let Err(error) =
+            merge_live_detail(client, app, invocation_id, live.presentation_id.as_deref()).await
         {
             app.set_degraded(format!(
                 "live invocation {invocation_id} could not be refreshed: {error:#}"
@@ -225,6 +229,7 @@ async fn merge_live_detail(
     client: &ObserverClient,
     app: &mut WatchApp,
     invocation_id: i64,
+    presentation_id: Option<&str>,
 ) -> Result<(), String> {
     let detail = client
         .invocation(invocation_id)
@@ -236,13 +241,28 @@ async fn merge_live_detail(
             crate::local::PresentationKind::PollAggregate { .. }
         )
     });
-    app.merge_detail(detail);
     if is_poll {
-        let canonical = client
-            .recovery_invocations(app.stream_filter().as_deref(), app.recovery_since_ms())
-            .await
-            .map_err(|error| format!("failed to reconcile poll presentation: {error:#}"))?;
-        app.merge_presentation(canonical.presentation);
+        if let Some(presentation_id) = presentation_id {
+            app.cache_detail(detail.clone());
+            match client.timeline_detail(presentation_id).await {
+                Ok(canonical) => app.merge_timeline_record(canonical.record),
+                Err(error) => {
+                    app.merge_detail(detail);
+                    return Err(format!(
+                        "failed to reconcile canonical poll presentation `{presentation_id}`: {error:#}"
+                    ));
+                }
+            }
+        } else {
+            app.merge_detail(detail);
+            let canonical = client
+                .recovery_invocations(app.stream_filter().as_deref(), app.recovery_since_ms())
+                .await
+                .map_err(|error| format!("failed to reconcile poll presentation: {error:#}"))?;
+            app.merge_presentation(canonical.presentation);
+        }
+    } else {
+        app.merge_detail(detail);
     }
     Ok(())
 }

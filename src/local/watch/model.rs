@@ -270,6 +270,17 @@ impl WatchApp {
         self.clamp_selection();
     }
 
+    pub(super) fn cache_detail(&mut self, detail: ApiInvocationDetail) {
+        self.details.insert(detail.invocation.id, detail);
+    }
+
+    pub(super) fn merge_timeline_record(&mut self, mut record: PresentationRecord) {
+        sanitize_record_for_terminal(&mut record);
+        self.live_output.remove(&record.primary_invocation_id);
+        self.merge_record(record, false);
+        self.clamp_selection();
+    }
+
     pub(super) fn merge_presentation(&mut self, presentation: PresentationDocument) {
         for mut record in presentation.records {
             sanitize_record_for_terminal(&mut record);

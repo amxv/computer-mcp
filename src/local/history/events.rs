@@ -3,10 +3,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use tokio::sync::broadcast;
 
-pub(crate) const HISTORY_LIVE_EVENT_SCHEMA_VERSION: u32 = 1;
+use crate::invocation::{InvocationContext, InvocationOutcome};
+use crate::local::presentation::{PRESENTATION_SCHEMA_VERSION, presentation_id_for_root};
+
+pub(crate) const HISTORY_LIVE_EVENT_SCHEMA_VERSION: u32 = 2;
 const DEFAULT_EVENT_CAPACITY: usize = 256;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -18,6 +21,7 @@ pub(crate) struct HistoryLiveEvent {
     pub event_type: String,
     pub agent_id: Option<String>,
     pub invocation_id: Option<i64>,
+    pub presentation_id: Option<String>,
     pub presentation_revision: Option<u32>,
     pub payload: Value,
 }
@@ -55,11 +59,16 @@ impl HistoryEventHub {
         self.sequence.load(Ordering::Acquire)
     }
 
+    pub(crate) fn has_subscribers(&self) -> bool {
+        self.sender.receiver_count() > 0
+    }
+
     pub(crate) fn emit_with(
         &self,
         event_type: &str,
         agent_id: Option<&str>,
         invocation_id: Option<i64>,
+        presentation_root_invocation_id: Option<i64>,
         presentation_revision: Option<u32>,
         payload: impl FnOnce() -> Value,
     ) {
@@ -75,10 +84,41 @@ impl HistoryEventHub {
             event_type: event_type.to_string(),
             agent_id: agent_id.map(str::to_owned),
             invocation_id,
+            presentation_id: presentation_root_invocation_id.map(presentation_id_for_root),
             presentation_revision,
             payload: payload(),
         };
         let _ = self.sender.send(event);
+    }
+
+    pub(crate) fn emit_invocation_completion(
+        &self,
+        context: &InvocationContext,
+        outcome: &InvocationOutcome,
+        presentation_root_invocation_id: Option<i64>,
+    ) {
+        let invocation_id = context.invocation_id;
+        let agent_id = context.agent_id.as_deref();
+        let outcome_kind = match outcome {
+            InvocationOutcome::Success(_) => "success",
+            InvocationOutcome::Error(_) => "error",
+        };
+        self.emit_with(
+            "invocation_completed",
+            agent_id,
+            invocation_id,
+            presentation_root_invocation_id,
+            Some(PRESENTATION_SCHEMA_VERSION),
+            || json!({"outcome": outcome_kind}),
+        );
+        self.emit_with(
+            "presentation_updated",
+            agent_id,
+            invocation_id,
+            presentation_root_invocation_id,
+            Some(PRESENTATION_SCHEMA_VERSION),
+            || json!({}),
+        );
     }
 }
 

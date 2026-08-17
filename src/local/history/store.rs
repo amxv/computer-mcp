@@ -9,6 +9,7 @@ use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, 
 use serde_json::Value;
 use tracing::{error, warn};
 
+use super::event_identity::{HistoryCompletionResult, presentation_root_invocation_id};
 use super::history_store_paths;
 use super::schema::initialize_or_migrate;
 use crate::invocation::{
@@ -31,6 +32,7 @@ pub(super) struct HistoryBeginResult {
     pub(super) context: InvocationContext,
     pub(super) agent_first_seen_in_runtime: bool,
     pub(super) new_workdir: Option<String>,
+    pub(super) presentation_root_invocation_id: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -189,6 +191,11 @@ impl HistoryStore {
             )
             .context("failed to persist mandatory Local invocation envelope")?;
         let invocation_id = transaction.last_insert_rowid();
+        let presentation_root_invocation_id = presentation_root_invocation_id(
+            invocation_id,
+            continuation_kind,
+            target_creator_invocation_id,
+        );
 
         let is_new_workdir = update_agent_workdir_summary(
             &transaction,
@@ -216,6 +223,7 @@ impl HistoryStore {
                 declared_workdir_normalized
                     .expect("new Local Agent workdir requires normalized workdir")
             }),
+            presentation_root_invocation_id,
         })
     }
 
@@ -223,17 +231,22 @@ impl HistoryStore {
         &self,
         context: &InvocationContext,
         outcome: InvocationOutcome,
-    ) -> Result<()> {
+    ) -> Result<HistoryCompletionResult> {
         let invocation_id = context
             .invocation_id
             .context("Local invocation completion is missing durable invocation ID")?;
         let completed_at_ms = now_ms()?;
         let connection = self.lock_connection();
-        let started_at_ms: i64 = connection
+        let (started_at_ms, continuation_kind, target_created_by_invocation_id): (
+            i64,
+            Option<String>,
+            Option<i64>,
+        ) = connection
             .query_row(
-                "SELECT started_at_ms FROM invocations WHERE id = ?1",
+                "SELECT started_at_ms, continuation_kind, target_created_by_invocation_id
+                 FROM invocations WHERE id = ?1",
                 [invocation_id],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .with_context(|| {
                 format!("missing Local invocation {invocation_id} during completion")
@@ -288,7 +301,13 @@ impl HistoryStore {
                     .context("failed to persist exact Local invocation error")?;
             }
         }
-        Ok(())
+        Ok(HistoryCompletionResult {
+            presentation_root_invocation_id: presentation_root_invocation_id(
+                invocation_id,
+                continuation_kind.as_deref(),
+                target_created_by_invocation_id,
+            ),
+        })
     }
 
     pub(super) fn persist_output_batch(&self, events: &[OutputEvent]) -> Result<()> {

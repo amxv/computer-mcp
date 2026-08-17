@@ -2,10 +2,10 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use serde_json::json;
 
-use super::super::history::HistoryLiveEvent;
+use super::super::history::{HISTORY_LIVE_EVENT_SCHEMA_VERSION, HistoryLiveEvent};
 use super::super::{
-    PresentationDiffLine, PresentationFileChange, PresentationFileOperation, PresentationKind,
-    PresentationWriteMode,
+    PRESENTATION_SCHEMA_VERSION, PresentationDiffLine, PresentationFileChange,
+    PresentationFileOperation, PresentationKind, PresentationWriteMode,
 };
 use super::input::WatchInput;
 use super::model::{WatchApp, WatchOptions};
@@ -71,14 +71,15 @@ fn renders_waiting_one_agent_and_multi_agent_picker_modes() {
 fn renders_explicit_unattributed_activity_instead_of_idle_waiting() {
     let mut app = WatchApp::new(&bootstrap(Vec::new()), WatchOptions::automatic());
     app.note_live_event(&HistoryLiveEvent {
-        schema_version: 1,
+        schema_version: HISTORY_LIVE_EVENT_SCHEMA_VERSION,
         runtime_id: RUNTIME_ID.to_owned(),
         sequence: 1,
         emitted_at_ms: 10,
         event_type: "invocation_started".to_owned(),
         agent_id: None,
         invocation_id: Some(1),
-        presentation_revision: Some(1),
+        presentation_id: Some("inv-1".to_owned()),
+        presentation_revision: Some(PRESENTATION_SCHEMA_VERSION),
         payload: json!({}),
     });
     let text = render_text(&app, 90, 18);

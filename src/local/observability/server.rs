@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::convert::Infallible;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
@@ -42,6 +43,7 @@ const DEFAULT_TIMELINE_LIMIT: usize = 50;
 const MAX_TIMELINE_LIMIT: usize = 100;
 const DEFAULT_CHECKPOINT_LIMIT: usize = 25;
 const MAX_CHECKPOINT_LIMIT: usize = 100;
+const MAX_OUTPUT_AGENT_SELECTION: usize = 32;
 
 #[derive(Clone)]
 struct ApiState {
@@ -534,26 +536,34 @@ async fn timeline_checkpoints(
 #[derive(Debug, Deserialize)]
 struct EventQuery {
     agent_id: Option<String>,
+    include_output: Option<bool>,
+    output_agent_ids: Option<String>,
+}
+
+enum OutputSelection {
+    All,
+    None,
+    Agents(HashSet<String>),
+}
+
+struct EventFilter {
+    agent_id: Option<String>,
+    output: OutputSelection,
 }
 
 async fn events(
     State(state): State<Arc<ApiState>>,
     Query(query): Query<EventQuery>,
 ) -> Result<Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>>, ApiFailure> {
-    if let Some(agent_id) = query.agent_id.as_deref() {
-        validate_agent_id(agent_id)?;
-    }
+    let filter = event_filter(query)?;
     let runtime_id = state.history.runtime_id().to_string();
     let (sequence, receiver) = state.history.subscribe_live_events();
     let mut last_global_sequence = sequence;
-    let agent_filter = query.agent_id;
+    let gap_agent_id = filter.agent_id.clone();
     let stream = BroadcastStream::new(receiver).filter_map(move |result| match result {
         Ok(event) => {
             last_global_sequence = event.sequence;
-            if agent_filter
-                .as_deref()
-                .is_some_and(|id| event.agent_id.as_deref() != Some(id))
-            {
+            if !filter.allows(&event) {
                 return None;
             }
             Some(Ok(sse_event(&event)))
@@ -567,8 +577,9 @@ async fn events(
                 "sequence": through_sequence,
                 "emitted_at_ms": current_time_ms(),
                 "event_type": "gap",
-                "agent_id": agent_filter,
+                "agent_id": gap_agent_id,
                 "invocation_id": null,
+                "presentation_id": null,
                 "presentation_revision": null,
                 "payload": {
                     "skipped_events": skipped,
@@ -586,6 +597,69 @@ async fn events(
             .interval(Duration::from_secs(15))
             .text("keepalive"),
     ))
+}
+
+impl EventFilter {
+    fn allows(&self, event: &HistoryLiveEvent) -> bool {
+        if self
+            .agent_id
+            .as_deref()
+            .is_some_and(|id| event.agent_id.as_deref() != Some(id))
+        {
+            return false;
+        }
+        if !matches!(event.event_type.as_str(), "output" | "output_complete") {
+            return true;
+        }
+        match &self.output {
+            OutputSelection::All => true,
+            OutputSelection::None => false,
+            OutputSelection::Agents(agent_ids) => event
+                .agent_id
+                .as_ref()
+                .is_some_and(|agent_id| agent_ids.contains(agent_id)),
+        }
+    }
+}
+
+fn event_filter(query: EventQuery) -> Result<EventFilter, ApiFailure> {
+    if let Some(agent_id) = query.agent_id.as_deref() {
+        validate_agent_id(agent_id)?;
+    }
+    let selected = query
+        .output_agent_ids
+        .as_deref()
+        .map(parse_output_agent_ids)
+        .transpose()?;
+    let output = if query.include_output == Some(false) {
+        OutputSelection::None
+    } else if let Some(agent_ids) = selected {
+        OutputSelection::Agents(agent_ids)
+    } else {
+        OutputSelection::All
+    };
+    Ok(EventFilter {
+        agent_id: query.agent_id,
+        output,
+    })
+}
+
+fn parse_output_agent_ids(value: &str) -> Result<HashSet<String>, ApiFailure> {
+    if value.is_empty() {
+        return Ok(HashSet::new());
+    }
+    let values = value.split(',').collect::<Vec<_>>();
+    if values.len() > MAX_OUTPUT_AGENT_SELECTION {
+        return Err(bad_request(format!(
+            "output_agent_ids accepts at most {MAX_OUTPUT_AGENT_SELECTION} Agent IDs"
+        )));
+    }
+    let mut result = HashSet::with_capacity(values.len());
+    for value in values {
+        validate_agent_id(value)?;
+        result.insert(value.to_string());
+    }
+    Ok(result)
 }
 
 fn sse_event(event: &HistoryLiveEvent) -> Event {

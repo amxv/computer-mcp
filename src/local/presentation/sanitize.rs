@@ -24,15 +24,21 @@ fn sanitize_stripped_text(input: &str) -> String {
     output
 }
 
+#[derive(Default)]
+struct SharedDisplayState {
+    capture: bool,
+    output: Vec<u8>,
+}
+
 #[derive(Clone, Default)]
-struct SharedDisplayBuffer(Arc<Mutex<Vec<u8>>>);
+struct SharedDisplayBuffer(Arc<Mutex<SharedDisplayState>>);
 
 impl std::io::Write for SharedDisplayBuffer {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.0
-            .lock()
-            .expect("display sanitizer buffer poisoned")
-            .extend_from_slice(bytes);
+        let mut state = self.0.lock().expect("display sanitizer buffer poisoned");
+        if state.capture {
+            state.output.extend_from_slice(bytes);
+        }
         Ok(bytes.len())
     }
 
@@ -49,35 +55,60 @@ impl std::io::Write for SharedDisplayBuffer {
 /// all preceding chunks.
 pub(crate) struct StreamingDisplaySanitizer {
     writer: strip_ansi_escapes::Writer<SharedDisplayBuffer>,
-    output: Arc<Mutex<Vec<u8>>>,
+    state: Arc<Mutex<SharedDisplayState>>,
 }
 
 impl StreamingDisplaySanitizer {
     pub(crate) fn new() -> Self {
         let sink = SharedDisplayBuffer::default();
-        let output = sink.0.clone();
+        let state = sink.0.clone();
         Self {
             writer: strip_ansi_escapes::Writer::new(sink),
-            output,
+            state,
         }
     }
 
     pub(crate) fn push(&mut self, raw: &str) -> String {
+        self.set_capture(true);
+        self.write_raw(raw);
+        let bytes = {
+            let mut state = self
+                .state
+                .lock()
+                .expect("display sanitizer buffer poisoned");
+            std::mem::take(&mut state.output)
+        };
+        let stripped = String::from_utf8(bytes)
+            .expect("ANSI stripping valid UTF-8 PTY text must preserve UTF-8");
+        sanitize_stripped_text(&stripped)
+    }
+
+    pub(crate) fn advance(&mut self, raw: &str) {
+        self.set_capture(false);
+        self.write_raw(raw);
+        self.state
+            .lock()
+            .expect("display sanitizer buffer poisoned")
+            .output
+            .clear();
+    }
+
+    fn set_capture(&self, capture: bool) {
+        let mut state = self
+            .state
+            .lock()
+            .expect("display sanitizer buffer poisoned");
+        state.capture = capture;
+        state.output.clear();
+    }
+
+    fn write_raw(&mut self, raw: &str) {
         self.writer
             .write_all(raw.as_bytes())
             .expect("writing to the in-memory display sanitizer cannot fail");
         self.writer
             .flush()
             .expect("flushing the in-memory display sanitizer cannot fail");
-        let bytes = std::mem::take(
-            &mut *self
-                .output
-                .lock()
-                .expect("display sanitizer buffer poisoned"),
-        );
-        let stripped = String::from_utf8(bytes)
-            .expect("ANSI stripping valid UTF-8 PTY text must preserve UTF-8");
-        sanitize_stripped_text(&stripped)
     }
 }
 

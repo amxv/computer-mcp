@@ -11,6 +11,7 @@ mod lifecycle_start;
 #[cfg(test)]
 mod lifecycle_tests;
 mod observability;
+mod observer_client;
 mod parse;
 mod paths;
 mod presentation;

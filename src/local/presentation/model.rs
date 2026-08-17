@@ -3,6 +3,10 @@ use serde::{Deserialize, Serialize};
 pub const PRESENTATION_SCHEMA_VERSION: u32 = 2;
 pub(crate) const PRESENTATION_RAW_INVOCATION_ID_SAMPLE_LIMIT: usize = 32;
 
+pub(crate) fn presentation_id_for_root(primary_invocation_id: i64) -> String {
+    format!("inv-{primary_invocation_id}")
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PresentationDocument {
     pub schema_version: u32,

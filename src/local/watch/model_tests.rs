@@ -1,7 +1,7 @@
 use serde_json::json;
 use std::time::{Duration, Instant};
 
-use super::super::history::HistoryLiveEvent;
+use super::super::history::{HISTORY_LIVE_EVENT_SCHEMA_VERSION, HistoryLiveEvent};
 use super::super::{
     PRESENTATION_SCHEMA_VERSION, PresentationDocument, PresentationKind, PresentationPollSummary,
 };
@@ -73,14 +73,15 @@ fn agent_refresh_does_not_replace_runtime_wide_active_process_count() {
     );
 
     let effects = app.note_live_event(&HistoryLiveEvent {
-        schema_version: 1,
+        schema_version: HISTORY_LIVE_EVENT_SCHEMA_VERSION,
         runtime_id: RUNTIME_ID.to_owned(),
         sequence: 2,
         emitted_at_ms: 20,
         event_type: "process_started".to_owned(),
         agent_id: None,
         invocation_id: Some(2),
-        presentation_revision: Some(1),
+        presentation_id: Some("inv-2".to_owned()),
+        presentation_revision: Some(PRESENTATION_SCHEMA_VERSION),
         payload: json!({"active_process_count": 4}),
     });
     assert_eq!(app.status_active_process_count, 4);
@@ -96,14 +97,15 @@ fn agent_refresh_does_not_replace_runtime_wide_active_process_count() {
 fn waiting_surfaces_unattributed_without_inventing_agent_identity() {
     let mut app = WatchApp::new(&bootstrap(Vec::new()), automatic());
     let effects = app.note_live_event(&HistoryLiveEvent {
-        schema_version: 1,
+        schema_version: HISTORY_LIVE_EVENT_SCHEMA_VERSION,
         runtime_id: RUNTIME_ID.to_owned(),
         sequence: 1,
         emitted_at_ms: 10,
         event_type: "invocation_started".to_owned(),
         agent_id: None,
         invocation_id: Some(1),
-        presentation_revision: Some(1),
+        presentation_id: Some("inv-1".to_owned()),
+        presentation_revision: Some(PRESENTATION_SCHEMA_VERSION),
         payload: json!({}),
     });
     assert!(effects.is_empty());
@@ -143,14 +145,15 @@ fn waiting_to_one_agent_resubscribes_and_live_handover_is_scoped_and_deduplicate
     );
 
     let unrelated = HistoryLiveEvent {
-        schema_version: 1,
+        schema_version: HISTORY_LIVE_EVENT_SCHEMA_VERSION,
         runtime_id: RUNTIME_ID.to_owned(),
         sequence: 10,
         emitted_at_ms: 10,
         event_type: "invocation_started".to_owned(),
         agent_id: Some("m4n8".to_owned()),
         invocation_id: Some(10),
-        presentation_revision: Some(1),
+        presentation_id: Some("inv-10".to_owned()),
+        presentation_revision: Some(PRESENTATION_SCHEMA_VERSION),
         payload: json!({}),
     };
     assert!(!app.should_process_live_event(&unrelated));
@@ -159,6 +162,7 @@ fn waiting_to_one_agent_resubscribes_and_live_handover_is_scoped_and_deduplicate
         sequence: 9,
         agent_id: Some("k7m2".to_owned()),
         invocation_id: Some(9),
+        presentation_id: Some("inv-9".to_owned()),
         ..unrelated
     };
     assert!(app.should_process_live_event(&selected));
@@ -445,14 +449,15 @@ fn workdir_and_gap_events_are_visible_without_history_preload() {
         automatic(),
     );
     let workdir_effects = app.note_live_event(&HistoryLiveEvent {
-        schema_version: 1,
+        schema_version: HISTORY_LIVE_EVENT_SCHEMA_VERSION,
         runtime_id: RUNTIME_ID.to_owned(),
         sequence: 2,
         emitted_at_ms: 20,
         event_type: "agent_workdir_added".to_owned(),
         agent_id: Some("k7m2".to_owned()),
         invocation_id: Some(2),
-        presentation_revision: Some(1),
+        presentation_id: Some("inv-2".to_owned()),
+        presentation_revision: Some(PRESENTATION_SCHEMA_VERSION),
         payload: json!({"normalized_workdir": "/workspace/new"}),
     });
     assert_eq!(app.new_workdir_notice(), Some("/workspace/new"));
@@ -463,13 +468,14 @@ fn workdir_and_gap_events_are_visible_without_history_preload() {
     assert_eq!(workdir_effects, vec![WatchEffect::RefreshAgents]);
 
     let gap_effects = app.note_live_event(&HistoryLiveEvent {
-        schema_version: 1,
+        schema_version: HISTORY_LIVE_EVENT_SCHEMA_VERSION,
         runtime_id: RUNTIME_ID.to_owned(),
         sequence: 12,
         emitted_at_ms: 30,
         event_type: "gap".to_owned(),
         agent_id: Some("k7m2".to_owned()),
         invocation_id: None,
+        presentation_id: None,
         presentation_revision: None,
         payload: json!({"skipped_events": 9}),
     });

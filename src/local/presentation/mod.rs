@@ -16,6 +16,7 @@ pub(crate) use input::{
     PresentationInput, PresentationOrphanPollInput, PresentationPollAggregateInput,
 };
 pub(crate) use model::PRESENTATION_RAW_INVOCATION_ID_SAMPLE_LIMIT;
+pub(crate) use model::presentation_id_for_root;
 pub use model::{
     PRESENTATION_SCHEMA_VERSION, PresentationAgent, PresentationDiffLine, PresentationDocument,
     PresentationEvidence, PresentationFileChange, PresentationFileOperation, PresentationKind,

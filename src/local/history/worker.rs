@@ -16,13 +16,14 @@ use crate::invocation::{
 use crate::local::file_evidence::{
     CompletedFileEvidence, PendingFileEvidence, complete_file_evidence, prepare_file_evidence,
 };
-use crate::local::presentation::{PRESENTATION_SCHEMA_VERSION, sanitize_display_text};
+use crate::local::presentation::PRESENTATION_SCHEMA_VERSION;
 use crate::session::{
     OwnedProcess, OwnedProcessEnd, OwnedProcessObserver, SessionOutputChunk,
     SessionOutputCompletion, SessionOutputObserver,
 };
 
 use super::events::{HistoryEventHub, HistoryLiveEvent};
+use super::live_display::LiveDisplayStreams;
 use super::store::{
     HistoryStore, OutputEvent, distinct_invocation_ids, mark_retention_error_best_effort,
     normalize_declared_workdir, now_ms,
@@ -453,12 +454,14 @@ impl InvocationEvidenceRecorder for LocalHistoryRuntime {
             Ok(begin) => {
                 let context = begin.context;
                 let invocation_id = context.invocation_id;
+                let presentation_root_invocation_id = begin.presentation_root_invocation_id;
                 let agent_id = context.agent_id.as_deref();
                 if begin.agent_first_seen_in_runtime {
                     self.events.emit_with(
                         "agent_first_seen",
                         agent_id,
                         invocation_id,
+                        presentation_root_invocation_id,
                         None,
                         || json!({}),
                     );
@@ -468,6 +471,7 @@ impl InvocationEvidenceRecorder for LocalHistoryRuntime {
                         "agent_workdir_added",
                         agent_id,
                         invocation_id,
+                        presentation_root_invocation_id,
                         Some(PRESENTATION_SCHEMA_VERSION),
                         || json!({"normalized_workdir": new_workdir}),
                     );
@@ -476,6 +480,7 @@ impl InvocationEvidenceRecorder for LocalHistoryRuntime {
                     "invocation_started",
                     agent_id,
                     invocation_id,
+                    presentation_root_invocation_id,
                     Some(PRESENTATION_SCHEMA_VERSION),
                     || {
                         json!({
@@ -548,9 +553,13 @@ impl InvocationEvidenceRecorder for LocalHistoryRuntime {
         // path on the history writer.
         self.health.degrade_nonblocking(&reason);
         match self.store.complete(context, outcome.clone()) {
-            Ok(()) => {
+            Ok(completion) => {
                 persist_completed_file_evidence(&self.store, invocation_id, &file_evidence);
-                emit_completion_events(&self.events, context, &outcome);
+                self.events.emit_invocation_completion(
+                    context,
+                    &outcome,
+                    completion.presentation_root_invocation_id,
+                );
                 self.health
                     .maintenance_requested
                     .store(true, Ordering::Release);
@@ -647,7 +656,8 @@ impl OwnedProcessObserver for LocalHistoryRuntime {
             "process_started",
             agent_id,
             Some(invocation_id),
-            None,
+            Some(invocation_id),
+            Some(PRESENTATION_SCHEMA_VERSION),
             || {
                 json!({
                     "active_process_count": active_process_count,
@@ -704,13 +714,27 @@ impl OwnedProcessObserver for LocalHistoryRuntime {
             active
         });
         if lifecycle_result.is_ok() {
-            self.events
-                .emit_with("process_ended", agent_id, Some(invocation_id), None, || {
+            self.events.emit_with(
+                "process_ended",
+                agent_id,
+                Some(invocation_id),
+                Some(invocation_id),
+                Some(PRESENTATION_SCHEMA_VERSION),
+                || {
                     json!({
                         "active_process_count": active_process_count,
                         "agent_active_process_count": agent_active_process_count,
                     })
-                });
+                },
+            );
+            self.events.emit_with(
+                "presentation_updated",
+                agent_id,
+                Some(invocation_id),
+                Some(invocation_id),
+                Some(PRESENTATION_SCHEMA_VERSION),
+                || json!({"source": "process_ended"}),
+            );
         }
         lifecycle_result?;
         retention_result
@@ -730,6 +754,7 @@ fn run_worker(
     // this worker, so future maintenance can honor the normal coalescing
     // interval instead of racing the first evidence messages.
     let mut last_maintenance = Some(Instant::now());
+    let mut live_display = LiveDisplayStreams::new();
     while !shutdown {
         let mut messages = Vec::with_capacity(OUTPUT_BATCH_LIMIT);
         match receiver.recv_timeout(OUTPUT_BATCH_WAIT) {
@@ -761,7 +786,7 @@ fn run_worker(
             }
         }
 
-        process_messages(messages, &store, &health, &events);
+        process_messages(messages, &store, &health, &events, &mut live_display);
 
         let maintenance_due = health.maintenance_requested.load(Ordering::Acquire)
             && last_maintenance
@@ -787,6 +812,7 @@ fn process_messages(
     store: &HistoryStore,
     health: &HistoryHealth,
     events: &HistoryEventHub,
+    live_display: &mut LiveDisplayStreams,
 ) {
     let mut output_events = Vec::new();
     for message in messages {
@@ -797,27 +823,34 @@ fn process_messages(
                 outcome,
                 file_evidence,
             } => {
-                flush_output_events(&mut output_events, store, health, events);
+                flush_output_events(&mut output_events, store, health, events, live_display);
                 let invocation_id = context.invocation_id;
-                if let Err(error) = store.complete(&context, outcome.clone()) {
-                    if let Some(invocation_id) = invocation_id {
-                        health.note_evidence_incomplete(invocation_id);
+                match store.complete(&context, outcome.clone()) {
+                    Err(error) => {
+                        if let Some(invocation_id) = invocation_id {
+                            health.note_evidence_incomplete(invocation_id);
+                        }
+                        health.degrade_persisting(
+                            store,
+                            format!("invocation completion persistence failed: {error}"),
+                        );
                     }
-                    health.degrade_persisting(
-                        store,
-                        format!("invocation completion persistence failed: {error}"),
-                    );
-                } else {
-                    if let Some(invocation_id) = invocation_id {
-                        persist_completed_file_evidence(store, invocation_id, &file_evidence);
+                    Ok(completion) => {
+                        if let Some(invocation_id) = invocation_id {
+                            persist_completed_file_evidence(store, invocation_id, &file_evidence);
+                        }
+                        events.emit_invocation_completion(
+                            &context,
+                            &outcome,
+                            completion.presentation_root_invocation_id,
+                        );
+                        health.maintenance_requested.store(true, Ordering::Release);
                     }
-                    emit_completion_events(events, &context, &outcome);
-                    health.maintenance_requested.store(true, Ordering::Release);
                 }
             }
             #[cfg(test)]
             WorkerMessage::Barrier(acknowledge) => {
-                flush_output_events(&mut output_events, store, health, events);
+                flush_output_events(&mut output_events, store, health, events, live_display);
                 let _ = acknowledge.send(());
             }
             WorkerMessage::Shutdown => {
@@ -825,7 +858,7 @@ fn process_messages(
             }
         }
     }
-    flush_output_events(&mut output_events, store, health, events);
+    flush_output_events(&mut output_events, store, health, events, live_display);
     if !health.accepting_new.load(Ordering::Acquire) {
         health.persist_degraded_state(store);
     }
@@ -861,6 +894,7 @@ fn flush_output_events(
     store: &HistoryStore,
     health: &HistoryHealth,
     live_events: &HistoryEventHub,
+    live_display: &mut LiveDisplayStreams,
 ) {
     if events.is_empty() {
         return;
@@ -880,57 +914,50 @@ fn flush_output_events(
                     sequence,
                     text,
                     ..
-                } => live_events.emit_with(
-                    "output",
-                    agent_id.as_deref(),
-                    Some(*invocation_id),
-                    None,
-                    || {
-                        json!({
-                            "output_sequence": sequence,
-                            "text": sanitize_display_text(text),
-                        })
-                    },
-                ),
+                } => {
+                    let display = live_display.observe(
+                        *invocation_id,
+                        *sequence,
+                        text,
+                        live_events.has_subscribers(),
+                    );
+                    live_events.emit_with(
+                        "output",
+                        agent_id.as_deref(),
+                        Some(*invocation_id),
+                        Some(*invocation_id),
+                        Some(PRESENTATION_SCHEMA_VERSION),
+                        || {
+                            json!({
+                                "output_sequence": sequence,
+                                "text": display.text,
+                                "display_state": display.state,
+                                "display_reason": display.reason,
+                            })
+                        },
+                    );
+                }
                 OutputEvent::Complete {
                     invocation_id,
                     agent_id,
-                } => live_events.emit_with(
-                    "output_complete",
-                    agent_id.as_deref(),
-                    Some(*invocation_id),
-                    None,
-                    || json!({}),
-                ),
+                } => {
+                    let display = live_display.complete(*invocation_id);
+                    live_events.emit_with(
+                        "output_complete",
+                        agent_id.as_deref(),
+                        Some(*invocation_id),
+                        Some(*invocation_id),
+                        Some(PRESENTATION_SCHEMA_VERSION),
+                        || {
+                            json!({
+                                "display_state": display.state,
+                                "display_reason": display.reason,
+                            })
+                        },
+                    );
+                }
             }
         }
     }
     events.clear();
-}
-
-fn emit_completion_events(
-    events: &HistoryEventHub,
-    context: &InvocationContext,
-    outcome: &InvocationOutcome,
-) {
-    let invocation_id = context.invocation_id;
-    let agent_id = context.agent_id.as_deref();
-    let outcome_kind = match outcome {
-        InvocationOutcome::Success(_) => "success",
-        InvocationOutcome::Error(_) => "error",
-    };
-    events.emit_with(
-        "invocation_completed",
-        agent_id,
-        invocation_id,
-        Some(PRESENTATION_SCHEMA_VERSION),
-        || json!({"outcome": outcome_kind}),
-    );
-    events.emit_with(
-        "presentation_updated",
-        agent_id,
-        invocation_id,
-        Some(PRESENTATION_SCHEMA_VERSION),
-        || json!({}),
-    );
 }

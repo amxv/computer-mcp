@@ -2,6 +2,8 @@ mod model;
 mod server;
 
 #[cfg(test)]
+mod event_v2_tests;
+#[cfg(test)]
 mod recovery_tests;
 #[cfg(test)]
 mod tests;
@@ -13,5 +15,6 @@ pub(crate) use model::ApiLogicalInvocation;
 pub use model::LOCAL_OBSERVABILITY_API_VERSION;
 pub(crate) use model::{
     ApiAgent, ApiAgentList, ApiInvocationDetail, ApiInvocationList, ApiStatusDocument,
+    ApiTimelineDetail,
 };
 pub use server::{LocalObservabilityServer, start_local_observability_server};
