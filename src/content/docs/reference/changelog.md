@@ -8,6 +8,11 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.3.7 — 2026-08-18
+
+- Fixed macOS menu validation so AppKit no longer re-enables lifecycle actions that Zodex status marked disabled.
+- Made the lifecycle row show `Zodex is Running`, `Starting Zodex…`, and `Stopping Zodex…` so Local transitions are visible immediately while the CLI action is in flight.
+
 ## 0.3.6 — 2026-08-18
 
 - Fixed the operator upgrade state model to compile warning-free under Linux CI while preserving the macOS Local safety states.

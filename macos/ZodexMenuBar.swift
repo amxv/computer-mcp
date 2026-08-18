@@ -134,6 +134,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         }
 
         menu.delegate = self
+        menu.autoenablesItems = false
         menu.addItem(startItem)
         menu.addItem(stopItem)
         menu.addItem(liveboardItem)
@@ -253,20 +254,25 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
 
         switch status.state {
         case "running":
+            startItem.title = "Zodex is Running"
             startItem.isEnabled = false
             stopItem.isEnabled = true
             liveboardItem.isEnabled = true
         case "stale":
+            startItem.title = "Start Zodex"
             startItem.isEnabled = false
             stopItem.isEnabled = true
             liveboardItem.isEnabled = false
         case "stopped":
+            startItem.title = "Start Zodex"
             startItem.isEnabled = validStartFolder != nil
             stopItem.isEnabled = false
             liveboardItem.isEnabled = false
         case "unconfigured":
+            startItem.title = "Start Zodex"
             disableRuntimeActions()
         default:
+            startItem.title = "Start Zodex"
             enableFallbackActions()
         }
     }
@@ -289,11 +295,13 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
             return
         }
         commandInFlight = true
+        startItem.title = "Starting Zodex…"
         disableRuntimeActions()
         runZodexStart(path: path) { [weak self] result in
             guard let self else { return }
             self.commandInFlight = false
             if result.exitCode != 0 {
+                self.startItem.title = "Start Zodex"
                 self.showCommandError("Start Zodex failed", result: result)
             }
             self.refreshStatus()
@@ -302,6 +310,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
 
     @objc private func stopZodex() {
         commandInFlight = true
+        startItem.title = "Stopping Zodex…"
         disableRuntimeActions()
         runZodex(["local", "stop"]) { [weak self] result in
             guard let self else { return }
@@ -309,6 +318,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
             if result.exitCode == 0 {
                 self.stopLiveboardHost()
             } else {
+                self.startItem.title = "Zodex is Running"
                 self.showCommandError("Stop Zodex failed", result: result)
             }
             self.refreshStatus()
