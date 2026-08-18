@@ -9,6 +9,23 @@ Zodex is a Rust MCP coding harness with two first-class execution modes:
 
 Both modes expose exactly three model-facing tools: `exec_command`, `write_stdin`, and `apply_patch`. Model-visible execution and patch calls require an explicit absolute existing `workdir`; there is no ambient working-directory fallback.
 
+## Repository layout
+
+The repository is organized by product responsibility:
+
+```text
+src/                        Rust core, runtime, CLI, and MCP implementation
+apps/liveboard/             SolidJS observability dashboard
+apps/menubar/               native macOS menu bar app
+services/cloudflare-proxy/  Cloudflare Worker used by Sprite deployments
+docs/                       Astro documentation site
+scripts/                    repository, install, and release automation
+examples/                   public integration examples
+tests/                      Rust integration tests
+```
+
+Keep component-specific source inside its owning directory. Do not put frontend, Swift, docs-site, or Worker source into the root Rust `src/` tree.
+
 ## Product command shape
 
 The public operator root is mode-first:
@@ -75,8 +92,9 @@ Before submitting changes, run the repository checks appropriate to the files to
 
 ```bash
 bash scripts/check.sh
-bun run check
-bun run build
+(cd apps/liveboard && bun run typecheck && bun run test && bun run build)
+(cd services/cloudflare-proxy && bun test src/index.test.js)
+(cd docs && bun run check && bun run build)
 actionlint .github/workflows/*.yml
 ```
 

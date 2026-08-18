@@ -3,7 +3,7 @@ title: "Docs site"
 description: "Maintainer reference for running, validating, and deploying the Zodex documentation site."
 order: 4
 category: Reference
-summary: "Repository-maintainer notes for the embedded Astro documentation app."
+summary: "Repository-maintainer notes for the Astro documentation site."
 ---
 
 ## Local development
@@ -11,6 +11,7 @@ summary: "Repository-maintainer notes for the embedded Astro documentation app."
 Install dependencies and start Astro:
 
 ```bash
+cd docs
 bun install
 bun run dev
 ```
@@ -23,26 +24,27 @@ http://localhost:4321
 
 ## Files to edit
 
-The docs site lives next to the Rust project:
+The docs site is isolated under `docs/`:
 
 ```text
-src/data/docs.ts                site name, repo URL, navigation, categories
-src/pages/index.astro           overview page
-src/pages/docs/index.astro      grouped docs index
-src/pages/docs/[...slug].astro  article route
-src/pages/docs.md.ts            raw markdown docs index
-src/pages/docs/[...slug].md.ts  raw markdown page route
-src/content/docs/**/*.md        documentation pages
-src/styles/global.css           visual system
+docs/src/data/docs.ts                site name, repo URL, navigation, categories
+docs/src/pages/index.astro           overview page
+docs/src/pages/docs/index.astro      grouped docs index
+docs/src/pages/docs/[...slug].astro  article route
+docs/src/pages/docs.md.ts            raw markdown docs index
+docs/src/pages/docs/[...slug].md.ts  raw markdown page route
+docs/src/content/docs/**/*.md        documentation pages
+docs/src/styles/global.css           visual system
 ```
 
-Use `src/content/docs` for most documentation changes. Use `src/pages/index.astro` for the overview narrative and product positioning.
+Use `docs/src/content/docs` for most documentation changes. Use `docs/src/pages/index.astro` for the overview narrative and product positioning.
 
 ## Validate the docs site
 
 Run:
 
 ```bash
+cd docs
 bun run check
 bun run build
 ```
@@ -66,6 +68,7 @@ Commit source files, lockfiles, and content. Do not commit local build output.
 The site builds to static output in `dist` and can be deployed by any static host:
 
 ```bash
+cd docs
 bun run build
 ```
 

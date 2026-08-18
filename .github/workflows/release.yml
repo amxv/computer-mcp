@@ -51,7 +51,7 @@ jobs:
 
       - name: Build Liveboard assets
         if: contains(matrix.target, 'apple-darwin')
-        working-directory: web/liveboard
+        working-directory: apps/liveboard
         run: |
           bun install --frozen-lockfile
           bun run build
@@ -71,7 +71,7 @@ jobs:
       - name: Build macOS menu bar app
         if: contains(matrix.target, 'apple-darwin')
         run: |
-          scripts/build-menubar-app.sh "target/${{ matrix.target }}/release/Zodex.app"
+          apps/menubar/build.sh "target/${{ matrix.target }}/release/Zodex.app"
 
       - name: Package release archive
         run: |

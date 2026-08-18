@@ -9,7 +9,7 @@
     "build": "astro build",
     "preview": "astro preview",
     "check": "astro check",
-    "check:repo": "bash scripts/check.sh"
+    "check:repo": "bash ../scripts/check.sh"
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.4",

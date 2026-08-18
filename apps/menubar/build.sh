@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+component_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "${component_root}/../.." && pwd)"
 output="${1:-${repo_root}/target/debug/Zodex.app}"
 binary="${output}/Contents/MacOS/zodex-menubar"
 version="$(sed -n '/^\[package\]/,/^\[/ s/^version = "\([^"]*\)"/\1/p' "${repo_root}/Cargo.toml" | head -n 1)"
@@ -14,14 +15,14 @@ bundle_version="${version%%[-+]*}"
 
 rm -rf "${output}"
 mkdir -p "$(dirname "${binary}")"
-cp "${repo_root}/macos/ZodexMenuBar-Info.plist" "${output}/Contents/Info.plist"
+cp "${component_root}/Info.plist" "${output}/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${bundle_version}" "${output}/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${bundle_version}" "${output}/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :ZodexVersion ${version}" "${output}/Contents/Info.plist"
 
 swiftc -O \
   -target arm64-apple-macos13.0 \
-  "${repo_root}/macos/ZodexMenuBar.swift" \
+  "${component_root}/main.swift" \
   -o "${binary}"
 
 codesign --force --sign - "${output}" >/dev/null

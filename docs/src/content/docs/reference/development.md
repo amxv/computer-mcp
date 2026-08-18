@@ -29,19 +29,19 @@ The tests cover binary manifests, CLI behavior, GitHub App scripts, install beha
 
 ## Liveboard checks
 
-Liveboard is an isolated frontend package under `web/liveboard`. On macOS its production assets are embedded into the `zodex` binary by `build.rs`; Linux/Sprite builds do not require frontend tooling.
+Liveboard is an isolated frontend app under `apps/liveboard`. On macOS its production assets are embedded into the `zodex` binary by `build.rs`; Linux/Sprite builds do not require frontend tooling.
 
 For visual development against the real currently running Local runtime, use the attached dev server:
 
 ```bash
-cd web/liveboard
+cd apps/liveboard
 bun run dev:live
 ```
 
 The launcher builds a repo-local Zodex viewer once, starts `zodex local watch --no-open` against the active Local observer, and runs Vite with HMR. Vite proxies Liveboard API, SSE, and preference requests through that temporary same-origin capability host, so the observability bearer remains outside browser JavaScript. It does not restart or replace the running Local runtime.
 
 ```bash
-cd web/liveboard
+cd apps/liveboard
 bun install --frozen-lockfile
 bunx playwright install chromium webkit
 bun run typecheck
@@ -51,7 +51,7 @@ bun run test:browser:webkit
 bun run build
 ```
 
-Do not commit `web/liveboard/node_modules/` or `web/liveboard/dist/`.
+Do not commit `apps/liveboard/node_modules/` or `apps/liveboard/dist/`.
 
 For an embed-required macOS validation, build the frontend first and then run Cargo with:
 
@@ -66,6 +66,7 @@ CI does this only on the native macOS lane. Release builds likewise install Bun/
 Run:
 
 ```bash
+cd docs
 bun install
 bun run check
 bun run build

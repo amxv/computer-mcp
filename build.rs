@@ -6,7 +6,7 @@ const EMBED_REQUIRED_ENV: &str = "ZODEX_LIVEBOARD_EMBED_REQUIRED";
 
 fn main() {
     println!("cargo:rerun-if-env-changed={EMBED_REQUIRED_ENV}");
-    println!("cargo:rerun-if-changed=web/liveboard/dist");
+    println!("cargo:rerun-if-changed=apps/liveboard/dist");
 
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo must provide OUT_DIR"));
     let generated = out_dir.join("liveboard_assets.rs");
@@ -26,16 +26,16 @@ fn main() {
         return;
     }
 
-    let dist = Path::new("web/liveboard/dist");
+    let dist = Path::new("apps/liveboard/dist");
     if !dist.join("index.html").is_file() {
         if required {
             panic!(
-                "Liveboard assets are required for this macOS build but web/liveboard/dist/index.html is missing. Run `cd web/liveboard && bun install --frozen-lockfile && bun run build` before Cargo."
+                "Liveboard assets are required for this macOS build but apps/liveboard/dist/index.html is missing. Run `cd apps/liveboard && bun install --frozen-lockfile && bun run build` before Cargo."
             );
         }
         write_unavailable(
             &generated,
-            "Liveboard assets were not embedded in this development build. Run `cd web/liveboard && bun run build`, then rebuild Zodex with ZODEX_LIVEBOARD_EMBED_REQUIRED=1.",
+            "Liveboard assets were not embedded in this development build. Run `cd apps/liveboard && bun run build`, then rebuild Zodex with ZODEX_LIVEBOARD_EMBED_REQUIRED=1.",
         );
         return;
     }

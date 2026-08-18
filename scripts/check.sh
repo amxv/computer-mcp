@@ -15,7 +15,7 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
   echo "==> Swift menu bar app"
   menubar_check="$(mktemp -d "${TMPDIR:-/tmp}/zodex-menubar-check.XXXXXX")/Zodex.app"
   trap 'rm -rf "$(dirname "$menubar_check")"' EXIT
-  scripts/build-menubar-app.sh "$menubar_check"
+  apps/menubar/build.sh "$menubar_check"
   codesign --verify --deep --strict "$menubar_check"
   bundle_version="$(/usr/libexec/PlistBuddy -c 'Print :ZodexVersion' "$menubar_check/Contents/Info.plist")"
   package_version="$(sed -n '/^\[package\]/,/^\[/ s/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)"

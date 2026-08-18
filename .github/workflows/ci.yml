@@ -15,13 +15,14 @@ on:
       - AGENTS.md
       - .agents/**
       - scripts/check.sh
-      - scripts/build-menubar-app.sh
       - scripts/check-product-contract.sh
       - scripts/install.sh
-      - macos/**
+      - apps/liveboard/**
+      - apps/menubar/**
+      - docs/**
+      - services/cloudflare-proxy/**
       - src/**
       - tests/**
-      - web/liveboard/**
   pull_request:
     branches:
       - main
@@ -35,13 +36,14 @@ on:
       - AGENTS.md
       - .agents/**
       - scripts/check.sh
-      - scripts/build-menubar-app.sh
       - scripts/check-product-contract.sh
       - scripts/install.sh
-      - macos/**
+      - apps/liveboard/**
+      - apps/menubar/**
+      - docs/**
+      - services/cloudflare-proxy/**
       - src/**
       - tests/**
-      - web/liveboard/**
   workflow_dispatch:
 
 permissions:
@@ -109,13 +111,13 @@ jobs:
           bun-version: 1.3.11
 
       - name: Install Liveboard dependencies and browsers
-        working-directory: web/liveboard
+        working-directory: apps/liveboard
         run: |
           bun install --frozen-lockfile
           bunx playwright install chromium webkit
 
       - name: Validate and build Liveboard
-        working-directory: web/liveboard
+        working-directory: apps/liveboard
         run: |
           bun run typecheck
           bun run test

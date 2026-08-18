@@ -3,7 +3,7 @@ tmp/
 target/
 .DS_Store
 
-# Astro docs
+# JavaScript app build output
 node_modules/
 .astro/
 dist/
@@ -13,5 +13,5 @@ coverage/
 .env*.local
 
 # Local Liveboard browser-test failure artifacts
-/web/liveboard/.vitest-attachments/
-/web/liveboard/src/**/__screenshots__/
+/apps/liveboard/.vitest-attachments/
+/apps/liveboard/src/**/__screenshots__/

@@ -1,9 +1,9 @@
 const PROXY_WORKER_COMPONENT: &str = "zodex-cloudflare-worker";
 const PROXY_WORKER_SOURCE: &str =
-    include_str!("../../../proxy/cloudflare-worker/src/index.js");
+    include_str!("../../../services/cloudflare-proxy/src/index.js");
 const PROXY_WRANGLER_TEMPLATE: &str =
-    include_str!("../../../proxy/cloudflare-worker/wrangler.jsonc");
-const PROXY_PACKAGE_JSON: &str = include_str!("../../../proxy/cloudflare-worker/package.json");
+    include_str!("../../../services/cloudflare-proxy/wrangler.jsonc");
+const PROXY_PACKAGE_JSON: &str = include_str!("../../../services/cloudflare-proxy/package.json");
 const PROXY_SPRITE_ORIGIN_PLACEHOLDER: &str = "__SPRITE_ORIGIN__";
 const PROXY_WORKER_NAME_PLACEHOLDER: &str = "__WORKER_NAME__";
 const PROXY_WORKER_BUILD_PLACEHOLDER: &str = "__ZODEX_WORKER_BUILD__";

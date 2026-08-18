@@ -429,9 +429,9 @@ fn public_install_docs_invoke_the_bash_installer() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     for relative in [
         "README.md",
-        "src/content/docs/local.md",
-        "src/content/docs/local/setup.md",
-        "src/content/docs/sprite.md",
+        "docs/src/content/docs/local.md",
+        "docs/src/content/docs/local/setup.md",
+        "docs/src/content/docs/sprite.md",
     ] {
         let text = std::fs::read_to_string(root.join(relative)).expect("read public install docs");
         assert!(

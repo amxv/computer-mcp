@@ -64,7 +64,7 @@ mod tests {
         if let Err(error) = ensure_available() {
             let message = error.to_string();
             assert!(message.contains("Liveboard assets were not embedded"));
-            assert!(message.contains("web/liveboard"));
+            assert!(message.contains("apps/liveboard"));
             assert!(message.contains("bun run build"));
             return;
         }
