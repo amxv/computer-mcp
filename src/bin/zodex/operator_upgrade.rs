@@ -55,9 +55,13 @@ impl UpgradeDirection {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum UpgradeLocalState {
+    #[cfg(target_os = "macos")]
     Unconfigured,
+    #[cfg(target_os = "macos")]
     Stopped,
+    #[cfg(target_os = "macos")]
     Running,
+    #[cfg(target_os = "macos")]
     Stale,
     #[cfg(not(target_os = "macos"))]
     Unsupported,
@@ -66,9 +70,13 @@ enum UpgradeLocalState {
 impl UpgradeLocalState {
     fn as_str(self) -> &'static str {
         match self {
+            #[cfg(target_os = "macos")]
             Self::Unconfigured => "unconfigured",
+            #[cfg(target_os = "macos")]
             Self::Stopped => "stopped",
+            #[cfg(target_os = "macos")]
             Self::Running => "running",
+            #[cfg(target_os = "macos")]
             Self::Stale => "stale",
             #[cfg(not(target_os = "macos"))]
             Self::Unsupported => "unsupported",
@@ -76,7 +84,14 @@ impl UpgradeLocalState {
     }
 
     fn blocks_upgrade(self) -> bool {
-        matches!(self, Self::Running | Self::Stale)
+        #[cfg(target_os = "macos")]
+        {
+            matches!(self, Self::Running | Self::Stale)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            false
+        }
     }
 }
 

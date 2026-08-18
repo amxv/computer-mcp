@@ -8,6 +8,10 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.3.6 — 2026-08-18
+
+- Fixed the operator upgrade state model to compile warning-free under Linux CI while preserving the macOS Local safety states.
+
 ## 0.3.5 — 2026-08-18
 
 - Added a tiny native macOS menu-bar app for Zodex Local with persistent Start Folder controls, Start/Stop/Liveboard actions, opt-out setup, and user-controlled Launch at Login without auto-starting the Local runtime.
