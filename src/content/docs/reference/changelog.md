@@ -8,6 +8,12 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.3.5 — 2026-08-18
+
+- Added a tiny native macOS menu-bar app for Zodex Local with persistent Start Folder controls, Start/Stop/Liveboard actions, opt-out setup, and user-controlled Launch at Login without auto-starting the Local runtime.
+- Rebuilt `zodex upgrade` around a single Rust-owned upgrade state machine with fast no-op checks, streamed human/JSON progress, semver-aware targeting, checksum verification, upgrade locking, Local safety, short check caching, and in-place updates for the CLI and menu app.
+- Added menu-bar update controls that consume the CLI upgrade contract directly, including on-demand checks, update progress, and explicit Stop and Update handling when Local is running.
+
 ## 0.3.4 — 2026-08-18
 
 - Kept large file changes as structured Liveboard diff cards instead of falling back to generic `apply_patch completed` rows, with fast large-file trimming, time-bounded diffing, and a 500-row preview cap for very large changes.

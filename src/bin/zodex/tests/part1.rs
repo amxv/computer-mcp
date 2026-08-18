@@ -6,7 +6,7 @@
         ResolvedSprite, SPRITE_MAIN_SERVICE_LABEL, SpriteCommand, SpriteGithubCommand,
         SpriteServiceAction, SpriteServiceState, SpriteServiceStatus, browser_open_attempts,
         build_github_yolo_agent_git_status_lines, build_github_yolo_mode_record,
-        build_github_yolo_mode_record_at, build_operator_upgrade_shell_args, build_sprite_api_args,
+        build_github_yolo_mode_record_at, build_sprite_api_args,
         build_sprite_detached_stop_script, build_sprite_services_status_lines, build_sprite_setup_script,
         build_sprite_upgrade_script,
         ensure_proxy_origin_is_publicly_routable, ensure_temporary_wrangler_version,
@@ -148,15 +148,6 @@
         .expect_err("setup should still require --sprite");
 
         assert!(err.to_string().contains("--sprite"));
-    }
-
-    #[test]
-    fn build_operator_upgrade_shell_args_uses_public_installer() {
-        let args = build_operator_upgrade_shell_args("v0.2.0");
-        assert_eq!(args[0], "-lc");
-        assert!(args[1].contains("export ZODEX_INSTALL_MODE=operator"));
-        assert!(args[1].contains("export ZODEX_VERSION='v0.2.0'"));
-        assert!(args[1].contains("curl -fsSL 'https://zodex.ashray.xyz/install.sh' | bash"));
     }
 
     #[test]

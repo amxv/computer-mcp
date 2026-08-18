@@ -111,9 +111,18 @@ On success, Zodex:
 - downloads and checksum-verifies the supported OpenAI tunnel client bundle;
 - saves the non-secret tunnel configuration;
 - creates the automatically managed Local observability credential;
+- enables and opens the lightweight Zodex menu bar app so it returns at future logins;
 - exits without leaving the Local runtime or tunnel running.
 
 Setup is idempotent, so running it again is also the repair/update path.
+
+The menu app is only a control surface. Enabling it at login does **not** start Zodex Local, the tunnel, or any Agent process. If you do not want the menu app, opt out during setup:
+
+```bash
+zodex local setup --no-menu-bar
+```
+
+If you enable it initially and change your mind later, turn off **Launch at Login** from the Zodex menu. Choosing **Quit** exits it for the current login session without changing the Zodex Local runtime.
 
 ## Scripted setup without putting the key on argv
 

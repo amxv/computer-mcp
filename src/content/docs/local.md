@@ -68,6 +68,8 @@ zodex local setup
 
 Zodex prompts for the tunnel ID and runtime key. It stores the runtime key in macOS Keychain, installs and verifies the managed OpenAI tunnel client, and creates the Local state it needs. Setup does **not** leave your Mac remotely accessible when it exits.
 
+Setup also enables the lightweight Zodex menu bar app by default. The menu app returns when you log in and gives you **Start Zodex**, **Stop Zodex**, **Open Liveboard**, and a persistent Start Folder, but it never starts the Local runtime on its own. Use `zodex local setup --no-menu-bar` if you prefer to leave the bundled menu app disabled.
+
 For automation, use one of the non-argv secret inputs:
 
 ```bash

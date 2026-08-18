@@ -375,6 +375,56 @@ fn install_script_is_valid_bash_syntax() {
 }
 
 #[test]
+fn operator_upgrade_can_install_preextracted_release_without_fresh_install_chatter() {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock before Unix epoch")
+        .as_nanos();
+    let test_dir = std::env::temp_dir().join(format!(
+        "zodex-operator-upgrade-source-test-{}-{unique}",
+        std::process::id()
+    ));
+    let source_dir = test_dir.join("source");
+    let install_dir = test_dir.join("install");
+    std::fs::create_dir_all(&source_dir).expect("create source directory");
+    std::fs::create_dir_all(&install_dir).expect("create install directory");
+    let source_binary = source_dir.join("zodex");
+    std::fs::write(&source_binary, "#!/bin/sh\necho upgraded\n").expect("write source binary");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = std::fs::metadata(&source_binary)
+            .expect("read source binary metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&source_binary, permissions).expect("make source executable");
+    }
+
+    let output = Command::new("bash")
+        .arg(install_script_path())
+        .env("ZODEX_INSTALL_MODE", "operator")
+        .env("ZODEX_BINARY_SOURCE_DIR", &source_dir)
+        .env("ZODEX_INSTALL_DIR", &install_dir)
+        .env("ZODEX_UPGRADE_MODE", "1")
+        .env("HOME", test_dir.join("home"))
+        .output()
+        .expect("run preextracted operator upgrade install");
+
+    assert!(
+        output.status.success(),
+        "upgrade source install failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(install_dir.join("zodex").is_file());
+    assert!(
+        !String::from_utf8_lossy(&output.stdout).contains("zodex operator CLI installed"),
+        "upgrade mode should not replay fresh-install instructions"
+    );
+
+    std::fs::remove_dir_all(&test_dir).expect("remove upgrade source test directory");
+}
+
+#[test]
 fn public_install_docs_invoke_the_bash_installer() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     for relative in [
@@ -411,17 +461,21 @@ fn operator_install_falls_back_to_user_local_bin_without_root() {
     std::fs::create_dir_all(&home_dir).expect("create home directory");
 
     let source_binary = source_dir.join("zodex");
+    let source_menubar = source_dir.join("Zodex.app/Contents/MacOS/zodex-menubar");
+    std::fs::create_dir_all(source_menubar.parent().unwrap()).expect("create menu bar app");
     std::fs::write(&source_binary, "#!/bin/sh\nexit 0\n").expect("write source binary");
+    std::fs::write(&source_menubar, "#!/bin/sh\nexit 0\n").expect("write menu bar helper");
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mut permissions = std::fs::metadata(&source_binary)
-            .expect("read source binary metadata")
-            .permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(&source_binary, permissions)
-            .expect("make source binary executable");
+        for path in [&source_binary, &source_menubar] {
+            let mut permissions = std::fs::metadata(path)
+                .expect("read source binary metadata")
+                .permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(path, permissions).expect("make source binary executable");
+        }
     }
 
     let script_path = install_script_path();
@@ -430,6 +484,7 @@ eval "$(sed -n '/^operator_local_runtime_dir()/,/^}/p' "${INSTALL_SCRIPT}")"
 eval "$(sed -n '/^ensure_local_stopped_before_operator_replace()/,/^}/p' "${INSTALL_SCRIPT}")"
 eval "$(sed -n '/^install_operator_binary_atomically()/,/^}/p' "${INSTALL_SCRIPT}")"
 eval "$(sed -n '/^install_operator_binaries_from_dir()/,/^}/p' "${INSTALL_SCRIPT}")"
+uname() { printf 'Darwin\n'; }
 is_root() { return 1; }
 log() { printf '%s\n' "$*"; }
 die() { printf '%s\n' "$*" >&2; exit 1; }
@@ -446,6 +501,7 @@ install_operator_binaries_from_dir "${SOURCE_DIR}"
         .expect("run operator install");
 
     let installed_binary = home_dir.join(".local/bin/zodex");
+    let installed_menubar = home_dir.join(".local/bin/Zodex.app/Contents/MacOS/zodex-menubar");
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         panic!("operator install failed: {stderr}");
@@ -454,6 +510,11 @@ install_operator_binaries_from_dir "${SOURCE_DIR}"
         installed_binary.is_file(),
         "operator install should fall back to {}",
         installed_binary.display()
+    );
+    assert!(
+        installed_menubar.is_file(),
+        "operator install should include the macOS menu bar helper at {}",
+        installed_menubar.display()
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(

@@ -47,6 +47,9 @@ enum LocalCommand {
         /// Generate a new localhost observability bearer instead of reusing the current one.
         #[arg(long)]
         rotate_observability_bearer: bool,
+        /// Skip launching and enabling the macOS menu bar controls at login.
+        #[arg(long)]
+        no_menu_bar: bool,
     },
     /// Start the one Mac-wide Local runtime from a repository or workspace.
     #[command(after_help = "Examples:\n  cd ~/code/amxv/zodex && zodex local start\n  zodex local start ~/code/amxv/zodex --ttl 4h\n\nPATH is startup guidance only. Every exec_command/apply_patch still supplies an explicit absolute workdir. ChatGPT caches MCP server instructions, so refresh the Zodex Local app in ChatGPT app settings after changing PATH.")]
@@ -80,6 +83,8 @@ enum LocalCommand {
         #[arg(long, requires = "tui")]
         all: bool,
     },
+    /// Open the lightweight macOS menu bar controls for Local.
+    Menu,
     /// Inspect durable Local invocation history without opening the TUI.
     #[command(after_help = "Examples:\n  zodex local history --last 20\n  zodex local history --agent k7m2 --since 1h\n  zodex local history --workdir /absolute/repo/path\n  zodex local history --id <invocation-id> --raw\n  zodex local history --format json\n  zodex local history clear --yes")]
     History {
@@ -161,6 +166,7 @@ async fn handle_local_command(command: LocalCommand) -> Result<()> {
             runtime_key_env,
             runtime_key_fd,
             rotate_observability_bearer,
+            no_menu_bar,
         } => {
             ensure_local_runtime_host()?;
             ensure_offline_mutation(&paths, "run Local setup")?;
@@ -175,6 +181,7 @@ async fn handle_local_command(command: LocalCommand) -> Result<()> {
                 tunnel_id,
                 runtime_key,
                 rotate_observability_bearer,
+                !no_menu_bar,
             )
             .await
         }
@@ -208,6 +215,10 @@ async fn handle_local_command(command: LocalCommand) -> Result<()> {
             } else {
                 run_local_liveboard(&paths).await
             }
+        }
+        LocalCommand::Menu => {
+            ensure_local_runtime_host()?;
+            run_native_local_menu()
         }
         LocalCommand::History {
             last,
@@ -296,6 +307,78 @@ async fn handle_local_command(command: LocalCommand) -> Result<()> {
         }
         LocalCommand::Runtime { .. } => unreachable!("hidden runtime handled before path discovery"),
     }
+}
+
+#[cfg(target_os = "macos")]
+fn run_native_local_menu() -> Result<()> {
+    let app = native_local_menu_app()?;
+    Command::new("/usr/bin/open")
+        .arg("-g")
+        .arg(&app)
+        .status()
+        .with_context(|| format!("failed to launch Zodex menu bar app {}", app.display()))?
+        .success()
+        .then_some(())
+        .with_context(|| format!("macOS could not open Zodex menu bar app {}", app.display()))?;
+    println!("Zodex menu bar controls launched.");
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn native_local_menu_app() -> Result<PathBuf> {
+    let executable = env::current_exe()
+        .context("failed to resolve installed Zodex executable")?
+        .canonicalize()
+        .context("failed to canonicalize installed Zodex executable")?;
+    let app = executable
+        .parent()
+        .context("installed Zodex executable has no parent directory")?
+        .join("Zodex.app");
+    let helper = app.join("Contents/MacOS/zodex-menubar");
+    if !helper.is_file() {
+        bail!(
+            "Zodex menu bar app is missing at {}; reinstall or upgrade Zodex",
+            app.display()
+        );
+    }
+    Ok(app)
+}
+
+#[cfg(target_os = "macos")]
+fn configure_native_local_menu(enable_at_login: bool) -> Result<()> {
+    let app = native_local_menu_app()?;
+    let helper = app.join("Contents/MacOS/zodex-menubar");
+    let mode = if enable_at_login {
+        "--register-login-item"
+    } else {
+        "--unregister-login-item"
+    };
+    let output = Command::new(&helper)
+        .arg(mode)
+        .stdin(Stdio::null())
+        .output()
+        .with_context(|| format!("failed to configure Zodex menu bar app {}", app.display()))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        bail!(
+            "could not {} Zodex menu bar launch at login{}",
+            if enable_at_login { "enable" } else { "disable" },
+            if stderr.is_empty() {
+                String::new()
+            } else {
+                format!(": {stderr}")
+            }
+        );
+    }
+    if enable_at_login {
+        run_native_local_menu()?;
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn run_native_local_menu() -> Result<()> {
+    bail!("Zodex menu bar controls are only available on macOS")
 }
 
 #[cfg(target_os = "macos")]
@@ -501,6 +584,7 @@ async fn run_native_local_setup(
     tunnel_id: String,
     runtime_key: RuntimeKey,
     rotate_observability_bearer: bool,
+    enable_menu_bar: bool,
 ) -> Result<()> {
     let releases = OfficialTunnelReleaseClient::new()?;
     let extractor = MacDittoArchiveExtractor;
@@ -537,6 +621,16 @@ async fn run_native_local_setup(
     println!(
         "macOS privacy: setup does not change TCC. Protected folders/app data may later require a normal user-approved Files & Folders or Full Disk Access grant; ordinary unprotected workspaces do not require blanket Full Disk Access."
     );
+    if enable_menu_bar {
+        match configure_native_local_menu(true) {
+            Ok(()) => println!("Menu bar: enabled now and at future logins"),
+            Err(error) => eprintln!(
+                "warning: Local setup succeeded, but the Zodex menu bar could not be enabled: {error:#}"
+            ),
+        }
+    } else {
+        println!("Menu bar: skipped (--no-menu-bar)");
+    }
     Ok(())
 }
 
@@ -546,6 +640,7 @@ async fn run_native_local_setup(
     _tunnel_id: String,
     _runtime_key: RuntimeKey,
     _rotate_observability_bearer: bool,
+    _enable_menu_bar: bool,
 ) -> Result<()> {
     bail!("Zodex Local setup is only available on macOS")
 }

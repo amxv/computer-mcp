@@ -6,7 +6,15 @@ category: Local
 summary: "The practical Local workflow for runtime TTLs, status, Agents, watch, durable history, logs, and clean shutdown."
 ---
 
-Once [Local setup](/docs/local/setup) is complete, most days use only `start`, `status`, `watch`, `history`, and `stop`.
+Once [Local setup](/docs/local/setup) is complete, most days can be controlled from the Zodex menu bar app or with the equivalent CLI commands.
+
+On macOS, `zodex local setup` enables the small menu bar app by default. It returns automatically when you next log in, while the Zodex Local runtime itself remains stopped until you explicitly start it. If you opted out during setup, you can still open the app manually:
+
+```bash
+zodex local menu
+```
+
+Set a persistent start folder such as `~/code/amxv`, then **Start Zodex**, **Stop Zodex**, **Open Liveboard**, or update Zodex from the menu bar. The app refreshes status when you open its menu and immediately after relevant user actions, with no background polling timer. Update checks also happen only when you open the menu or choose **Check for Updates…**; repeated menu opens use the CLI's short cache. Toggle **Launch at Login** off whenever you no longer want the menu app to return after logout or restart.
 
 ## Start from the project you want ChatGPT to begin with
 
@@ -201,19 +209,34 @@ Stopping Local:
 
 Persistent configuration, history, and the managed setup survive for the next `start`.
 
-## Upgrade the operator CLI
+## Upgrade Zodex
 
-Stop Local before replacing the macOS operator binary, then upgrade to the latest release or pin a release explicitly:
+Check without installing:
 
 ```bash
-zodex local stop
+zodex upgrade --check
+```
+
+Upgrade to the latest release or pin a release explicitly:
+
+```bash
 zodex upgrade
 
 # Optional pinned form; the leading v is optional.
 zodex upgrade --version 0.3.4
 ```
 
-The upgrade uses the same public, checksum-verified operator installer as a fresh install. Your Local configuration, Keychain credential, durable history, and Liveboard preferences are not part of the operator archive and are left in place.
+`zodex upgrade` first resolves the target version. If the installed version is already current it exits without downloading the release archive. During an update it prints progress while downloading, verifying, and installing. A five-minute cache is used only by `--check`; pass `--refresh` to force a fresh check.
+
+On macOS, an update that would replace a running Local runtime is refused before the release archive is downloaded. Stop Local yourself, or explicitly authorize the upgrade command to do it:
+
+```bash
+zodex upgrade --stop-local
+```
+
+The release checksum is verified before installation. Your Local configuration, Keychain credential, durable history, Liveboard preferences, menu-bar Start Folder, and Launch at Login preference are preserved. If the menu bar app is open, it restarts into the new version; if you had intentionally quit it, the upgrade leaves it quit.
+
+The menu bar uses this same CLI upgrade contract. It checks for updates when you open the menu, shows **Update to v…** when one is available, and offers **Stop and Update** only when the CLI reports that Local is blocking the update.
 
 ## What happens on logout or reboot?
 

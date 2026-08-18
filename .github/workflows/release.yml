@@ -68,6 +68,11 @@ jobs:
             --bin zodexd \
             --bin zodex-prd
 
+      - name: Build macOS menu bar app
+        if: contains(matrix.target, 'apple-darwin')
+        run: |
+          scripts/build-menubar-app.sh "target/${{ matrix.target }}/release/Zodex.app"
+
       - name: Package release archive
         run: |
           mkdir -p "dist/${{ matrix.archive_name }}"
@@ -76,6 +81,9 @@ jobs:
           cp "target/${{ matrix.target }}/release/git-remote-zodex" "dist/${{ matrix.archive_name }}/"
           cp "target/${{ matrix.target }}/release/zodexd" "dist/${{ matrix.archive_name }}/"
           cp "target/${{ matrix.target }}/release/zodex-prd" "dist/${{ matrix.archive_name }}/"
+          if [[ -d "target/${{ matrix.target }}/release/Zodex.app" ]]; then
+            cp -R "target/${{ matrix.target }}/release/Zodex.app" "dist/${{ matrix.archive_name }}/"
+          fi
           tar -C dist -czf "dist/${{ matrix.archive_name }}.tar.gz" "${{ matrix.archive_name }}"
           (
             cd dist
@@ -103,12 +111,21 @@ jobs:
             bash scripts/install.sh
 
           test -x "$install_dir/zodex"
+          test -x "$install_dir/Zodex.app/Contents/MacOS/zodex-menubar"
+          codesign --verify --deep --strict "$install_dir/Zodex.app"
           test ! -e "$install_dir/zodexd"
           test ! -e "$install_dir/zodex-prd"
           test ! -e "$install_dir/zodex-agent"
           "$install_dir/zodex" local --help >/dev/null
           "$install_dir/zodex" local setup --help >/dev/null
+          "$install_dir/zodex" local menu --help >/dev/null
           "$install_dir/zodex" local watch --help >/dev/null
+          "$install_dir/zodex" upgrade --help >/dev/null
+          current_version="$("$install_dir/zodex" --version | awk '{print $2}')"
+          "$install_dir/zodex" upgrade --version "$current_version" --format json \
+            | grep '"event":"check_complete"' >/dev/null
+          bundle_version="$(/usr/libexec/PlistBuddy -c 'Print :ZodexVersion' "$install_dir/Zodex.app/Contents/Info.plist")"
+          test "$bundle_version" = "$current_version"
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4

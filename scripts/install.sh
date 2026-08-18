@@ -316,7 +316,63 @@ install_operator_binaries_from_dir() {
   [[ -x "${src_dir}/zodex" ]] || die "missing executable ${src_dir}/zodex"
   install -d -m 0755 "${install_dir}"
   ensure_local_stopped_before_operator_replace "${install_dir}/zodex"
+
+  local app_destination=""
+  local app_executable=""
+  local app_temporary=""
+  local app_backup=""
+  local app_was_running=0
+  if [[ "$(uname -s)" == "Darwin" && -d "${src_dir}/Zodex.app" ]]; then
+    app_destination="${install_dir}/Zodex.app"
+    app_executable="${app_destination}/Contents/MacOS/zodex-menubar"
+    app_temporary="${install_dir}/.Zodex.app.install.$$"
+    app_backup="${install_dir}/.Zodex.app.backup.$$"
+
+    /bin/rm -rf "${app_temporary}" "${app_backup}"
+    /bin/cp -R "${src_dir}/Zodex.app" "${app_temporary}" \
+      || die "failed to stage Zodex menu bar app"
+  fi
+
   install_operator_binary_atomically "${src_dir}/zodex" "${install_dir}/zodex"
+
+  if [[ -n "${app_destination}" ]]; then
+
+    if [[ -x "${app_executable}" ]] \
+        && /usr/bin/pgrep -f -x "${app_executable}" >/dev/null 2>&1; then
+      app_was_running=1
+      /usr/bin/pkill -TERM -f -x "${app_executable}" >/dev/null 2>&1 || true
+      for _ in {1..40}; do
+        /usr/bin/pgrep -f -x "${app_executable}" >/dev/null 2>&1 || break
+        sleep 0.05
+      done
+      if /usr/bin/pgrep -f -x "${app_executable}" >/dev/null 2>&1; then
+        /usr/bin/pkill -KILL -f -x "${app_executable}" >/dev/null 2>&1 || true
+      fi
+    fi
+
+    if [[ -e "${app_destination}" ]]; then
+      /bin/mv "${app_destination}" "${app_backup}" \
+        || {
+          [[ "${app_was_running}" -eq 0 ]] || /usr/bin/open -g "${app_destination}" || true
+          die "failed to stage existing Zodex menu bar app for replacement"
+        }
+    fi
+    if ! /bin/mv "${app_temporary}" "${app_destination}"; then
+      [[ ! -e "${app_backup}" ]] || /bin/mv "${app_backup}" "${app_destination}" || true
+      [[ "${app_was_running}" -eq 0 ]] || /usr/bin/open -g "${app_destination}" || true
+      die "failed to install Zodex menu bar app"
+    fi
+    /bin/rm -rf "${app_backup}"
+
+    if [[ "${app_was_running}" -eq 1 ]]; then
+      /usr/bin/open -g "${app_destination}" \
+        || warn "Zodex menu bar app was upgraded but could not be relaunched automatically"
+    fi
+  fi
+
+  if [[ "${ZODEX_UPGRADE_MODE:-0}" == "1" ]]; then
+    return 0
+  fi
 
   cat <<EOF
 
@@ -324,6 +380,13 @@ zodex operator CLI installed.
 
 Installed:
   ${install_dir}/zodex
+EOF
+
+  if [[ -d "${install_dir}/Zodex.app" ]]; then
+    printf '  %s\n' "${install_dir}/Zodex.app"
+  fi
+
+  cat <<EOF
 
 Verify:
   ${install_dir}/zodex --version
@@ -371,7 +434,11 @@ run_operator_install() {
   TMP_DIR="$(mktemp -d)"
   trap cleanup EXIT
 
-  install_operator_from_release
+  if [[ -n "${ZODEX_BINARY_SOURCE_DIR}" ]]; then
+    install_operator_binaries_from_dir "${ZODEX_BINARY_SOURCE_DIR}"
+  else
+    install_operator_from_release
+  fi
 }
 
 detect_platform() {

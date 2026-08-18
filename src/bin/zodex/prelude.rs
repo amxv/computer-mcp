@@ -9,7 +9,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use reqwest::Url;
 use reqwest::header::{ACCEPT, AUTHORIZATION, USER_AGENT};
 use serde::{Deserialize, Serialize};
@@ -72,9 +72,22 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
+    /// Check for or install a newer Zodex operator release.
     Upgrade {
         #[arg(long, default_value = "latest")]
         version: String,
+        /// Check availability without installing anything.
+        #[arg(long)]
+        check: bool,
+        /// Output human-readable text or the stable JSON event contract.
+        #[arg(long, value_enum, default_value_t = UpgradeFormat::Human)]
+        format: UpgradeFormat,
+        /// Explicitly stop a blocking macOS Local runtime before installing.
+        #[arg(long, conflicts_with = "check")]
+        stop_local: bool,
+        /// Ignore the short latest-release cache when checking.
+        #[arg(long)]
+        refresh: bool,
     },
     /// Manage Zodex on a wake-on-demand remote Linux Sprite.
     Sprite {
@@ -86,6 +99,12 @@ enum Commands {
         #[command(subcommand)]
         command: LocalCommand,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum UpgradeFormat {
+    Human,
+    Json,
 }
 
 #[derive(Debug, Subcommand)]

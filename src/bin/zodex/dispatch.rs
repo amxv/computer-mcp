@@ -4,8 +4,21 @@ pub(crate) async fn run() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Upgrade { version } => {
-            upgrade_operator(&version)?;
+        Commands::Upgrade {
+            version,
+            check,
+            format,
+            stop_local,
+            refresh,
+        } => {
+            upgrade_operator(OperatorUpgradeOptions {
+                version: &version,
+                check,
+                format,
+                stop_local,
+                refresh,
+            })
+            .await?;
         }
         Commands::Sprite { command } => {
             match command {

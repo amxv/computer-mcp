@@ -15,8 +15,10 @@ on:
       - AGENTS.md
       - .agents/**
       - scripts/check.sh
+      - scripts/build-menubar-app.sh
       - scripts/check-product-contract.sh
       - scripts/install.sh
+      - macos/**
       - src/**
       - tests/**
       - web/liveboard/**
@@ -33,8 +35,10 @@ on:
       - AGENTS.md
       - .agents/**
       - scripts/check.sh
+      - scripts/build-menubar-app.sh
       - scripts/check-product-contract.sh
       - scripts/install.sh
+      - macos/**
       - src/**
       - tests/**
       - web/liveboard/**
