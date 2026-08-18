@@ -212,7 +212,26 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
     }
 
     private func updateLaunchAtLoginItem() {
-        launchAtLoginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        launchAtLoginItem.state = launchAtLoginEnabled() == true ? .on : .off
+    }
+
+    private var installedMenuBarExecutableURL: URL {
+        Bundle.main.bundleURL
+            .appendingPathComponent("Contents/MacOS/zodex-menubar", isDirectory: false)
+    }
+
+    private func launchAtLoginEnabled() -> Bool? {
+        // ServiceManagement resolves mainApp from the calling app bundle. Run
+        // this from the current on-disk bundle so a process left alive across
+        // an atomic app replacement never operates on a deleted old bundle.
+        let result = Self.runCommand(
+            executable: installedMenuBarExecutableURL,
+            arguments: ["--login-item-status"]
+        )
+        guard result.exitCode == 0 else {
+            return nil
+        }
+        return result.output.trimmingCharacters(in: .whitespacesAndNewlines) == "enabled"
     }
 
     private func displayPath(_ path: String) -> String {
@@ -460,17 +479,28 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
     }
 
     @objc private func toggleLaunchAtLogin() {
-        let service = SMAppService.mainApp
-        do {
-            if service.status == .enabled {
-                try service.unregister()
-            } else {
-                try service.register()
-            }
+        guard let currentlyEnabled = launchAtLoginEnabled() else {
             updateLaunchAtLoginItem()
-        } catch {
-            updateLaunchAtLoginItem()
-            showError("Launch at Login could not be changed", detail: error.localizedDescription)
+            showError(
+                "Launch at Login could not be changed",
+                detail: "The installed Zodex menu bar helper could not report its login-item status."
+            )
+            return
+        }
+
+        // Use the same fresh helper for the mutation for the same reason as
+        // the status query above.
+        let result = Self.runCommand(
+            executable: installedMenuBarExecutableURL,
+            arguments: [currentlyEnabled ? "--unregister-login-item" : "--register-login-item"]
+        )
+        updateLaunchAtLoginItem()
+        if result.exitCode != 0 {
+            let detail = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+            showError(
+                "Launch at Login could not be changed",
+                detail: detail.isEmpty ? "The login-item helper exited with status \(result.exitCode)." : detail
+            )
         }
     }
 
@@ -865,6 +895,11 @@ if CommandLine.arguments.contains("--register-login-item") {
         fputs("failed to enable Zodex menu bar launch at login: \(error)\n", stderr)
         exit(1)
     }
+}
+
+if CommandLine.arguments.contains("--login-item-status") {
+    print(SMAppService.mainApp.status == .enabled ? "enabled" : "disabled")
+    exit(0)
 }
 
 if CommandLine.arguments.contains("--unregister-login-item") {

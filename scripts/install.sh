@@ -304,6 +304,47 @@ install_operator_binary_atomically() {
   fi
 }
 
+running_zodex_menubar_pids() {
+  local app_executable="$1"
+  local lock_file
+  lock_file="/tmp/zodex-menubar-$(/usr/bin/id -u).lock"
+
+  /usr/bin/pgrep -f -x "${app_executable}" 2>/dev/null || true
+  # The lock stays open for the lifetime of the app and remains reliable even
+  # if an upgrade has renamed or removed the bundle underneath the process.
+  if [[ -e "${lock_file}" && -x /usr/sbin/lsof ]]; then
+    /usr/sbin/lsof -t "${lock_file}" 2>/dev/null || true
+  fi
+}
+
+stop_zodex_menubar_before_replace() {
+  local app_executable="$1"
+  local pids
+  pids="$(running_zodex_menubar_pids "${app_executable}")"
+  [[ -n "${pids}" ]] || return 1
+
+  local pid
+  for pid in ${pids}; do
+    kill -TERM "${pid}" >/dev/null 2>&1 || true
+  done
+  for _ in {1..40}; do
+    pids="$(running_zodex_menubar_pids "${app_executable}")"
+    [[ -n "${pids}" ]] || return 0
+    sleep 0.05
+  done
+
+  for pid in ${pids}; do
+    kill -KILL "${pid}" >/dev/null 2>&1 || true
+  done
+  for _ in {1..40}; do
+    pids="$(running_zodex_menubar_pids "${app_executable}")"
+    [[ -n "${pids}" ]] || return 0
+    sleep 0.05
+  done
+
+  die "failed to stop the running Zodex menu bar app before replacing ${app_executable}"
+}
+
 install_operator_binaries_from_dir() {
   local src_dir="$1"
   local install_dir="${ZODEX_INSTALL_DIR}"
@@ -336,18 +377,9 @@ install_operator_binaries_from_dir() {
   install_operator_binary_atomically "${src_dir}/zodex" "${install_dir}/zodex"
 
   if [[ -n "${app_destination}" ]]; then
-
     if [[ -x "${app_executable}" ]] \
-        && /usr/bin/pgrep -f -x "${app_executable}" >/dev/null 2>&1; then
+        && stop_zodex_menubar_before_replace "${app_executable}"; then
       app_was_running=1
-      /usr/bin/pkill -TERM -f -x "${app_executable}" >/dev/null 2>&1 || true
-      for _ in {1..40}; do
-        /usr/bin/pgrep -f -x "${app_executable}" >/dev/null 2>&1 || break
-        sleep 0.05
-      done
-      if /usr/bin/pgrep -f -x "${app_executable}" >/dev/null 2>&1; then
-        /usr/bin/pkill -KILL -f -x "${app_executable}" >/dev/null 2>&1 || true
-      fi
     fi
 
     if [[ -e "${app_destination}" ]]; then
