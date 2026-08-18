@@ -8,6 +8,11 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.3.8 — 2026-08-18
+
+- Fixed macOS Launch at Login after in-place upgrades by ensuring login-item operations run from the current installed app bundle instead of a stale process whose previous bundle was replaced.
+- Hardened menu-bar app replacement so upgrades reliably find and stop the running helper through its lifetime lock before swapping `Zodex.app`, then relaunch it from the new bundle.
+
 ## 0.3.7 — 2026-08-18
 
 - Fixed macOS menu validation so AppKit no longer re-enables lifecycle actions that Zodex status marked disabled.
