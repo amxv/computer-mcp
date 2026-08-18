@@ -27,7 +27,7 @@ fn schema_v1_migrates_forward_to_current_file_evidence_schema() {
         LocalHistoryReader::query(&path, &HistoryQuery::recent(10))
             .unwrap()
             .is_empty(),
-        "new binaries must keep stopped Phase-5 v1 history readable before the writer migrates it"
+        "new binaries must keep stopped schema-v1 history readable before the writer migrates it"
     );
 
     let store = HistoryStore::open(path.clone(), Arc::from("migration-runtime")).unwrap();

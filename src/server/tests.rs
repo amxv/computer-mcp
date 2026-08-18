@@ -65,7 +65,7 @@ fn stateless_policy(observer: Option<ProviderMetadataObserver>) -> McpServerPoli
         json_response: true,
         stateless_protocol_metadata_required: true,
         disable_allowed_hosts: false,
-        instructions: Arc::from("phase-1 stateless test server"),
+        instructions: Arc::from("stateless MCP test server"),
         provider_metadata_observer: observer,
         invocation_recorder: None,
     }
@@ -667,11 +667,11 @@ async fn modern_stateless_tool_call_observes_openai_session_without_transport_se
             "_meta": {
                 "io.modelcontextprotocol/protocolVersion": "2026-07-28",
                 "io.modelcontextprotocol/clientInfo": {
-                    "name": "zodex-phase-1-test",
+                    "name": "zodex-stateless-mcp-test",
                     "version": "1.0"
                 },
                 "io.modelcontextprotocol/clientCapabilities": {},
-                "openai/session": "opaque-phase-1-session"
+                "openai/session": "opaque-stateless-session"
             }
         }
     });
@@ -701,7 +701,7 @@ async fn modern_stateless_tool_call_observes_openai_session_without_transport_se
     assert_eq!(
         *seen.lock().expect("provider metadata lock"),
         vec![ProviderMetadata {
-            openai_session: Some("opaque-phase-1-session".to_string())
+            openai_session: Some("opaque-stateless-session".to_string())
         }]
     );
 
@@ -725,7 +725,7 @@ async fn modern_discover_publishes_runtime_workdir_guidance_without_session_stat
             "_meta": {
                 "io.modelcontextprotocol/protocolVersion": "2026-07-28",
                 "io.modelcontextprotocol/clientInfo": {
-                    "name": "zodex-phase-1-discovery-test",
+                    "name": "zodex-stateless-discovery-test",
                     "version": "1.0"
                 },
                 "io.modelcontextprotocol/clientCapabilities": {}

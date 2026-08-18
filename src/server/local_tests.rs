@@ -23,7 +23,7 @@ use super::local::{
 };
 use super::start_local_mcp_server;
 
-pub(super) const TOKEN: &str = "phase4-local-mcp-token";
+pub(super) const TOKEN: &str = "local-mcp-test-token";
 
 fn local_environment() -> Vec<(OsString, OsString)> {
     [
@@ -84,7 +84,7 @@ fn modern_meta(openai_session: Option<&str>) -> Value {
         ),
         (
             "io.modelcontextprotocol/clientInfo".to_string(),
-            json!({"name": "zodex-phase4-local-test", "version": "1.0"}),
+            json!({"name": "zodex-local-mcp-test", "version": "1.0"}),
         ),
         (
             "io.modelcontextprotocol/clientCapabilities".to_string(),

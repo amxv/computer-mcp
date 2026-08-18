@@ -17,9 +17,9 @@ include!("status.rs");
 
 #[cfg(test)]
 mod tests {
-    include!("tests/part1.rs");
-    include!("tests/part2.rs");
-    include!("tests/part3.rs");
-    include!("tests/part4.rs");
-    include!("tests/part5.rs");
+    include!("tests/sprite_services.rs");
+    include!("tests/github_access_and_registry.rs");
+    include!("tests/proxy_worker.rs");
+    include!("tests/proxy_setup.rs");
+    include!("tests/sprite_setup.rs");
 }

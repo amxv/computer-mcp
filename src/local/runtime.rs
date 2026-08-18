@@ -138,7 +138,7 @@ async fn shutdown_history_bounded(history: Arc<LocalHistoryRuntime>) -> Result<(
 }
 
 /// Internal Local runtime constructor used by lifecycle integration and tests.
-/// Public `zodex local start` remains owned by the later launchd lifecycle phase.
+/// Public `zodex local start` remains owned by launchd lifecycle orchestration.
 pub async fn start_local_host_runtime(
     options: LocalHostRuntimeOptions,
 ) -> Result<LocalHostRuntime> {

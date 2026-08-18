@@ -14,7 +14,7 @@ fn documented_python_observer_client_authenticates_and_consumes_sse() {
         .set_nonblocking(true)
         .expect("set observer fixture nonblocking");
     let addr = listener.local_addr().unwrap();
-    let token = "phase11-observer-fixture-token-0123456789abcdef";
+    let token = "observer-fixture-token-0123456789abcdef";
     let server_token = token.to_string();
 
     let server = thread::spawn(move || {

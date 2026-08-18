@@ -383,7 +383,7 @@ fn parse_wrangler_version(raw: &str) -> Option<(u64, u64, u64)> {
     })
 }
 
-#[allow(dead_code)] // Used by the first-run temporary deployment path added in Phase 5.
+#[allow(dead_code)] // Used by the first-run temporary deployment path.
 fn ensure_temporary_wrangler_version(raw: &str) -> Result<(u64, u64, u64)> {
     let version = parse_wrangler_version(raw)
         .ok_or_else(|| anyhow!("failed to parse Wrangler version from `{}`", raw.trim()))?;
@@ -398,7 +398,7 @@ fn ensure_temporary_wrangler_version(raw: &str) -> Result<(u64, u64, u64)> {
     Ok(version)
 }
 
-#[allow(dead_code)] // Used by the first-run temporary deployment path added in Phase 5.
+#[allow(dead_code)] // Used by the first-run temporary deployment path.
 fn proxy_deploy_runner_version(deploy: &ProxyDeployCommandSpec) -> Result<String> {
     let mut args = deploy.base_args.clone();
     args.push("--version".to_string());

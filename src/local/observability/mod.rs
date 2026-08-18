@@ -2,7 +2,7 @@ mod model;
 mod server;
 
 #[cfg(test)]
-mod event_v2_tests;
+mod event_stream_tests;
 #[cfg(test)]
 mod recovery_tests;
 #[cfg(test)]

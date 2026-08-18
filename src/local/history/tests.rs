@@ -654,7 +654,7 @@ fn busy_sqlite_never_backpressures_pty_observer_and_degrades_future_admission() 
 
     runtime.observe_output(SessionOutputChunk {
         internal_session_id: 1,
-        session_handle: Arc::from("phase5busyhandle00000"),
+        session_handle: Arc::from("historybusyhandle0000"),
         invocation: context.clone(),
         sequence: 0,
         text: "first".to_string(),
@@ -664,7 +664,7 @@ fn busy_sqlite_never_backpressures_pty_observer_and_degrades_future_admission() 
     for sequence in 1..20 {
         runtime.observe_output(SessionOutputChunk {
             internal_session_id: 1,
-            session_handle: Arc::from("phase5busyhandle00000"),
+            session_handle: Arc::from("historybusyhandle0000"),
             invocation: context.clone(),
             sequence,
             text: "x".repeat(8192),

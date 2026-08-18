@@ -345,13 +345,14 @@ fn stale_cleanup_removes_only_disposable_runtime_artifacts() {
 #[cfg(target_os = "linux")]
 #[test]
 fn hidden_runtime_child_entry() {
-    if std::env::var_os("ZODEX_PHASE9_HIDDEN_CHILD").is_none() {
+    if std::env::var_os("ZODEX_LIFECYCLE_TEST_CHILD").is_none() {
         return;
     }
-    let bootstrap =
-        PathBuf::from(std::env::var_os("ZODEX_PHASE9_BOOTSTRAP").expect("child bootstrap path"));
+    let bootstrap = PathBuf::from(
+        std::env::var_os("ZODEX_LIFECYCLE_TEST_BOOTSTRAP").expect("child bootstrap path"),
+    );
     let paths = paths_from_runtime_bootstrap(&bootstrap).unwrap();
-    let runtime_key = RuntimeKey::new("phase9-fixture-runtime-key").unwrap();
+    let runtime_key = RuntimeKey::new("lifecycle-fixture-runtime-key").unwrap();
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -400,7 +401,7 @@ async fn hidden_runtime_child_reaches_one_runtime_multi_agent_readiness_and_ttl_
         .unwrap();
     config.tunnel.client_path = Some(fake_tunnel);
     config.tunnel.release = Some(ManagedTunnelClientRelease {
-        version: "phase9-fixture".to_string(),
+        version: "lifecycle-fixture".to_string(),
         asset_name: "fixture".to_string(),
         archive_sha256: "a".repeat(64),
         binary_sha256: "b".repeat(64),
@@ -414,10 +415,10 @@ async fn hidden_runtime_child_reaches_one_runtime_multi_agent_readiness_and_ttl_
         (OsString::from("HOME"), home.into_os_string()),
         (OsString::from("PATH"), OsString::from("/usr/bin:/bin")),
         (OsString::from("SHELL"), OsString::from("/bin/sh")),
-        (OsString::from("USER"), OsString::from("phase9-user")),
-        (OsString::from("LOGNAME"), OsString::from("phase9-user")),
+        (OsString::from("USER"), OsString::from("lifecycle-user")),
+        (OsString::from("LOGNAME"), OsString::from("lifecycle-user")),
         (
-            OsString::from("PHASE9_CAPTURED_EXPORT"),
+            OsString::from("ZODEX_LIFECYCLE_CAPTURED_EXPORT"),
             OsString::from("captured-value"),
         ),
     ];
@@ -435,8 +436,8 @@ async fn hidden_runtime_child_reaches_one_runtime_multi_agent_readiness_and_ttl_
         .arg("--exact")
         .arg("local::lifecycle_tests::hidden_runtime_child_entry")
         .arg("--nocapture")
-        .env("ZODEX_PHASE9_HIDDEN_CHILD", "1")
-        .env("ZODEX_PHASE9_BOOTSTRAP", &prepared.bootstrap_path)
+        .env("ZODEX_LIFECYCLE_TEST_CHILD", "1")
+        .env("ZODEX_LIFECYCLE_TEST_BOOTSTRAP", &prepared.bootstrap_path)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -475,10 +476,10 @@ async fn hidden_runtime_child_reaches_one_runtime_multi_agent_readiness_and_ttl_
     let slow_started = call_exec(
         &mcp_url,
         &token,
-        "phase9-session-a",
+        "lifecycle-session-a",
         &worktree_a,
         &format!(
-            "while [ ! -f {} ]; do sleep 0.02; done; printf 'slow:%s:%s\\n' \"$PHASE9_CAPTURED_EXPORT\" \"$PWD\"",
+            "while [ ! -f {} ]; do sleep 0.02; done; printf 'slow:%s:%s\\n' \"$ZODEX_LIFECYCLE_CAPTURED_EXPORT\" \"$PWD\"",
             shell_quote(release.as_os_str())
         ),
         100,
@@ -497,10 +498,10 @@ async fn hidden_runtime_child_reaches_one_runtime_multi_agent_readiness_and_ttl_
     let fast_result = call_exec(
         &mcp_url,
         &token,
-        "phase9-session-b",
+        "lifecycle-session-b",
         &worktree_b,
         &format!(
-            "printf 'fast:%s:%s\\n' \"$PHASE9_CAPTURED_EXPORT\" \"$PWD\"; : > {}",
+            "printf 'fast:%s:%s\\n' \"$ZODEX_LIFECYCLE_CAPTURED_EXPORT\" \"$PWD\"; : > {}",
             shell_quote(release.as_os_str())
         ),
         10_000,
@@ -510,16 +511,22 @@ async fn hidden_runtime_child_reaches_one_runtime_multi_agent_readiness_and_ttl_
     assert!(fast_result.to_string().contains("captured-value"));
     assert!(fast_result.to_string().contains("worktree-b"));
 
-    let slow_result =
-        call_write_stdin(&mcp_url, &token, "phase9-session-a", &slow_handle, 10_000).await;
+    let slow_result = call_write_stdin(
+        &mcp_url,
+        &token,
+        "lifecycle-session-a",
+        &slow_handle,
+        10_000,
+    )
+    .await;
     assert!(slow_result.get("error").is_none(), "{slow_result}");
     assert!(slow_result.to_string().contains("exited"), "{slow_result}");
     assert!(slow_result.to_string().contains("captured-value"));
     assert!(slow_result.to_string().contains("worktree-a"));
 
     for (session, workdir) in [
-        ("phase9-session-a", &worktree_a),
-        ("phase9-session-b", &worktree_b),
+        ("lifecycle-session-a", &worktree_a),
+        ("lifecycle-session-b", &worktree_b),
     ] {
         let result = call_exec(
             &mcp_url,
@@ -626,7 +633,7 @@ async fn call_exec(
                 "_meta": {
                     "io.modelcontextprotocol/protocolVersion": "2026-07-28",
                     "io.modelcontextprotocol/clientInfo": {
-                        "name": "zodex-phase9-child-test",
+                        "name": "zodex-lifecycle-child-test",
                         "version": "1.0"
                     },
                     "io.modelcontextprotocol/clientCapabilities": {},
@@ -679,7 +686,7 @@ async fn call_write_stdin(
                 "_meta": {
                     "io.modelcontextprotocol/protocolVersion": "2026-07-28",
                     "io.modelcontextprotocol/clientInfo": {
-                        "name": "zodex-phase9-child-test",
+                        "name": "zodex-lifecycle-child-test",
                         "version": "1.0"
                     },
                     "io.modelcontextprotocol/clientCapabilities": {},

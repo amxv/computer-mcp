@@ -1,9 +1,9 @@
     #[cfg(unix)]
-    fn write_phase5_fake_wrangler(
+    fn write_fake_wrangler(
         dir: &Path,
         body: &str,
     ) -> (ProxyDeployCommandSpec, PathBuf) {
-        let runner = dir.join("fake-wrangler-phase5");
+        let runner = dir.join("fake-wrangler");
         let log = dir.join("wrangler-calls.log");
         let log_literal = shell_escape_single_quotes(&log.display().to_string());
         let script = format!(
@@ -21,7 +21,7 @@
     }
 
     #[cfg(unix)]
-    fn phase5_fake_project(dir: &Path) -> PathBuf {
+    fn fake_wrangler_project(dir: &Path) -> PathBuf {
         let config = dir.join("wrangler.jsonc");
         fs::write(&config, "{}\n").expect("write fake config");
         config
@@ -96,7 +96,7 @@
     #[test]
     fn fake_wrangler_one_account_permanent_deploy_uses_stable_account_id() {
         let dir = tempdir().expect("tempdir");
-        let config = phase5_fake_project(dir.path());
+        let config = fake_wrangler_project(dir.path());
         let body = r#"
 case "${1:-}" in
   whoami)
@@ -116,7 +116,7 @@ EOF
   *) exit 97 ;;
 esac
 "#;
-        let (runner, log) = write_phase5_fake_wrangler(dir.path(), body);
+        let (runner, log) = write_fake_wrangler(dir.path(), body);
         let outcome = super::execute_cloudflare_deploy_flow(
             dir.path(),
             &config,
@@ -146,7 +146,7 @@ esac
     #[test]
     fn fake_wrangler_multi_account_requires_or_resolves_explicit_choice() {
         let dir = tempdir().expect("tempdir");
-        let config = phase5_fake_project(dir.path());
+        let config = fake_wrangler_project(dir.path());
         let body = r#"
 case "${1:-}" in
   whoami)
@@ -162,7 +162,7 @@ EOF
   *) exit 97 ;;
 esac
 "#;
-        let (runner, log) = write_phase5_fake_wrangler(dir.path(), body);
+        let (runner, log) = write_fake_wrangler(dir.path(), body);
         let err = super::execute_cloudflare_deploy_flow(
             dir.path(),
             &config,
@@ -197,7 +197,7 @@ esac
     #[test]
     fn fake_wrangler_unauthenticated_first_deploy_falls_back_once_to_temporary() {
         let dir = tempdir().expect("tempdir");
-        let config = phase5_fake_project(dir.path());
+        let config = fake_wrangler_project(dir.path());
         let body = r#"
 case "${1:-}" in
   whoami)
@@ -235,7 +235,7 @@ EOF
   *) exit 97 ;;
 esac
 "#;
-        let (runner, log) = write_phase5_fake_wrangler(dir.path(), body);
+        let (runner, log) = write_fake_wrangler(dir.path(), body);
         let outcome = super::execute_cloudflare_deploy_flow(
             dir.path(),
             &config,
@@ -267,7 +267,7 @@ esac
     #[test]
     fn unrelated_wrangler_failure_never_triggers_temporary_deploy() {
         let dir = tempdir().expect("tempdir");
-        let config = phase5_fake_project(dir.path());
+        let config = fake_wrangler_project(dir.path());
         let body = r#"
 case "${1:-}" in
   whoami) printf '%s\n' '{"loggedIn":false}' >&2; exit 1 ;;
@@ -276,7 +276,7 @@ case "${1:-}" in
   *) exit 97 ;;
 esac
 "#;
-        let (runner, log) = write_phase5_fake_wrangler(dir.path(), body);
+        let (runner, log) = write_fake_wrangler(dir.path(), body);
         let err = super::execute_cloudflare_deploy_flow(
             dir.path(),
             &config,
@@ -297,7 +297,7 @@ esac
     #[test]
     fn authenticated_wrangler_failure_never_triggers_temporary_deploy() {
         let dir = tempdir().expect("tempdir");
-        let config = phase5_fake_project(dir.path());
+        let config = fake_wrangler_project(dir.path());
         let body = r#"
 case "${1:-}" in
   whoami)
@@ -314,7 +314,7 @@ EOF
   *) exit 97 ;;
 esac
 "#;
-        let (runner, log) = write_phase5_fake_wrangler(dir.path(), body);
+        let (runner, log) = write_fake_wrangler(dir.path(), body);
         let err = super::execute_cloudflare_deploy_flow(
             dir.path(),
             &config,
@@ -335,7 +335,7 @@ esac
     #[test]
     fn registered_worker_never_falls_back_to_fresh_temporary_deploy() {
         let dir = tempdir().expect("tempdir");
-        let config = phase5_fake_project(dir.path());
+        let config = fake_wrangler_project(dir.path());
         let body = r#"
 case "${1:-}" in
   whoami) printf '%s\n' '{"loggedIn":false}' >&2; exit 1 ;;
@@ -350,7 +350,7 @@ EOF
   *) exit 97 ;;
 esac
 "#;
-        let (runner, log) = write_phase5_fake_wrangler(dir.path(), body);
+        let (runner, log) = write_fake_wrangler(dir.path(), body);
         let err = super::execute_cloudflare_deploy_flow(
             dir.path(),
             &config,

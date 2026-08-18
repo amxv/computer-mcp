@@ -953,6 +953,6 @@ fn unknown_session_handle(session_handle: &str) -> anyhow::Error {
 }
 
 #[cfg(test)]
-mod phase4_tests;
+mod runtime_lifecycle_tests;
 #[cfg(test)]
 mod tests;

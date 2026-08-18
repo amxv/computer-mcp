@@ -355,10 +355,10 @@ async fn output_observer_receives_full_stream_with_invocation_context_while_tool
     let mgr = SessionManager::with_policy(8, 40, policy);
     let cfg = Config::default();
     let invocation = InvocationContext::default()
-        .with_correlation_id("phase4-invocation")
+        .with_correlation_id("session-output-invocation")
         .with_provider(ProviderCallMetadata::new(
             "openai/session",
-            "phase4-provider-session",
+            "session-output-provider-session",
         ));
     let output = mgr
         .exec_command_with_context(

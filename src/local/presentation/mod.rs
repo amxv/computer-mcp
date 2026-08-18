@@ -6,9 +6,9 @@ mod render;
 mod sanitize;
 
 #[cfg(test)]
-mod tests;
+mod lifecycle_projection_tests;
 #[cfg(test)]
-mod v2_tests;
+mod tests;
 
 pub use build::build_presentation;
 pub(crate) use build::build_presentation_inputs;

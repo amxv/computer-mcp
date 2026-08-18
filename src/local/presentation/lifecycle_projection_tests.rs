@@ -332,7 +332,7 @@ fn presentation_ids_are_bounded_url_path_safe_and_secret_free() {
 }
 
 #[test]
-fn representative_v2_records_serialize_without_provider_secrets() {
+fn representative_presentation_records_serialize_without_provider_secrets() {
     let handle = "representative-handle";
     let command = running_command(200, handle);
     let stdin = continuation(201, Some(200), handle, "stdin", Some("y\n"), "running");

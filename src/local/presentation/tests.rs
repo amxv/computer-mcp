@@ -907,7 +907,7 @@ fn degraded_capture_is_explicit_and_raw_json_remains_raw() {
     let raw_value: serde_json::Value = serde_json::from_str(&raw).unwrap();
     assert!(
         raw_value.is_array(),
-        "--raw must retain the Phase-5 raw array contract"
+        "--raw must retain the legacy raw array contract"
     );
     assert!(raw_value[0].get("provider_session_key").is_some());
     assert!(raw_value[0].get("schema_version").is_none());
