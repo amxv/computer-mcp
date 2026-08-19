@@ -94,7 +94,7 @@ Before submitting changes, run the repository checks appropriate to the files to
 bash scripts/check.sh
 (cd apps/liveboard && bun run typecheck && bun run test && bun run build)
 (cd services/cloudflare-proxy && bun test src/index.test.js)
-(cd docs && bun run check && bun run build)
+(cd docs && bun run test:vercel && bun run check && bun run build)
 actionlint .github/workflows/*.yml
 ```
 

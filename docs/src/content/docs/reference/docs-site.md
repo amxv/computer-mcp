@@ -35,6 +35,9 @@ docs/src/pages/docs.md.ts            raw markdown docs index
 docs/src/pages/docs/[...slug].md.ts  raw markdown page route
 docs/src/content/docs/**/*.md        documentation pages
 docs/src/styles/global.css           visual system
+docs/src/styles/landing.css          landing-page style entrypoint
+docs/src/styles/landing/*.css        semantic landing-page style sections
+docs/scripts/should-build.mjs        Vercel affected-path decision
 ```
 
 Use `docs/src/content/docs` for most documentation changes. Use `docs/src/pages/index.astro` for the overview narrative and product positioning.
@@ -45,11 +48,12 @@ Run:
 
 ```bash
 cd docs
+bun run test:vercel
 bun run check
 bun run build
 ```
 
-`check` catches Astro and TypeScript issues. `build` verifies static output and route generation.
+`test:vercel` protects the monorepo deployment filter, `check` catches Astro and TypeScript issues, and `build` verifies static output and route generation.
 
 ## Keep generated files out of commits
 
@@ -79,3 +83,5 @@ dist
 ```
 
 When the docs site is deployed behind a custom domain, keep the repository link pointed at `https://github.com/amxv/zodex`.
+
+The Vercel project root is `docs/`, but the published `/install.sh` route reads the canonical repository-level `scripts/install.sh`. Vercel outside-root source access must remain enabled. Automatic production deploys should run when `docs/**` or `scripts/install.sh` changes and skip unrelated repository-only changes.

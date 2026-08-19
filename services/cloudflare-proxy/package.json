@@ -1,5 +1,5 @@
 {
-  "name": "zodex-cloudflare-worker",
+  "name": "@zodex/cloudflare-proxy",
   "private": true,
   "type": "module",
   "version": "0.1.0",

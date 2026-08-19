@@ -1,0 +1,55 @@
+name: Docs
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/docs.yml
+      - docs/**
+      - scripts/install.sh
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/docs.yml
+      - docs/**
+      - scripts/install.sh
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Astro docs validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+
+      - name: Install dependencies
+        working-directory: docs
+        run: bun install --frozen-lockfile
+
+      - name: Validate Vercel affected-path logic
+        working-directory: docs
+        run: bun run test:vercel
+
+      - name: Check and build docs
+        working-directory: docs
+        run: |
+          bun run check
+          bun run build
+
+      - name: Verify published installer
+        run: cmp scripts/install.sh docs/dist/install.sh

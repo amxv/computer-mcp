@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - zodex-local
     paths:
       - .github/workflows/ci.yml
       - .github/workflows/release.yml
@@ -19,8 +18,10 @@ on:
       - scripts/install.sh
       - apps/liveboard/**
       - apps/menubar/**
-      - docs/**
       - services/cloudflare-proxy/**
+      - docs/src/content/docs/local.md
+      - docs/src/content/docs/local/setup.md
+      - docs/src/content/docs/sprite.md
       - src/**
       - tests/**
   pull_request:
@@ -40,8 +41,10 @@ on:
       - scripts/install.sh
       - apps/liveboard/**
       - apps/menubar/**
-      - docs/**
       - services/cloudflare-proxy/**
+      - docs/src/content/docs/local.md
+      - docs/src/content/docs/local/setup.md
+      - docs/src/content/docs/sprite.md
       - src/**
       - tests/**
   workflow_dispatch:

@@ -3,9 +3,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const MAX_LOC: usize = 1_000;
-const SOURCE_EXTENSIONS: &[&str] = &["rs", "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "go"];
+const SOURCE_EXTENSIONS: &[&str] = &[
+    "rs", "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "go", "swift", "astro", "css",
+];
 const EXCLUDED_DIRS: &[&str] = &[
     ".git",
+    ".astro",
+    ".vercel",
+    ".wrangler",
     "target",
     "node_modules",
     "dist",

@@ -1,0 +1,234 @@
+.agent-timeline-shell {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.agent-timeline-scroll {
+  width: 100%;
+  height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+.agent-timeline-scroll:focus {
+  outline: none;
+}
+
+.agent-timeline-canvas {
+  position: relative;
+  width: 100%;
+  min-height: 100%;
+}
+
+.virtual-timeline-item {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  padding: 0 8px;
+  will-change: transform;
+}
+
+.history-control {
+  position: absolute;
+  top: 0;
+  left: 8px;
+  right: 8px;
+  display: grid;
+  height: 38px;
+  place-items: center;
+  color: var(--faint);
+  font-size: 9px;
+}
+
+.history-button {
+  z-index: 1;
+  cursor: pointer;
+  min-height: 24px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.history-button:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.history-button:disabled {
+  cursor: default;
+  color: var(--faint);
+}
+
+.timeline-card {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 9px 10px;
+  background: var(--surface-raised);
+  color: var(--text);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.timeline-card-degraded {
+  border-style: dashed;
+}
+
+.timeline-card-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+}
+
+.command-preview,
+.interaction-preview {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-status {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--idle);
+}
+
+.card-status-running {
+  background: var(--recent);
+}
+
+.card-status-exited,
+.card-status-completed,
+.card-status-success {
+  background: var(--success);
+}
+
+.card-status-failed,
+.card-status-killed,
+.card-status-timed_out,
+.card-status-error {
+  background: var(--danger);
+}
+
+.card-kind {
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 1px 5px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 9px;
+}
+
+.card-kind-danger {
+  border-color: color-mix(in srgb, var(--danger) 38%, var(--border));
+  color: var(--danger);
+}
+
+.timeline-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 9px;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.file-change-preview {
+  display: grid;
+  gap: 3px;
+  margin-top: 6px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 9px;
+}
+
+.file-change-preview span {
+  display: flex;
+  min-width: 0;
+  gap: 5px;
+}
+
+.file-change-preview strong {
+  flex: 0 0 auto;
+  color: var(--text);
+  font-weight: 550;
+}
+
+.file-change-preview em {
+  margin-left: auto;
+  color: var(--faint);
+  font-style: normal;
+}
+
+.generic-summary,
+.card-evidence-warning {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.card-evidence-warning {
+  color: var(--recent);
+}
+
+.new-activity-button {
+  position: absolute;
+  z-index: 12;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  min-height: 32px;
+  padding: 7px 12px;
+  background: var(--surface-raised);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 14%);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.new-activity-button .lucide-icon,
+.new-activity-button svg {
+  width: 13px;
+  height: 13px;
+}
+
+.timeline-error {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  left: 10px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, var(--border));
+  border-radius: 6px;
+  padding: 5px 7px;
+  background: var(--surface-raised);
+  color: var(--danger);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

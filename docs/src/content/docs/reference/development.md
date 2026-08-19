@@ -68,6 +68,7 @@ Run:
 ```bash
 cd docs
 bun install
+bun run test:vercel
 bun run check
 bun run build
 ```
