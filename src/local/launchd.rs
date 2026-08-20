@@ -4,6 +4,7 @@ use std::process::{Command, Stdio};
 use anyhow::{Context, Result, bail};
 
 pub const LOCAL_LAUNCHD_LABEL: &str = "com.amxv.zodex.local.runtime";
+const LOCAL_OPEN_FILE_LIMIT: u32 = 10_240;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalLaunchdJob {
@@ -48,6 +49,16 @@ impl LocalLaunchdJob {
   <true/>
   <key>ProcessType</key>
   <string>Background</string>
+  <key>SoftResourceLimits</key>
+  <dict>
+    <key>NumberOfFiles</key>
+    <integer>{open_file_limit}</integer>
+  </dict>
+  <key>HardResourceLimits</key>
+  <dict>
+    <key>NumberOfFiles</key>
+    <integer>{open_file_limit}</integer>
+  </dict>
   <key>StandardOutPath</key>
   <string>/dev/null</string>
   <key>StandardErrorPath</key>
@@ -56,6 +67,7 @@ impl LocalLaunchdJob {
 </plist>
 "#,
             label = LOCAL_LAUNCHD_LABEL,
+            open_file_limit = LOCAL_OPEN_FILE_LIMIT,
         )
     }
 }
@@ -176,6 +188,9 @@ mod tests {
         assert!(!plist.contains("KeepAlive"));
         assert!(!plist.contains("~/Library/LaunchAgents"));
         assert!(!plist.contains("EnvironmentVariables"));
+        assert!(plist.contains("<key>SoftResourceLimits</key>"));
+        assert!(plist.contains("<key>HardResourceLimits</key>"));
+        assert_eq!(plist.matches("<integer>10240</integer>").count(), 2);
         assert!(plist.contains("Zodex &amp; Tools"));
         assert!(plist.contains("/dev/null"));
     }
