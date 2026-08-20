@@ -505,6 +505,7 @@ mod tests {
                     internal_session_id: 1,
                     session_handle: "fixture".to_string(),
                     identity: process,
+                    group_members: Vec::new(),
                     created_by_agent_id: None,
                     invocation_correlation_id: None,
                 }],

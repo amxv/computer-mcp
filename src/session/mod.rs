@@ -116,6 +116,7 @@ struct SessionInner {
     require_exit_before_return: bool,
     leader_identity: Option<ProcessIdentity>,
     owned_group_members: Vec<ProcessIdentity>,
+    persisted_group_members: Vec<ProcessIdentity>,
 }
 
 struct SessionRuntime {
@@ -154,9 +155,21 @@ impl SessionRuntime {
         self.inner.lock().await.last_used_at
     }
 
+    fn reap_and_record_exit(&self, inner: &mut SessionInner) -> Result<Option<i32>> {
+        let exit_code = reap_exit_code(inner, self.process_inspector.as_ref())?;
+        if inner.persisted_group_members != inner.owned_group_members {
+            if let Some(process) = self.owned_process.as_ref() {
+                self.process_observer
+                    .process_group_members_updated(process, &inner.owned_group_members)?;
+            }
+            inner.persisted_group_members = inner.owned_group_members.clone();
+        }
+        Ok(exit_code)
+    }
+
     async fn is_exited(&self) -> Result<bool> {
         let mut inner = self.inner.lock().await;
-        let leader_exited = reap_exit_code(&mut inner, self.process_inspector.as_ref())?.is_some();
+        let leader_exited = self.reap_and_record_exit(&mut inner)?.is_some();
         Ok(leader_exited && inner.owned_group_members.is_empty())
     }
 
@@ -270,7 +283,7 @@ impl SessionRuntime {
                     );
                 }
 
-                let reaped_exit_code = reap_exit_code(&mut inner, self.process_inspector.as_ref())?;
+                let reaped_exit_code = self.reap_and_record_exit(&mut inner)?;
                 maybe_force_kill(&mut inner, self.process_inspector.as_ref())?;
 
                 match reaped_exit_code {
@@ -548,6 +561,7 @@ impl SessionManager {
                 require_exit_before_return: false,
                 leader_identity: identity,
                 owned_group_members: Vec::new(),
+                persisted_group_members: Vec::new(),
             }),
             process_inspector: self.policy.process_inspector().clone(),
             process_observer,
@@ -669,7 +683,7 @@ impl SessionManager {
         let mut sessions_signaled = 0;
         for runtime in &runtimes {
             let mut inner = runtime.inner.lock().await;
-            if reap_exit_code(&mut inner, runtime.process_inspector.as_ref())?.is_none() {
+            if runtime.reap_and_record_exit(&mut inner)?.is_none() {
                 inner.kill_requested = true;
                 inner.require_exit_before_return = true;
                 request_termination(&mut inner);
@@ -715,7 +729,7 @@ impl SessionManager {
         let mut sessions_force_killed = 0;
         for runtime in &runtimes {
             let mut inner = runtime.inner.lock().await;
-            if reap_exit_code(&mut inner, runtime.process_inspector.as_ref())?.is_none() {
+            if runtime.reap_and_record_exit(&mut inner)?.is_none() {
                 inner.force_killed = true;
                 process::signal_process_group(inner.pid, ProcessSignal::Kill)?;
                 sessions_force_killed += 1;
@@ -849,7 +863,7 @@ fn spawn_child_reaper(runtime: Arc<SessionRuntime>, poll_interval: Duration) {
             tokio::time::sleep(poll_interval).await;
             let reaped = {
                 let mut inner = runtime.inner.lock().await;
-                let result = reap_exit_code(&mut inner, runtime.process_inspector.as_ref());
+                let result = runtime.reap_and_record_exit(&mut inner);
                 result.map(|exit| {
                     let end = exit.and_then(|_| owned_process_end(&inner));
                     (exit, end)

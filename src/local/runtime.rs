@@ -9,7 +9,9 @@ use anyhow::{Context, Result};
 use crate::config::Config;
 use crate::server::{LocalMcpServer, LocalMcpServerConfig, start_local_mcp_server};
 use crate::service::ZodexService;
-use crate::session::{OwnedProcess, OwnedProcessEnd, OwnedProcessObserver, SessionRuntimePolicy};
+use crate::session::{
+    OwnedProcess, OwnedProcessEnd, OwnedProcessObserver, ProcessIdentity, SessionRuntimePolicy,
+};
 
 use super::{
     LocalConfig, LocalHistoryRuntime, LocalHistoryRuntimeConfig, LocalObservabilityServer,
@@ -42,6 +44,15 @@ impl OwnedProcessObserver for LocalProcessObservers {
     fn process_started(&self, process: &OwnedProcess) -> Result<()> {
         self.history.process_started(process)?;
         self.registry.process_started(process)
+    }
+
+    fn process_group_members_updated(
+        &self,
+        process: &OwnedProcess,
+        members: &[ProcessIdentity],
+    ) -> Result<()> {
+        self.registry
+            .process_group_members_updated(process, members)
     }
 
     fn process_ended(&self, process: &OwnedProcess, end: &OwnedProcessEnd) -> Result<()> {

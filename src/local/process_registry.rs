@@ -31,6 +31,8 @@ pub struct LocalOwnedProcessRecord {
     pub internal_session_id: u64,
     pub session_handle: String,
     pub identity: ProcessIdentity,
+    #[serde(default)]
+    pub group_members: Vec<ProcessIdentity>,
     pub created_by_agent_id: Option<String>,
     pub invocation_correlation_id: Option<String>,
 }
@@ -41,6 +43,7 @@ impl From<&OwnedProcess> for LocalOwnedProcessRecord {
             internal_session_id: process.internal_session_id,
             session_handle: process.session_handle.to_string(),
             identity: process.identity.clone(),
+            group_members: Vec::new(),
             created_by_agent_id: process.created_by.agent_id.as_deref().map(str::to_owned),
             invocation_correlation_id: process
                 .created_by
@@ -111,6 +114,21 @@ impl OwnedProcessObserver for LocalOwnedProcessRegistry {
         self.update(|records| {
             records.retain(|existing| existing.internal_session_id != record.internal_session_id);
             records.push(record);
+        })
+    }
+
+    fn process_group_members_updated(
+        &self,
+        process: &OwnedProcess,
+        members: &[ProcessIdentity],
+    ) -> Result<()> {
+        self.update(|records| {
+            if let Some(record) = records
+                .iter_mut()
+                .find(|record| record.internal_session_id == process.internal_session_id)
+            {
+                record.group_members = members.to_vec();
+            }
         })
     }
 
@@ -208,6 +226,11 @@ fn terminate_matching_stale_processes_with_timing(
     let mut discovered = Vec::new();
 
     for process in document.processes {
+        for identity in &process.group_members {
+            if identity != &process.identity && !discovered.contains(identity) {
+                discovered.push(identity.clone());
+            }
+        }
         match control.identity(process.identity.pid)? {
             Some(current) if current == process.identity => {
                 let mut members = control
@@ -230,16 +253,28 @@ fn terminate_matching_stale_processes_with_timing(
             }
             Some(_) => report.identity_mismatch += 1,
             None => {
-                // A live group without its recorded leader cannot be proven to
-                // still belong to this old runtime from the leader record
-                // alone. Preserve the registry and surface the ambiguity
-                // instead of signaling a potentially reused PGID.
-                if control
-                    .process_group_members(process.identity.pid, STALE_PROCESS_DISCOVERY_LIMIT)?
-                    .is_empty()
-                {
+                let members = control
+                    .process_group_members(process.identity.pid, STALE_PROCESS_DISCOVERY_LIMIT)?;
+                if members.is_empty() {
                     report.already_gone += 1;
+                } else if members
+                    .iter()
+                    .any(|member| process.group_members.contains(member))
+                {
+                    // A persisted birth-identity match proves that this is a
+                    // continuation of the owned group after its leader exited.
+                    // Snapshot every current member, then signal each exact
+                    // identity individually so a reused numeric PGID is never
+                    // trusted as the cleanup boundary.
+                    for identity in members {
+                        if identity != process.identity && !discovered.contains(&identity) {
+                            discovered.push(identity);
+                        }
+                    }
                 } else {
+                    // Legacy registries contain only the leader identity. If
+                    // the leader is gone, preserve that ambiguous evidence
+                    // rather than adopting an unproven process group.
                     report.unresolved_leaderless_groups += 1;
                 }
             }
@@ -475,6 +510,10 @@ mod tests {
 
         registry.process_started(&first).unwrap();
         registry.process_started(&second).unwrap();
+        let first_member = identity(1101, 33);
+        registry
+            .process_group_members_updated(&first, std::slice::from_ref(&first_member))
+            .unwrap();
         assert_eq!(registry.snapshot().len(), 2);
         assert!(path.exists());
         let raw: serde_json::Value =
@@ -482,6 +521,7 @@ mod tests {
         assert_eq!(raw["schema_version"], 1);
         assert_eq!(raw["runtime_id"], "runtime-a");
         assert_eq!(raw["processes"].as_array().unwrap().len(), 2);
+        assert_eq!(registry.snapshot()[0].group_members, vec![first_member]);
 
         registry.process_ended(&first, &exited_end()).unwrap();
         assert_eq!(registry.snapshot().len(), 1);
@@ -698,6 +738,76 @@ mod tests {
             path.exists(),
             "ambiguous ownership evidence must be preserved"
         );
+    }
+
+    struct PersistedLeaderlessGroupControl {
+        group_member: ProcessIdentity,
+        member_identity_calls: AtomicUsize,
+    }
+
+    impl ProcessInspector for PersistedLeaderlessGroupControl {
+        fn identity(&self, pid: i32) -> anyhow::Result<Option<ProcessIdentity>> {
+            if pid != self.group_member.pid {
+                return Ok(None);
+            }
+            Ok(
+                (self.member_identity_calls.fetch_add(1, Ordering::SeqCst) == 0)
+                    .then(|| self.group_member.clone()),
+            )
+        }
+
+        fn live_cwd(&self, _pid: i32) -> Option<String> {
+            None
+        }
+
+        fn process_group_members(
+            &self,
+            pgid: i32,
+            _limit: usize,
+        ) -> anyhow::Result<Vec<ProcessIdentity>> {
+            Ok(if pgid == 3101 {
+                vec![self.group_member.clone()]
+            } else {
+                Vec::new()
+            })
+        }
+    }
+
+    impl ProcessControl for PersistedLeaderlessGroupControl {
+        fn signal_group(&self, _pid: i32, _signal: ProcessSignal) -> anyhow::Result<()> {
+            panic!("leaderless cleanup must signal persisted identities individually")
+        }
+    }
+
+    #[test]
+    fn stale_cleanup_resolves_leaderless_group_from_persisted_member_identity() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("runtime/owned-processes.json");
+        let leader = owned_process(1, 3101, 111);
+        let member = identity(3102, 222);
+        let registry = LocalOwnedProcessRegistry::fresh(&path, "runtime-a").unwrap();
+        registry.process_started(&leader).unwrap();
+        registry
+            .process_group_members_updated(&leader, std::slice::from_ref(&member))
+            .unwrap();
+        let control = PersistedLeaderlessGroupControl {
+            group_member: member,
+            member_identity_calls: AtomicUsize::new(0),
+        };
+
+        let report = terminate_matching_stale_processes_with_timing(
+            &path,
+            Some("runtime-a"),
+            &control,
+            Duration::from_millis(1),
+            Duration::from_millis(1),
+            Duration::from_millis(1),
+        )
+        .unwrap();
+
+        assert_eq!(report.unresolved_leaderless_groups, 0);
+        assert_eq!(report.descendants_signaled, 1);
+        assert_eq!(report.survivors, 0);
     }
 
     #[cfg(target_os = "linux")]

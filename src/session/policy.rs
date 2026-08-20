@@ -88,6 +88,15 @@ impl OwnedProcessEnd {
 
 pub trait OwnedProcessObserver: Send + Sync {
     fn process_started(&self, process: &OwnedProcess) -> Result<()>;
+
+    fn process_group_members_updated(
+        &self,
+        _process: &OwnedProcess,
+        _members: &[ProcessIdentity],
+    ) -> Result<()> {
+        Ok(())
+    }
+
     fn process_ended(&self, process: &OwnedProcess, end: &OwnedProcessEnd) -> Result<()>;
 }
 

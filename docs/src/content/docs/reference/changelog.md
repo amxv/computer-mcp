@@ -8,6 +8,10 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.3.9 — 2026-08-20
+
+- Fixed Local shutdown getting stuck on a leaderless command process group by persisting exact member birth identities and using them for identity-safe stale cleanup.
+
 ## 0.3.8 — 2026-08-18
 
 - Fixed macOS Launch at Login after in-place upgrades by ensuring login-item operations run from the current installed app bundle instead of a stale process whose previous bundle was replaced.

@@ -173,8 +173,7 @@ pub(super) async fn wait_for_session_exits_until(
             // the next absolute tick instead.
             match runtime.inner.try_lock() {
                 Ok(mut inner) => {
-                    let leader_exited =
-                        reap_exit_code(&mut inner, runtime.process_inspector.as_ref())?.is_some();
+                    let leader_exited = runtime.reap_and_record_exit(&mut inner)?.is_some();
                     if leader_exited && inner.owned_group_members.is_empty() {
                         let end = super::owned_process_end(&inner)
                             .expect("reaped owned process without final end evidence");

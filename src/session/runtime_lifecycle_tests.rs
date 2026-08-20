@@ -7,8 +7,8 @@ use crate::invocation::{InvocationContext, ProviderCallMetadata};
 use crate::protocol::{CommandStatus, ExecCommandInput, TerminationReason, WriteStdinInput};
 
 use super::{
-    OwnedProcess, OwnedProcessEnd, OwnedProcessObserver, SessionManager, SessionOrigin,
-    SessionOutputChunk, SessionOutputObserver, SessionRuntimePolicy,
+    OwnedProcess, OwnedProcessEnd, OwnedProcessObserver, ProcessIdentity, SessionManager,
+    SessionOrigin, SessionOutputChunk, SessionOutputObserver, SessionRuntimePolicy,
 };
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use super::{ProcessInspector, SystemProcessInspector};
@@ -83,10 +83,23 @@ impl SessionOutputObserver for CapturingOutputObserver {
 #[derive(Default)]
 struct CapturingProcessObserver {
     ended: Mutex<Vec<(u64, OwnedProcessEnd)>>,
+    group_members: Mutex<Vec<(u64, Vec<ProcessIdentity>)>>,
 }
 
 impl OwnedProcessObserver for CapturingProcessObserver {
     fn process_started(&self, _process: &OwnedProcess) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn process_group_members_updated(
+        &self,
+        process: &OwnedProcess,
+        members: &[ProcessIdentity],
+    ) -> anyhow::Result<()> {
+        self.group_members
+            .lock()
+            .unwrap()
+            .push((process.internal_session_id, members.to_vec()));
         Ok(())
     }
 
@@ -102,6 +115,10 @@ impl OwnedProcessObserver for CapturingProcessObserver {
 impl CapturingProcessObserver {
     fn ended(&self) -> Vec<(u64, OwnedProcessEnd)> {
         self.ended.lock().unwrap().clone()
+    }
+
+    fn group_members(&self) -> Vec<(u64, Vec<ProcessIdentity>)> {
+        self.group_members.lock().unwrap().clone()
     }
 }
 
@@ -613,6 +630,13 @@ async fn whole_runtime_shutdown_keeps_background_job_owned_after_shell_exit() {
             .iter()
             .any(|member| member.pid == background_pid),
         "session runtime must retain the stable background member identity after leader reap"
+    );
+    assert!(
+        observer
+            .group_members()
+            .iter()
+            .any(|(_, members)| { members.iter().any(|member| member.pid == background_pid) }),
+        "process observer must persist the stable background member identity"
     );
     let counts = mgr.session_counts().await.unwrap();
     assert_eq!(
