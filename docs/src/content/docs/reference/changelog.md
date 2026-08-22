@@ -8,6 +8,11 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.3.10 — 2026-08-22
+
+- Raised the managed Local runtime's soft and hard open-file limits to 10,240 so larger concurrent Agent workloads have sufficient descriptor capacity.
+- Prevented stale asynchronous recovery snapshots from overwriting newer Liveboard SSE updates, keeping concurrent Agent timelines stable and repository-correct.
+
 ## 0.3.9 — 2026-08-20
 
 - Fixed Local shutdown getting stuck on a leaderless command process group by persisting exact member birth identities and using them for identity-safe stale cleanup.
