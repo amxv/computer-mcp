@@ -2,7 +2,14 @@ import { createSignal } from 'solid-js'
 import { render } from 'solid-js/web'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import type { ApiAgent, LiveboardPreferences } from '../api/client'
+import type {
+  ApiAgent,
+  ApiTimelinePage,
+  LiveboardPreferences,
+  PresentationRecord,
+} from '../api/client'
+import { createAgentStreamController } from '../streams/AgentStreamController'
+import { AgentTimeline } from '../timeline/AgentTimeline'
 import '../styles.css'
 import { Board } from './Board'
 
@@ -26,6 +33,57 @@ const preferences: LiveboardPreferences = {
   show_raw_button: false,
   editor_command: 'zed',
   agents: {},
+}
+
+function record(
+  id: number,
+  agentId: string,
+  repository: string,
+): PresentationRecord {
+  return {
+    presentation_id: `inv-${id}`,
+    primary_invocation_id: id,
+    raw_evidence_count: 1,
+    raw_invocation_ids: [id],
+    raw_invocation_ids_truncated: false,
+    agent_id: agentId,
+    declared_workdir: repository,
+    normalized_workdir: repository,
+    new_workdir: null,
+    started_at_ms: id,
+    duration_ms: 1,
+    evidence: {
+      evidence_state: 'complete',
+      capture_state: 'not_applicable',
+      degraded: false,
+      reason: null,
+    },
+    kind: 'generic',
+    tool_name: `tool-${agentId}-${id}`,
+    status: 'success',
+    summary: repository,
+  }
+}
+
+function controller(agentId: string) {
+  return createAgentStreamController({
+    agentId,
+    attachWatermarkMs: 10_000,
+    loadHistoryPage: async (): Promise<ApiTimelinePage> => ({
+      schema_version: 1,
+      presentation_version: 3,
+      runtime_id: 'runtime-concurrent',
+      records: [],
+      has_more: false,
+      next_cursor: null,
+    }),
+    loadOutputMetadata: async () => {
+      throw new Error('output metadata not expected')
+    },
+    loadDisplayOutputPage: async () => {
+      throw new Error('output page not expected')
+    },
+  })
 }
 
 let disposeCurrent: (() => void) | undefined
@@ -90,5 +148,72 @@ describe('responsive Agent board layout', () => {
       'c333',
       'd444',
     ])
+  })
+
+  it('keeps concurrent repository timelines mounted in their original column frames', async () => {
+    const first = controller('a111')
+    const second = controller('b222')
+    const controllers = new Map([
+      ['a111', first],
+      ['b222', second],
+    ])
+    const container = document.createElement('div')
+    container.style.width = '900px'
+    container.style.height = '600px'
+    document.body.append(container)
+    containerCurrent = container
+    disposeCurrent = render(
+      () => (
+        <div class="app-shell">
+          <Board
+            agents={[agent('a111', 0), agent('b222', 1)]}
+            preferences={preferences}
+            nowMs={10_000}
+            saving={false}
+            onPatch={() => undefined}
+            renderTimeline={(agentId) => (
+              <AgentTimeline controller={controllers.get(agentId)!} />
+            )}
+          />
+        </div>
+      ),
+      container,
+    )
+
+    const firstFrame = container.querySelector<HTMLElement>(
+      '[data-agent-id="a111"] [data-agent-timeline="a111"]',
+    )!
+    const secondFrame = container.querySelector<HTMLElement>(
+      '[data-agent-id="b222"] [data-agent-timeline="b222"]',
+    )!
+    const firstRecoveryCheckpoint = first.recoveryCheckpoint()
+    const secondRecoveryCheckpoint = second.recoveryCheckpoint()
+
+    for (let index = 0; index < 8; index += 1) {
+      first.upsert(record(100 + index, 'a111', '/repos/alpha'))
+      second.upsert(record(200 + index, 'b222', '/repos/beta'))
+      first.mergeRecovery(
+        [record(100 + index, 'a111', '/repos/alpha-stale')],
+        firstRecoveryCheckpoint,
+      )
+      second.mergeRecovery(
+        [record(200 + index, 'b222', '/repos/beta-stale')],
+        secondRecoveryCheckpoint,
+      )
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+
+      expect(
+        container.querySelector('[data-agent-id="a111"] [data-agent-timeline="a111"]'),
+      ).toBe(firstFrame)
+      expect(
+        container.querySelector('[data-agent-id="b222"] [data-agent-timeline="b222"]'),
+      ).toBe(secondFrame)
+      expect(firstFrame.textContent).toContain('/repos/alpha')
+      expect(firstFrame.textContent).not.toContain('/repos/alpha-stale')
+      expect(firstFrame.textContent).not.toContain('/repos/beta')
+      expect(secondFrame.textContent).toContain('/repos/beta')
+      expect(secondFrame.textContent).not.toContain('/repos/beta-stale')
+      expect(secondFrame.textContent).not.toContain('/repos/alpha')
+    }
   })
 })

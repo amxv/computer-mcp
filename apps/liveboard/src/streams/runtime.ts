@@ -211,6 +211,7 @@ export function createRuntimeConnection(
   ) => {
     if (!controller || hydratingAgents.has(agentId) || disposed) return
     hydratingAgents.add(agentId)
+    const checkpoint = controller.recoveryCheckpoint()
     try {
       let cursor: string | undefined
       for (;;) {
@@ -224,7 +225,7 @@ export function createRuntimeConnection(
           },
           runtimeId(),
         )
-        controller.mergeRecovery(page.records)
+        controller.mergeRecovery(page.records, checkpoint)
         if (!page.has_more || !page.next_cursor) break
         cursor = page.next_cursor
       }

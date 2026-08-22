@@ -18,6 +18,7 @@ import {
 interface CardSlot {
   record: Accessor<PresentationRecord>
   setRecord: Setter<PresentationRecord>
+  mutationVersion: number
 }
 
 interface ExpansionSlot {
@@ -54,7 +55,11 @@ export interface AgentStreamController {
   historyExhausted: Accessor<boolean>
   historyError: Accessor<string | undefined>
   upsert: (record: PresentationRecord, activity?: boolean) => boolean
-  mergeRecovery: (records: readonly PresentationRecord[]) => number
+  recoveryCheckpoint: () => number
+  mergeRecovery: (
+    records: readonly PresentationRecord[],
+    checkpoint?: number,
+  ) => number
   appendLiveOutput: (input: {
     presentationId: string
     invocationId: number
@@ -115,6 +120,7 @@ export function createAgentStreamController(
   const [commandExpansionDefault, setCommandExpansionDefaultSignal] = createSignal(false)
   const [diffExpansionDefault, setDiffExpansionDefaultSignal] = createSignal(true)
   let historyCursor: string | undefined
+  let nextMutationVersion = 1
   let disposed = false
 
   const clearUnseen = () => {
@@ -145,6 +151,7 @@ export function createAgentStreamController(
     const existing = cards.get(record.presentation_id)
     if (existing) {
       existing.setRecord(record)
+      existing.mutationVersion = nextMutationVersion++
       if (record.kind === 'command' && record.status !== 'running') {
         outputStates.get(record.presentation_id)?.markFinal()
       }
@@ -156,6 +163,7 @@ export function createAgentStreamController(
     cards.set(record.presentation_id, {
       record: recordSignal,
       setRecord,
+      mutationVersion: nextMutationVersion++,
     })
     if (record.kind === 'command' && record.status !== 'running') {
       outputStates.get(record.presentation_id)?.markFinal()
@@ -174,9 +182,22 @@ export function createAgentStreamController(
     return true
   }
 
-  const mergeRecovery = (records: readonly PresentationRecord[]) => {
+  const mergeRecovery = (
+    records: readonly PresentationRecord[],
+    checkpoint?: number,
+  ) => {
+    // Recovery is an asynchronous API snapshot. Preserve any live SSE
+    // mutation that reached this card after that recovery request began.
     let added = 0
     for (const record of records) {
+      const existing = cards.get(record.presentation_id)
+      if (
+        checkpoint !== undefined &&
+        existing !== undefined &&
+        existing.mutationVersion > checkpoint
+      ) {
+        continue
+      }
       if (upsert(record, false)) added += 1
     }
     return added
@@ -258,6 +279,7 @@ export function createAgentStreamController(
     historyExhausted,
     historyError,
     upsert,
+    recoveryCheckpoint: () => nextMutationVersion - 1,
     mergeRecovery,
     appendLiveOutput: ({
       presentationId,

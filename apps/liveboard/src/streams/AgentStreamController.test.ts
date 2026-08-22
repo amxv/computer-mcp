@@ -90,6 +90,30 @@ describe('AgentStreamController', () => {
     expect(updated?.kind === 'command' ? updated.status : undefined).toBe('exited')
   })
 
+  it('merges recovery unless a newer live mutation crossed its checkpoint', () => {
+    const controller = createAgentStreamController({
+      agentId: 'a111',
+      attachWatermarkMs: 1_000,
+      loadHistoryPage: async () => page([], false, null),
+      ...outputLoaders,
+    })
+    controller.upsert(command('inv-1', 100, { duration_ms: 10 }), false)
+    const currentCheckpoint = controller.recoveryCheckpoint()
+    controller.mergeRecovery(
+      [command('inv-1', 100, { duration_ms: 20 })],
+      currentCheckpoint,
+    )
+    expect(controller.record('inv-1')?.duration_ms).toBe(20)
+
+    const staleCheckpoint = controller.recoveryCheckpoint()
+    controller.upsert(command('inv-1', 100, { duration_ms: 30 }), false)
+    controller.mergeRecovery(
+      [command('inv-1', 100, { duration_ms: 25 })],
+      staleCheckpoint,
+    )
+    expect(controller.record('inv-1')?.duration_ms).toBe(30)
+  })
+
   it('counts one unseen activity per card while paused, including live output growth', () => {
     const controller = createAgentStreamController({
       agentId: 'a111',

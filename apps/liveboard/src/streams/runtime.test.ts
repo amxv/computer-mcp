@@ -557,4 +557,112 @@ describe('runtime connection', () => {
     expect(dropped?.kind === 'file_changes' ? dropped.changes[0]?.lines : undefined).toEqual([])
     runtime.dispose()
   })
+
+  it('does not let concurrent recovery replace newer repository stream frames', async () => {
+    const sources: FakeEventSource[] = []
+    const recoveryResolvers = new Map<string, (page: ApiTimelinePage) => void>()
+    const api: RuntimeApi = {
+      fetchStatus: async () => status(),
+      fetchCurrentAgents: async () => ({ agents: [agent('a111'), agent('b222')] }),
+      fetchTimeline: (query, runtimeId) =>
+        new Promise<ApiTimelinePage>((resolve) => {
+          recoveryResolvers.set(query.agentId!, resolve)
+        }).then((result) => ({ ...result, runtime_id: runtimeId })),
+      fetchTimelineDetail: async () => {
+        throw new Error('timeline detail not expected')
+      },
+      fetchTimelineDiffBatch: async (_presentationIds, runtimeId) => ({
+        schema_version: 1,
+        presentation_version: 3,
+        runtime_id: runtimeId,
+        records: [],
+      }),
+      fetchOutputMetadata: async () => {
+        throw new Error('output metadata not expected')
+      },
+      fetchOutputPage: async () => {
+        throw new Error('output page not expected')
+      },
+      openEventSource: (url) => {
+        const source = new FakeEventSource(url)
+        sources.push(source)
+        return source
+      },
+    }
+    const runtime = createRuntimeConnection({
+      initialStatus: status(),
+      initialAgents: [agent('a111'), agent('b222')],
+      initialVisibleAgentIds: ['a111', 'b222'],
+      viewerAttachWatermarkMs: 1_000,
+      api,
+    })
+    const controllerA = runtime.controllerFor('a111')
+    const controllerB = runtime.controllerFor('b222')
+    const liveA = {
+      ...record(1, 'a111'),
+      normalized_workdir: '/repos/alpha',
+      summary: 'alpha live frame',
+    } as PresentationRecord
+    const liveB = {
+      ...record(2, 'b222'),
+      normalized_workdir: '/repos/beta',
+      summary: 'beta live frame',
+    } as PresentationRecord
+
+    runtime.start()
+    sources[0]!.open()
+    await vi.waitFor(() => expect(recoveryResolvers.size).toBe(2))
+    sources[0]!.emit(
+      liveEvent({
+        sequence: 1,
+        event_type: 'presentation_updated',
+        agent_id: 'a111',
+        invocation_id: 1,
+        presentation_id: 'inv-1',
+        payload: { record: liveA },
+      }),
+    )
+    sources[0]!.emit(
+      liveEvent({
+        sequence: 2,
+        event_type: 'presentation_updated',
+        agent_id: 'b222',
+        invocation_id: 2,
+        presentation_id: 'inv-2',
+        payload: { record: liveB },
+      }),
+    )
+
+    recoveryResolvers.get('a111')!(
+      page('runtime-one', [
+        {
+          ...liveA,
+          summary: 'alpha stale recovery frame',
+        } as PresentationRecord,
+      ]),
+    )
+    recoveryResolvers.get('b222')!(
+      page('runtime-one', [
+        {
+          ...liveB,
+          summary: 'beta stale recovery frame',
+        } as PresentationRecord,
+      ]),
+    )
+    await vi.waitFor(() => expect(runtime.connectionState()).toBe('connected'))
+
+    expect(controllerA.record('inv-1')).toMatchObject({
+      agent_id: 'a111',
+      normalized_workdir: '/repos/alpha',
+      summary: 'alpha live frame',
+    })
+    expect(controllerB.record('inv-2')).toMatchObject({
+      agent_id: 'b222',
+      normalized_workdir: '/repos/beta',
+      summary: 'beta live frame',
+    })
+    expect(controllerA.record('inv-2')).toBeUndefined()
+    expect(controllerB.record('inv-1')).toBeUndefined()
+    runtime.dispose()
+  })
 })
