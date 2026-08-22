@@ -3,49 +3,42 @@ import BaseLayout from "zuedocs/layouts/BaseLayout.astro";
 import { primaryNav, siteConfig } from "../data/docs";
 import "../styles/landing.css";
 
-const setupPaths = [
+const localFeatures = [
   {
-    index: "A",
-    eyebrow: "Local / Apple Silicon",
-    title: "Use your Mac directly.",
-    body: "Run Zodex as your logged-in user, connect ChatGPT through an OpenAI Secure MCP Tunnel, and start from the repo you want the model to see first.",
-    facts: ["trusted host", "Secure MCP Tunnel", "live observer + history"],
-    code: `curl -fsSL https://zodex.ashray.xyz/install.sh | sh
-zodex local setup
-cd ~/code/my-project
-zodex local start --ttl 4h`,
-    href: "/docs/local",
-    cta: "Open Local quick start"
+    index: "01",
+    marker: "MAC",
+    title: "Your real environment",
+    body: "ChatGPT works as your logged-in macOS user with the shell, Git, Homebrew, language toolchains, credentials, and files you already use."
   },
   {
-    index: "B",
-    eyebrow: "Sprite / Remote Linux",
-    title: "Bring a remote workspace online.",
-    body: "Create a wake-on-demand Sprite, provision the isolated GitHub reader/writer boundary, and connect ChatGPT through Zodex's canonical Cloudflare Worker.",
-    facts: ["wake-on-demand Linux", "canonical Worker", "PR / grant / YOLO"],
-    code: `curl -fsSL https://zodex.ashray.xyz/install.sh | sh
-curl -fsSL https://sprites.dev/install.sh | sh
-sprite login
-sprite create zodex-dev
-sprite info zodex-dev
-zodex sprite setup --help`,
-    href: "/docs/sprite",
-    cta: "Open Sprite quick start"
-  }
-];
-
-const executionModes = [
-  {
-    index: "A",
-    href: "/docs/local",
-    title: "Local / Apple Silicon Mac",
-    body: "Run the three tools directly as your logged-in user on a trusted Mac, with one runtime-wide TTL, many Agent-aware ChatGPT conversations, durable history, and a read-only live observer."
+    index: "02",
+    marker: "∞",
+    title: "Many Agents, one runtime",
+    body: "Several ChatGPT conversations can work concurrently across repositories and worktrees without starting another daemon or tunnel."
   },
   {
-    index: "B",
-    href: "/docs/sprite",
-    title: "Sprite / remote Linux",
-    body: "Run the three tools on wake-on-demand Linux through the canonical Cloudflare Worker, with a restricted Agent account and isolated GitHub reader/publisher boundary."
+    index: "03",
+    marker: "LIVE",
+    title: "See every tool call",
+    body: "Liveboard gives each Agent an independent timeline of commands, output, file diffs, stdin, process state, and recent workdirs."
+  },
+  {
+    index: "04",
+    marker: "HIST",
+    title: "History survives the session",
+    body: "Execution evidence stays available after Liveboard closes and after Local stops, with compact history and exact audit views when you need them."
+  },
+  {
+    index: "05",
+    marker: "TTL",
+    title: "Access has a lifecycle",
+    body: "Start Local explicitly, give the whole runtime an optional wall-clock TTL, and stop it cleanly when the work is done."
+  },
+  {
+    index: "06",
+    marker: "⌘",
+    title: "Native Mac controls",
+    body: "The optional menu-bar app controls start, stop, Liveboard, your start folder, launch-at-login behavior, and Zodex upgrades."
   }
 ];
 
@@ -53,110 +46,49 @@ const tools = [
   {
     index: "01",
     name: "exec_command",
-    label: "Run",
-    body: "Start a shell command in a PTY-backed session. Builds, tests, dev servers, REPLs, and ordinary Git behave like they should on the real Mac or Linux host behind the active mode.",
-    sample: "$ cargo test --quiet"
+    verb: "Run",
+    body: "Run a shell command in an explicit absolute workdir. Builds, tests, Git, dev servers, REPLs, and ordinary command-line workflows stay ordinary."
   },
   {
     index: "02",
     name: "write_stdin",
-    label: "Continue",
-    body: "Poll a live process, send input, or stop it cleanly. Long-running work keeps a stable session handle instead of collapsing into fire-and-forget subprocesses.",
-    sample: "session_42 → still running"
+    verb: "Continue",
+    body: "Poll a running process, send input, or stop it. Long-running work keeps a stable session instead of becoming fire-and-forget subprocesses."
   },
   {
     index: "03",
     name: "apply_patch",
-    label: "Edit",
-    body: "Apply the original Codex-style patch format GPT models already know. The model does not have to relearn a clever abstraction before it can change a file.",
-    sample: "*** Update File: src/lib.rs"
+    verb: "Edit",
+    body: "Apply the Codex-style patch format GPT models already know. Zodex does not make the model learn a new editing abstraction first."
   }
 ];
 
 const modes = [
   {
-    number: "01",
-    state: "Review first",
-    title: "Publish a PR",
-    body: "ChatGPT commits locally, then asks the isolated publisher daemon to push a generated branch and open a pull request. The shell never sees the writer token.",
-    command: "zodex-agent github publish-pr --repo owner/repo --title \"Ship it\""
-  },
-  {
-    number: "02",
-    state: "Approve once",
-    title: "Open a push window",
-    body: "Grant one repository a temporary direct-push window. The agent still runs normal Git; zodex enforces the policy underneath the familiar workflow.",
-    command: "zodex-agent github request-push --repo owner/repo"
-  },
-  {
-    number: "03",
-    state: "Trusted session",
-    title: "Go scoped YOLO",
-    body: "For repos and tasks you trust, grant bounded autonomy to one repo, several repos, or every installed repo. Grants carry scopes and independent expiry times.",
-    command: "zodex sprite github yolo --sprite dev --repo owner/repo --ttl 2h"
-  }
-];
-
-const capabilities = [
-  {
-    marker: "PTY",
-    title: "A terminal, not a subprocess wrapper",
-    body: "Interactive sessions survive across tool calls, nested processes are cleaned up as a group, and recent error output wins when buffers fill."
-  },
-  {
-    marker: "GIT",
-    title: "Normal Git, explicit policy",
-    body: "Branch, diff, test, and commit normally. Local uses the credentials you already trust on your Mac; Sprite adds review-first PRs, temporary grants, and scoped YOLO."
-  },
-  {
-    marker: "TRUST",
-    title: "Two trust models, both explicit",
-    body: "Local is intentionally trusted-host execution with no Zodex sandbox. Sprite is a remote workspace with a separate GitHub write-control boundary."
-  },
-  {
-    marker: "OBS",
-    title: "First-class observability",
-    body: "Local includes Agent-aware durable history, a live TUI, and a versioned localhost HTTP/SSE API for custom dashboards, menu-bar apps, or other viewers."
-  }
-];
-
-const guideLinks = [
-  {
-    index: "01",
+    index: "L",
+    title: "Local",
+    subtitle: "Trusted Apple Silicon Mac",
     href: "/docs/local",
-    title: "Zodex Local",
-    body: "Run ChatGPT directly on a trusted Apple Silicon Mac and inspect many concurrent Agents."
+    body: "Direct trusted-host execution through an OpenAI Secure MCP Tunnel. Your Mac, your developer environment, your credentials, your normal shell.",
+    facts: ["Secure MCP Tunnel", "explicit start / stop", "optional runtime TTL", "Liveboard + durable history"]
   },
   {
-    index: "02",
+    index: "S",
+    title: "Sprite",
+    subtitle: "Wake-on-demand remote Linux",
     href: "/docs/sprite",
-    title: "Sprite quickstart",
-    body: "Create the remote Linux workspace, configure GitHub Apps, and connect ChatGPT."
-  },
-  {
-    index: "03",
-    href: "/docs/local/observability-api",
-    title: "Observability API",
-    body: "Build a custom Local watch surface on the same read-only HTTP/SSE API as the first-party TUI."
-  },
-  {
-    index: "04",
-    href: "/docs/sprite/write-modes",
-    title: "Write modes",
-    body: "Choose the right point on the ladder from review-first PRs to scoped YOLO."
-  },
-  {
-    index: "05",
-    href: "/docs/reference/architecture",
-    title: "Architecture",
-    body: "Compare Local trusted-host execution with the remote Sprite runtime and its GitHub boundary."
-  },
-  {
-    index: "06",
-    href: "/docs/reference/tools",
-    title: "The three tools",
-    body: "Read the exact inputs, outputs, session contract, and annotations exposed over MCP."
+    body: "The same three-tool model interface on a remote Linux workspace, behind Zodex's Cloudflare Worker and an isolated GitHub write boundary.",
+    facts: ["automatic wake / sleep", "remote Linux workspace", "review-first PRs", "push grants + scoped YOLO"]
   }
+];
+
+const docsLinks = [
+  ["01", "Local", "/docs/local", "Setup, daily use, Liveboard, history, configuration, and troubleshooting."],
+  ["02", "Sprite", "/docs/sprite", "Remote Linux setup, connection, GitHub permissions, and operations."],
+  ["03", "Architecture", "/docs/reference/architecture", "How the two execution modes share a runtime core without sharing a trust model."],
+  ["04", "MCP tools", "/docs/reference/tools", "The exact three-tool contract, process sessions, and patch behavior."],
+  ["05", "Observability API", "/docs/local/observability-api", "Build another read-only viewer on the same HTTP/SSE evidence model as Liveboard."],
+  ["06", "Source", "https://github.com/amxv/zodex", "Read the Rust runtime, SolidJS Liveboard, Swift menu-bar app, docs, and Worker source."]
 ];
 ---
 
@@ -166,374 +98,184 @@ const guideLinks = [
   siteConfig={siteConfig}
   primaryNav={primaryNav}
 >
-  <div class="zodex-home">
+  <main class="zodex-home">
     <section class="z-hero shell">
       <div class="z-hero__eyebrow reveal reveal--1">
         <span class="live-dot" aria-hidden="true"></span>
-        Real-machine coding harness
+        Zodex Local
         <span class="z-hero__eyebrow-rule" aria-hidden="true"></span>
-        ChatGPT × Mac / Linux
+        ChatGPT × your Mac
       </div>
 
-      <div class="z-hero__grid">
-        <div class="z-hero__copy">
-          <p class="z-overline reveal reveal--2">A real machine behind three familiar tools</p>
-          <h1 class="reveal reveal--3">
-            Put ChatGPT on a
-            <em>real machine.</em>
-          </h1>
-          <p class="z-hero__lede reveal reveal--4">
-            zodex gives ChatGPT the exact command, stdin, and patch primitives GPT models
-            already know on a real machine: a trusted Apple Silicon Mac with Zodex Local,
-            or a remote Sprite-backed Linux workspace with explicit GitHub write policy.
-          </p>
-          <div class="z-hero__actions reveal reveal--5">
-            <a class="z-button z-button--signal" href="/docs/local">
-              Set up Local <span aria-hidden="true">↗</span>
-            </a>
-            <a class="z-button z-button--quiet" href="/docs/sprite">
-              Set up a Sprite <span aria-hidden="true">→</span>
-            </a>
-          </div>
-          <div class="z-hero__proof reveal reveal--6" aria-label="Core product facts">
-            <div><strong>03</strong><span>MCP tools</span></div>
-            <div><strong>05</strong><span>Rust binaries</span></div>
-            <div><strong>∞</strong><span>real shell workflows</span></div>
-          </div>
-        </div>
-
-        <div class="control-rig reveal reveal--4" aria-label="Zodex Local and Sprite session topology">
-          <div class="control-rig__chrome">
-            <span>ZDX / TWO MODES</span>
-            <span class="control-rig__online"><i aria-hidden="true"></i> MCP ready</span>
-          </div>
-
-          <div class="control-rig__canvas">
-            <div class="rig-node rig-node--chatgpt">
-              <span class="rig-node__index">A</span>
-              <div><strong>ChatGPT</strong><small>MCP client</small></div>
-            </div>
-
-            <div class="rig-wire rig-wire--one" aria-hidden="true">
-              <span>MCP / tunnel or HTTPS</span><i></i>
-            </div>
-
-            <div class="rig-node rig-node--daemon rig-node--service">
-              <span class="rig-node__index">B</span>
-              <div><strong>Zodex</strong><small>three-tool service</small></div>
-            </div>
-
-            <div class="rig-tools" aria-label="MCP tools">
-              <span>exec_command</span>
-              <span>write_stdin</span>
-              <span>apply_patch</span>
-            </div>
-
-            <div class="rig-mode-grid" aria-label="Execution modes">
-              <div class="rig-mode">
-                <span class="rig-node__index">L</span>
-                <div><strong>Local</strong><small>trusted Apple Silicon Mac</small></div>
-                <span class="rig-mode__tag">Tunnel · Watch · API</span>
-              </div>
-              <div class="rig-mode">
-                <span class="rig-node__index">S</span>
-                <div><strong>Sprite</strong><small>remote Linux workspace</small></div>
-                <span class="rig-mode__tag">HTTPS · PR · Grants</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="control-rig__terminal" aria-label="Illustrative Zodex mode commands">
-            <div class="terminal-bar">
-              <span>operator / zodex</span>
-              <span>LOCAL + SPRITE</span>
-            </div>
-            <div class="terminal-line"><i>$</i><code>zodex local start ~/code/repo --ttl 4h</code></div>
-            <div class="terminal-output"><span>✓</span> tunnel ready · observer online</div>
-            <div class="terminal-line"><i>$</i><code>zodex sprite status --sprite dev</code></div>
-            <div class="terminal-output terminal-output--signal"><span>↗</span> MCP healthy · GitHub policy active</div>
-          </div>
-
-          <div class="control-rig__foot">
-            <span>LOCAL / TRUSTED MAC</span>
-            <span>03 MCP TOOLS</span>
-            <span>SPRITE / REMOTE LINUX</span>
-          </div>
+      <div class="z-hero__copy">
+        <p class="z-overline reveal reveal--2">A real terminal on a real machine</p>
+        <h1 class="reveal reveal--3">Give ChatGPT<br />your <em>Mac.</em></h1>
+        <p class="z-hero__lede reveal reveal--4">
+          Zodex gives ChatGPT the command, stdin, and patch primitives coding agents already know—directly on your trusted Apple Silicon Mac, through an OpenAI Secure MCP Tunnel.
+        </p>
+        <div class="z-hero__actions reveal reveal--5">
+          <a class="z-button z-button--signal" href="/docs/local">Set up Local <span aria-hidden="true">↗</span></a>
+          <a class="z-button z-button--quiet" href="#quick-start">Quick start <span aria-hidden="true">↓</span></a>
+          <a class="z-button z-button--quiet" href="https://github.com/amxv/zodex" target="_blank" rel="noreferrer">GitHub <span aria-hidden="true">↗</span></a>
         </div>
       </div>
+
+      <div class="z-hero__proof reveal reveal--6" aria-label="Core Zodex Local facts">
+        <div><strong>03</strong><span>MCP tools</span></div>
+        <div><strong>01</strong><span>Local runtime</span></div>
+        <div><strong>∞</strong><span>ChatGPT Agents</span></div>
+        <div><strong>LIVE</strong><span>observable</span></div>
+      </div>
+
+      <figure class="product-shot reveal reveal--6">
+        <div class="product-shot__bar">
+          <span>ZDX / LOCAL</span>
+          <span class="product-shot__status"><i aria-hidden="true"></i> MCP ready</span>
+          <span>CHATGPT + LIVEBOARD</span>
+        </div>
+        <img
+          src="/images/zodex-local-liveboard.png"
+          alt="ChatGPT coding on a Mac through Zodex Local beside the Zodex Liveboard showing commands and file changes"
+          width="2880"
+          height="1480"
+          loading="eager"
+          decoding="async"
+        />
+        <figcaption>
+          <span>One ChatGPT conversation is one Zodex Agent.</span>
+          <span>Commands, output, diffs, and process state stay visible beside the work.</span>
+        </figcaption>
+      </figure>
     </section>
 
     <div class="signal-strip" aria-hidden="true">
       <div>
         <span>EXEC_COMMAND</span><i>◆</i><span>WRITE_STDIN</span><i>◆</i><span>APPLY_PATCH</span><i>◆</i>
-        <span>REAL PTY</span><i>◆</i><span>TRUSTED MAC</span><i>◆</i><span>REMOTE LINUX</span><i>◆</i><span>LIVE OBSERVABILITY</span><i>◆</i>
+        <span>SECURE MCP TUNNEL</span><i>◆</i><span>LIVEBOARD</span><i>◆</i><span>DURABLE HISTORY</span><i>◆</i>
         <span>EXEC_COMMAND</span><i>◆</i><span>WRITE_STDIN</span><i>◆</i><span>APPLY_PATCH</span><i>◆</i>
-        <span>REAL PTY</span><i>◆</i><span>TRUSTED MAC</span><i>◆</i><span>REMOTE LINUX</span><i>◆</i><span>LIVE OBSERVABILITY</span><i>◆</i>
+        <span>SECURE MCP TUNNEL</span><i>◆</i><span>LIVEBOARD</span><i>◆</i><span>DURABLE HISTORY</span><i>◆</i>
       </div>
     </div>
 
-    <section class="z-section z-guides shell" id="modes">
+    <section class="z-section z-quick shell" id="quick-start">
       <header class="z-section__head">
         <div>
-          <p class="z-overline">Choose the execution host</p>
-          <h2>Same three tools.<br /><em>Two real-machine modes.</em></h2>
+          <p class="z-overline">Local / Start here</p>
+          <h2>Four commands.<br /><em>Then open ChatGPT.</em></h2>
         </div>
         <div class="z-section__intro">
           <p>
-            Local is direct trusted-host Mac execution. Sprite is wake-on-demand remote Linux behind the canonical Cloudflare Worker, with a separate
-            GitHub access boundary. They share the tool/service core without pretending the trust
-            or lifecycle model is the same.
+            Setup provisions the Secure MCP Tunnel connection once. After that, Local is something you deliberately turn on for a repo, optionally expire, observe, and stop.
           </p>
-          <a class="text-link" href="/docs/reference/architecture">Compare the architecture <span aria-hidden="true">→</span></a>
+          <a class="text-link" href="/docs/local/setup">Full setup guide <span aria-hidden="true">↗</span></a>
         </div>
       </header>
-      <div class="guide-list">
-        {executionModes.map((mode) => (
-          <a class="guide-row" href={mode.href}>
-            <span class="guide-row__index">{mode.index}</span>
-            <h3>{mode.title}</h3>
-            <p>{mode.body}</p>
-            <span class="guide-row__arrow" aria-hidden="true">↗</span>
-          </a>
-        ))}
+
+      <div class="quick-grid">
+        <div class="quick-steps">
+          <article><span>01</span><div><strong>Install</strong><p>One operator CLI for Local and Sprite.</p></div></article>
+          <article><span>02</span><div><strong>Set up the tunnel</strong><p>Zodex stores the runtime key in macOS Keychain.</p></div></article>
+          <article><span>03</span><div><strong>Start from a repo</strong><p>The folder becomes ChatGPT's suggested initial workdir.</p></div></article>
+          <article><span>04</span><div><strong>Watch the work</strong><p>Open Liveboard without changing execution authority.</p></div></article>
+        </div>
+
+        <div class="code-window code-window--hero">
+          <div class="code-window__bar">
+            <span>shell / local</span>
+            <button class="copy-button" type="button" data-copy-code aria-label="Copy Zodex Local quick start"><span data-copy-label>copy</span></button>
+          </div>
+          <pre><code>{`curl -fsSL https://zodex.ashray.xyz/install.sh | bash
+zodex local setup
+
+cd ~/code/my-project
+zodex local start --ttl 4h
+zodex local watch`}</code></pre>
+          <div class="code-window__foot">
+            <span>when finished</span><code>zodex local stop</code>
+          </div>
+        </div>
       </div>
     </section>
 
-    <section class="z-section z-setup shell" id="setup">
-      <header class="z-section__head">
+    <section class="z-section z-local shell">
+      <header class="z-section__head z-section__head--wide">
         <div>
-          <p class="z-overline">Pick a host / Start in minutes</p>
-          <h2>Two setup paths.<br /><em>Both first class.</em></h2>
+          <p class="z-overline">Local / Built for actual work</p>
+          <h2>Your environment.<br /><em>Now agent-native.</em></h2>
         </div>
-        <div class="z-section__intro">
-          <p>
-            Local uses an OpenAI Secure MCP Tunnel to reach the Mac you already work on. Sprite gives
-            ChatGPT a wake-on-demand remote Linux workspace through the canonical Cloudflare Worker and adds an explicit GitHub write-policy layer.
-          </p>
-          <a class="text-link" href="/docs">Compare the full guides <span aria-hidden="true">↗</span></a>
-        </div>
+        <p class="z-section__measure">
+          Local is intentionally not a sandbox. ChatGPT gets the development environment you already trust, while Zodex adds lifecycle, attribution, observation, and durable evidence around it.
+        </p>
       </header>
 
-      <div class="setup-path-grid">
-        {setupPaths.map((path) => (
-          <article class="setup-path-card">
-            <div class="setup-path-card__top">
-              <span class="setup-path-card__index">{path.index}</span>
-              <span>{path.eyebrow}</span>
-            </div>
-            <h3>{path.title}</h3>
-            <p>{path.body}</p>
-            <div class="setup-path-card__facts">
-              {path.facts.map((fact) => <span>{fact}</span>)}
-            </div>
-            <div class="code-window">
-              <div class="code-window__bar">
-                <span>shell</span>
-                <button class="copy-button" type="button" data-copy-code aria-label={`Copy ${path.eyebrow} commands`}>
-                  <span data-copy-label>copy</span>
-                </button>
-              </div>
-              <pre><code>{path.code}</code></pre>
-            </div>
-            <a class="text-link" href={path.href}>{path.cta} <span aria-hidden="true">↗</span></a>
+      <div class="feature-grid">
+        {localFeatures.map((feature) => (
+          <article class="feature-card">
+            <div class="feature-card__top"><span>{feature.index}</span><span>{feature.marker}</span></div>
+            <h3>{feature.title}</h3>
+            <p>{feature.body}</p>
           </article>
         ))}
+      </div>
+
+      <div class="trust-note">
+        <span>TRUST MODEL</span>
+        <p>
+          Local runs as your logged-in macOS user. It can generally do what that user can do. The start folder is guidance, <em>not a filesystem boundary</em>, and normal macOS privacy controls remain authoritative.
+        </p>
+        <a class="text-link" href="/docs/local#the-local-trust-model">Understand Local security <span aria-hidden="true">→</span></a>
       </div>
     </section>
 
     <section class="z-section z-tools shell">
-      <header class="z-section__head z-section__head--wide">
+      <header class="z-section__head">
         <div>
-          <p class="z-overline">02 / GPT-native by design</p>
-          <h2>Three tools.<br /><em>Nothing clever in the way.</em></h2>
+          <p class="z-overline">Model interface / Deliberately tiny</p>
+          <h2>Three tools.<br /><em>That is the product API.</em></h2>
         </div>
-        <p class="z-section__measure">
-          Frontier GPT models already learned how to code inside a command / stdin / patch harness.
-          zodex preserves that shape and upgrades the environment underneath it.
-        </p>
+        <div class="z-section__intro">
+          <p>
+            Zodex keeps the model-facing surface boring on purpose. The runtime handles PTYs, process lifecycle, transport, observation, and host-specific security underneath familiar primitives.
+          </p>
+          <a class="text-link" href="/docs/reference/tools">Read the tool contract <span aria-hidden="true">↗</span></a>
+        </div>
       </header>
 
       <div class="tool-grid">
         {tools.map((tool) => (
           <article class="tool-card">
-            <div class="tool-card__top">
-              <span>{tool.index}</span>
-              <span>{tool.label}</span>
-            </div>
+            <div class="tool-card__top"><span>{tool.index}</span><span>{tool.verb}</span></div>
             <h3>{tool.name}</h3>
             <p>{tool.body}</p>
-            <div class="tool-card__sample"><span aria-hidden="true">›</span><code>{tool.sample}</code></div>
+            <span class="tool-card__arrow" aria-hidden="true">↘</span>
           </article>
         ))}
       </div>
-
-      <div class="runtime-statement">
-        <p class="runtime-statement__index">THE BET</p>
-        <p>
-          A small API does not mean a small capability surface. It means the model spends its intelligence
-          <em>doing the work</em>, not translating your agent framework.
-        </p>
-      </div>
     </section>
 
-    <section class="z-section z-boundary z-local-focus shell">
-      <div class="boundary-copy">
-        <p class="z-overline">03 / Local / Trusted host + live observability</p>
-        <h2>Your Mac is the workspace.<br /><em>Every tool call stays visible.</em></h2>
-        <p>
-          Local deliberately does not put a Zodex sandbox around your Mac. Commands run as your logged-in
-          user with the shell, files, developer tools, Git credentials, and network access you already have.
-          One runtime-wide TTL controls the session, while macOS remains the OS-level privacy boundary.
-        </p>
-        <p>
-          Observation is separate from execution: the built-in watch TUI and any custom client consume a
-          read-only localhost HTTP/SSE API with Agent filters, durable history, output pagination, and gap recovery.
-        </p>
-        <div class="z-hero__actions">
-          <a class="z-button z-button--signal" href="/docs/local">
-            Read Local <span aria-hidden="true">→</span>
-          </a>
-          <a class="z-button z-button--quiet" href="/docs/local/observability-api">
-            Observability API <span aria-hidden="true">↗</span>
-          </a>
-        </div>
-      </div>
-
-      <div class="boundary-diagram" aria-label="Zodex Local execution and observability surfaces">
-        <div class="boundary-zone boundary-zone--operator">
-          <div class="boundary-zone__label"><span>TRUSTED HOST</span><small>Apple Silicon Mac</small></div>
-          <div class="boundary-binary">
-            <span class="binary-icon" aria-hidden="true">L</span>
-            <div><strong>zodex local</strong><small>shell / files / tools / credentials</small></div>
-          </div>
-          <ul>
-            <li>runs as your logged-in user</li>
-            <li>one runtime-wide TTL</li>
-            <li>macOS privacy controls still apply</li>
-          </ul>
-        </div>
-
-        <div class="boundary-wall" aria-hidden="true">
-          <span>READ ONLY</span>
-          <i></i>
-        </div>
-
-        <div class="boundary-zone boundary-zone--agent">
-          <div class="boundary-zone__label"><span>OBSERVE</span><small>localhost HTTP + SSE</small></div>
-          <div class="boundary-binary">
-            <span class="binary-icon" aria-hidden="true">O</span>
-            <div><strong>watch + API</strong><small>TUI / web / Swift / custom clients</small></div>
-          </div>
-          <ul>
-            <li>Agent-aware live events</li>
-            <li>durable history and recovery</li>
-            <li>no command/control routes</li>
-          </ul>
-        </div>
-      </div>
-    </section>
-
-    <section class="z-section z-autonomy shell">
+    <section class="z-section z-modes shell">
       <header class="z-section__head">
         <div>
-          <p class="z-overline">04 / Sprite / Autonomy is a ladder</p>
-          <h2>Start safe.<br /><em>Move fast when earned.</em></h2>
+          <p class="z-overline">Beyond Local / Same agent interface</p>
+          <h2>Two hosts.<br /><em>Two trust models.</em></h2>
         </div>
         <div class="z-section__intro">
           <p>
-            Sprite separates work inside the remote Linux machine from writes back to GitHub. ChatGPT can
-            clone, edit, test, and commit before any GitHub write window exists; when the work is ready,
-            choose exactly how it leaves the machine.
+            Local is the direct path to the Mac you already use. Sprite is the isolated remote path. ChatGPT sees the same three tools either way.
           </p>
-          <a class="text-link" href="/docs/sprite/write-modes">Compare every write mode <span aria-hidden="true">→</span></a>
+          <a class="text-link" href="/docs/reference/architecture">Compare architecture <span aria-hidden="true">↗</span></a>
         </div>
       </header>
 
-      <div class="mode-ladder">
+      <div class="mode-grid">
         {modes.map((mode) => (
-          <article class="mode-card">
-            <div class="mode-card__rail" aria-hidden="true">
-              <span>{mode.number}</span><i></i>
-            </div>
-            <p class="mode-card__state">{mode.state}</p>
-            <h3>{mode.title}</h3>
-            <p class="mode-card__body">{mode.body}</p>
-            <code>{mode.command}</code>
-          </article>
-        ))}
-      </div>
-    </section>
-
-    <section class="z-section z-boundary shell">
-      <div class="boundary-copy">
-        <p class="z-overline">05 / Sprite / The trust boundary</p>
-        <h2>The agent cannot flip the switch because <em>the switch is not there.</em></h2>
-        <p>
-          In Sprite mode, zodex does not rely on one binary politely checking whether a command is allowed.
-          The privileged operator CLI lives on your machine. The Sprite gets a restricted agent helper.
-          Different binaries, different command surfaces, different credentials. Local intentionally uses a
-          different trusted-host boundary: ChatGPT commands run as your logged-in Mac user.
-        </p>
-        <a class="z-button z-button--quiet" href="/docs/sprite/permissions">
-          Read the Sprite access model <span aria-hidden="true">→</span>
-        </a>
-      </div>
-
-      <div class="boundary-diagram" aria-label="Operator and agent binary permission split">
-        <div class="boundary-zone boundary-zone--operator">
-          <div class="boundary-zone__label"><span>TRUSTED</span><small>your machine</small></div>
-          <div class="boundary-binary">
-            <span class="binary-icon" aria-hidden="true">Z</span>
-            <div><strong>zodex</strong><small>setup / upgrades / grants / YOLO</small></div>
-          </div>
-          <ul>
-            <li>holds operator authority</li>
-            <li>opens and closes write windows</li>
-            <li>never installed in the agent shell</li>
-          </ul>
-        </div>
-
-        <div class="boundary-wall" aria-hidden="true">
-          <span>BINARY BOUNDARY</span>
-          <i></i>
-        </div>
-
-        <div class="boundary-zone boundary-zone--agent">
-          <div class="boundary-zone__label"><span>RESTRICTED</span><small>Sprite workspace</small></div>
-          <div class="boundary-binary">
-            <span class="binary-icon" aria-hidden="true">A</span>
-            <div><strong>zodex-agent</strong><small>status / request / publish / revoke</small></div>
-          </div>
-          <ul>
-            <li>can request, never self-grant</li>
-            <li>cannot inspect operator credentials</li>
-            <li>publishes through an isolated daemon</li>
-          </ul>
-        </div>
-      </div>
-    </section>
-
-    <section class="z-section z-capabilities shell">
-      <header class="z-section__head z-section__head--wide">
-        <div>
-          <p class="z-overline">06 / Shared core / Built for actual work</p>
-          <h2>Everything underneath<br /><em>the tiny tool surface.</em></h2>
-        </div>
-        <p class="z-section__measure">
-          The model sees three simple actions. The runtime handles the operational edges that make those actions
-          trustworthy over hours of real coding.
-        </p>
-      </header>
-
-      <div class="capability-grid">
-        {capabilities.map((capability) => (
-          <article class="capability-card">
-            <span class="capability-card__marker">{capability.marker}</span>
-            <div>
-              <h3>{capability.title}</h3>
-              <p>{capability.body}</p>
-            </div>
-          </article>
+          <a class="mode-card" href={mode.href}>
+            <div class="mode-card__index">{mode.index}</div>
+            <div class="mode-card__head"><h3>{mode.title}</h3><span>{mode.subtitle}</span></div>
+            <p>{mode.body}</p>
+            <ul>{mode.facts.map((fact) => <li>{fact}</li>)}</ul>
+            <span class="mode-card__cta">Open {mode.title} <i aria-hidden="true">↗</i></span>
+          </a>
         ))}
       </div>
     </section>
@@ -541,23 +283,21 @@ const guideLinks = [
     <section class="z-section z-guides shell">
       <header class="z-section__head">
         <div>
-          <p class="z-overline">07 / Go deeper</p>
-          <h2>The docs follow<br /><em>the real operating path.</em></h2>
+          <p class="z-overline">Docs / Go deeper</p>
+          <h2>Everything else<br /><em>is documented.</em></h2>
         </div>
         <div class="z-section__intro">
-          <p>
-            Start with the machine, understand the access model, then operate it like infrastructure—not magic.
-          </p>
-          <a class="text-link" href="/docs">Browse every guide <span aria-hidden="true">↗</span></a>
+          <p>Setup, operating details, security boundaries, APIs, and implementation references live in the docs—not hidden behind product magic.</p>
+          <a class="text-link" href="/docs">Browse all docs <span aria-hidden="true">↗</span></a>
         </div>
       </header>
 
       <div class="guide-list">
-        {guideLinks.map((guide) => (
-          <a class="guide-row" href={guide.href}>
-            <span class="guide-row__index">{guide.index}</span>
-            <h3>{guide.title}</h3>
-            <p>{guide.body}</p>
+        {docsLinks.map(([index, title, href, body]) => (
+          <a class="guide-row" href={href} target={href.startsWith("http") ? "_blank" : undefined} rel={href.startsWith("http") ? "noreferrer" : undefined}>
+            <span class="guide-row__index">{index}</span>
+            <h3>{title}</h3>
+            <p>{body}</p>
             <span class="guide-row__arrow" aria-hidden="true">↗</span>
           </a>
         ))}
@@ -565,31 +305,24 @@ const guideLinks = [
     </section>
 
     <section class="z-final shell">
-      <div class="z-final__signal" aria-hidden="true">
-        <span></span><span></span><span></span><span></span><span></span>
-      </div>
-      <p class="z-overline">READY / REAL MACHINE / CONTROLLED</p>
-      <h2>Give ChatGPT a machine<br />worthy of the model.</h2>
-      <p>
-        Trusted Mac or remote Linux. Familiar tools. Normal Git. Boundaries you can reason about.
-      </p>
+      <div class="z-final__signal" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>
+      <p class="z-overline">ZODEX LOCAL / READY</p>
+      <h2>Put ChatGPT on<br />your Mac.</h2>
+      <p>A real shell. Your real tools. Three familiar MCP primitives. Every action visible.</p>
       <div class="z-final__actions">
-        <a class="z-button z-button--signal" href="/docs/local">Start with Local <span aria-hidden="true">↗</span></a>
-        <a class="z-button z-button--inverse" href="/docs/sprite">Start with Sprite <span aria-hidden="true">↗</span></a>
+        <a class="z-button z-button--signal" href="/docs/local">Set up Local <span aria-hidden="true">↗</span></a>
+        <a class="z-button z-button--inverse" href="/docs">Read the docs <span aria-hidden="true">→</span></a>
         <a class="z-button z-button--inverse" href="https://github.com/amxv/zodex" target="_blank" rel="noreferrer">View source <span aria-hidden="true">↗</span></a>
       </div>
     </section>
-  </div>
+  </main>
 
   <script>
-    const copyButtons = document.querySelectorAll<HTMLButtonElement>("[data-copy-code]");
-
-    for (const button of copyButtons) {
+    for (const button of document.querySelectorAll<HTMLButtonElement>("[data-copy-code]")) {
       button.addEventListener("click", async () => {
-        const code = button.closest(".code-window")?.querySelector("code")?.textContent;
+        const code = button.closest(".code-window")?.querySelector("pre code")?.textContent;
         const label = button.querySelector<HTMLElement>("[data-copy-label]");
         if (!code || !label) return;
-
         try {
           await navigator.clipboard.writeText(code);
           label.textContent = "copied";
