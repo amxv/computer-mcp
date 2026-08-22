@@ -32,13 +32,13 @@ const localFeatures = [
     index: "05",
     marker: "TTL",
     title: "Access has a lifecycle",
-    body: "Start Local explicitly, give the whole runtime an optional wall-clock TTL, and stop it cleanly when the work is done."
+    body: "The menu app can always be there while Local stays off. Start access only when you want it, optionally give it a TTL, and stop it cleanly."
   },
   {
     index: "06",
     marker: "⌘",
-    title: "Native Mac controls",
-    body: "The optional menu-bar app controls start, stop, Liveboard, your start folder, launch-at-login behavior, and Zodex upgrades."
+    title: "No terminal for daily use",
+    body: "The native menu app launches at login by default without starting Local. Pick a folder, start or stop Zodex, open Liveboard, and upgrade from the menu bar."
   }
 ];
 
@@ -115,14 +115,14 @@ const docsLinks = [
         </p>
         <div class="z-hero__actions reveal reveal--5">
           <a class="z-button z-button--signal" href="/docs/local">Set up Local <span aria-hidden="true">↗</span></a>
-          <a class="z-button z-button--quiet" href="#quick-start">Quick start <span aria-hidden="true">↓</span></a>
+          <a class="z-button z-button--quiet" href="#quick-start">How it works <span aria-hidden="true">↓</span></a>
           <a class="z-button z-button--quiet" href="https://github.com/amxv/zodex" target="_blank" rel="noreferrer">GitHub <span aria-hidden="true">↗</span></a>
         </div>
       </div>
 
       <div class="z-hero__proof reveal reveal--6" aria-label="Core Zodex Local facts">
         <div><strong>03</strong><span>MCP tools</span></div>
-        <div><strong>01</strong><span>Local runtime</span></div>
+        <div><strong>⌘</strong><span>menu-bar control</span></div>
         <div><strong>∞</strong><span>ChatGPT Agents</span></div>
         <div><strong>LIVE</strong><span>observable</span></div>
       </div>
@@ -160,39 +160,62 @@ const docsLinks = [
     <section class="z-section z-quick shell" id="quick-start">
       <header class="z-section__head">
         <div>
-          <p class="z-overline">Local / Start here</p>
-          <h2>Four commands.<br /><em>Then open ChatGPT.</em></h2>
+          <p class="z-overline">Local / Daily use</p>
+          <h2>Set up once.<br /><em>Then use the menu bar.</em></h2>
         </div>
         <div class="z-section__intro">
           <p>
-            Setup provisions the Secure MCP Tunnel connection once. After that, Local is something you deliberately turn on for a repo, optionally expire, observe, and stop.
+            Zodex installs a tiny native Swift menu app by default. It launches when you log in, but Local itself stays stopped until you choose <strong>Start Zodex</strong>. Normal daily use needs no terminal.
           </p>
-          <a class="text-link" href="/docs/local/setup">Full setup guide <span aria-hidden="true">↗</span></a>
+          <a class="text-link" href="/docs/local/setup">One-time setup guide <span aria-hidden="true">↗</span></a>
         </div>
       </header>
 
-      <div class="quick-grid">
-        <div class="quick-steps">
-          <article><span>01</span><div><strong>Install</strong><p>One operator CLI for Local and Sprite.</p></div></article>
-          <article><span>02</span><div><strong>Set up the tunnel</strong><p>Zodex stores the runtime key in macOS Keychain.</p></div></article>
-          <article><span>03</span><div><strong>Start from a repo</strong><p>The folder becomes ChatGPT's suggested initial workdir.</p></div></article>
-          <article><span>04</span><div><strong>Watch the work</strong><p>Open Liveboard without changing execution authority.</p></div></article>
-        </div>
+      <div class="menubar-flow">
+        <figure class="menubar-shot" aria-label="Zodex native macOS menu bar controls">
+          <div class="menubar-shot__bar"><span>ZDX / macOS</span><span>native Swift</span></div>
+          <div class="menubar-shot__canvas">
+            <div class="native-menu">
+              <div class="native-menu__row native-menu__row--muted"><span class="native-menu__icon">▶</span><strong>Zodex is Running</strong></div>
+              <div class="native-menu__row"><span class="native-menu__icon">■</span><strong>Stop Zodex</strong></div>
+              <div class="native-menu__row"><span class="native-menu__icon">↗</span><strong>Open Liveboard</strong></div>
+              <div class="native-menu__rule"></div>
+              <div class="native-menu__row native-menu__row--muted"><span class="native-menu__icon">▰</span><strong>Start Folder: ~/code/my-project</strong></div>
+              <div class="native-menu__row"><span class="native-menu__icon">▰</span><strong>Change Start Folder…</strong></div>
+              <div class="native-menu__rule"></div>
+              <div class="native-menu__row"><strong>Check for Updates…</strong></div>
+              <div class="native-menu__row"><span class="native-menu__check">✓</span><strong>Launch at Login</strong></div>
+              <div class="native-menu__row native-menu__row--muted"><strong>Zodex v0.3.9</strong></div>
+              <div class="native-menu__rule"></div>
+              <div class="native-menu__row"><strong>Quit</strong></div>
+            </div>
+          </div>
+          <figcaption>Menu app starts at login. Local does not.</figcaption>
+        </figure>
 
-        <div class="code-window code-window--hero">
+        <div class="menubar-steps">
+          <article><span>01</span><div><strong>Log in</strong><p>The Zodex menu app appears automatically. Local is still off.</p></div></article>
+          <article><span>02</span><div><strong>Choose your start folder</strong><p>Set it once, or switch it whenever you want ChatGPT to begin somewhere else.</p></div></article>
+          <article><span>03</span><div><strong>Start Zodex</strong><p>One click brings Local and the Secure MCP Tunnel online.</p></div></article>
+          <article><span>04</span><div><strong>Open ChatGPT</strong><p>Use one or many conversations against the same Local runtime.</p></div></article>
+          <article><span>05</span><div><strong>Open Liveboard</strong><p>Watch commands, output, diffs, and processes beside the work.</p></div></article>
+          <article><span>06</span><div><strong>Stop when done</strong><p>One click closes Local access. The menu app can remain ready for next time.</p></div></article>
+        </div>
+      </div>
+
+      <div class="setup-once">
+        <div>
+          <p class="z-overline">First time only</p>
+          <h3>Install + connect the tunnel.</h3>
+          <p>Initial setup is still done once from Terminal. After that, start, stop, Liveboard, folder selection, updates, and launch-at-login all live in the menu bar.</p>
+        </div>
+        <div class="code-window">
           <div class="code-window__bar">
-            <span>shell / local</span>
-            <button class="copy-button" type="button" data-copy-code aria-label="Copy Zodex Local quick start"><span data-copy-label>copy</span></button>
+            <span>one-time setup</span>
+            <button class="copy-button" type="button" data-copy-code aria-label="Copy Zodex Local setup"><span data-copy-label>copy</span></button>
           </div>
           <pre><code>{`curl -fsSL https://zodex.ashray.xyz/install.sh | bash
-zodex local setup
-
-cd ~/code/my-project
-zodex local start --ttl 4h
-zodex local watch`}</code></pre>
-          <div class="code-window__foot">
-            <span>when finished</span><code>zodex local stop</code>
-          </div>
+zodex local setup`}</code></pre>
         </div>
       </div>
     </section>
