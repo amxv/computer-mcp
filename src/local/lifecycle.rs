@@ -26,6 +26,10 @@ use super::lifecycle_context::{
 };
 use super::lifecycle_lock::LocalLifecycleLock;
 
+#[cfg(target_os = "macos")]
+use super::liveboard::{
+    LocalLiveboardDiscovery, remove_liveboard_discovery, write_liveboard_discovery,
+};
 use super::{
     LOCAL_DISCOVERY_SCHEMA_VERSION, LOCAL_RUNTIME_STATE_SCHEMA_VERSION, LaunchdController,
     LocalConfig, LocalHostRuntime, LocalHostRuntimeOptions, LocalLaunchdJob,
@@ -324,6 +328,8 @@ pub async fn run_hidden_runtime(
         // discovery, terminate only birth-identity-matching children, and
         // leave a diagnostic state record for the parent `start` poller.
         let _ = fs::remove_file(paths.discovery_file());
+        #[cfg(target_os = "macos")]
+        remove_liveboard_discovery(&paths);
         let inspector = SystemProcessInspector;
         let _ = cleanup_stale_tunnel_child(&paths, &inspector);
         let stale_runtime_id = load_runtime_state(&paths)
@@ -485,6 +491,23 @@ async fn run_hidden_runtime_inner(
     state.health.tunnel_ready = true;
     state.health.last_error = None;
     write_runtime_state(&paths, &state)?;
+    #[cfg(target_os = "macos")]
+    if let Some(base_url) = host.liveboard_url() {
+        match LocalLiveboardDiscovery::new(bootstrap.runtime_id.clone(), base_url)
+            .and_then(|discovery| write_liveboard_discovery(&paths, &discovery))
+        {
+            Ok(()) => {}
+            Err(error) => {
+                remove_liveboard_discovery(&paths);
+                let _ = append_lifecycle_diagnostic(
+                    &paths,
+                    &format!(
+                        "Local Liveboard private discovery could not be published; MCP remains available: {error:#}"
+                    ),
+                );
+            }
+        }
+    }
     write_runtime_discovery(
         &paths,
         &LocalRuntimeDiscovery {
@@ -509,7 +532,7 @@ async fn run_hidden_runtime_inner(
         environment: &environment,
         redactions: &redactions,
     };
-    let run_result = supervise_runtime(&supervisor, &mut tunnel, &mut state).await;
+    let run_result = supervise_runtime(&supervisor, &host, &mut tunnel, &mut state).await;
     coordinated_hidden_shutdown(paths, host, tunnel, state, run_result).await
 }
 
@@ -573,6 +596,7 @@ struct TunnelSupervisorContext<'a> {
 
 async fn supervise_runtime(
     context: &TunnelSupervisorContext<'_>,
+    host: &LocalHostRuntime,
     tunnel: &mut ManagedTunnelChild,
     state: &mut LocalRuntimeState,
 ) -> Result<()> {
@@ -582,10 +606,22 @@ async fn supervise_runtime(
     health_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let stop_signal = shutdown_signal();
     tokio::pin!(stop_signal);
+    #[cfg(target_os = "macos")]
+    let mut liveboard_published = host.liveboard_url().is_some();
 
     loop {
         tokio::select! {
             _ = ttl_tick.tick() => {
+                #[cfg(target_os = "macos")]
+                if liveboard_published && host.liveboard_is_finished() {
+                    liveboard_published = false;
+                    host.disable_liveboard_notifier();
+                    remove_liveboard_discovery(context.paths);
+                    let _ = append_lifecycle_diagnostic(
+                        context.paths,
+                        "Local Liveboard sidecar exited unexpectedly; MCP remains available",
+                    );
+                }
                 if is_expired(context.bootstrap.expires_at.as_deref(), OffsetDateTime::now_utc())? {
                     return Ok(());
                 }
@@ -667,6 +703,8 @@ async fn coordinated_hidden_shutdown(
     // finally the listeners.
     host.close_admission().await;
     let _ = fs::remove_file(paths.discovery_file());
+    #[cfg(target_os = "macos")]
+    remove_liveboard_discovery(&paths);
     let tunnel_shutdown = tunnel.terminate().await;
     let _ = fs::remove_file(paths.tunnel_process_state_file());
     let host_shutdown = host.shutdown().await;

@@ -5,6 +5,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+#[cfg(target_os = "macos")]
+use tracing::warn;
 
 use crate::config::Config;
 use crate::server::{LocalMcpServer, LocalMcpServerConfig, start_local_mcp_server};
@@ -13,6 +15,12 @@ use crate::session::{
     OwnedProcess, OwnedProcessEnd, OwnedProcessObserver, ProcessIdentity, SessionRuntimePolicy,
 };
 
+#[cfg(target_os = "macos")]
+use super::liveboard::{
+    LiveboardLinkNotifier, LocalLiveboardDiscovery, LocalLiveboardHost, start_liveboard_host,
+};
+#[cfg(target_os = "macos")]
+use super::observer_client::LocalObserverClient;
 use super::{
     LocalConfig, LocalHistoryRuntime, LocalHistoryRuntimeConfig, LocalObservabilityServer,
     LocalOwnedProcessRegistry, LocalPaths, start_local_observability_server,
@@ -33,6 +41,10 @@ pub struct LocalHostRuntime {
     mcp_server: LocalMcpServer,
     observability_server: LocalObservabilityServer,
     history: Arc<LocalHistoryRuntime>,
+    #[cfg(target_os = "macos")]
+    liveboard_host: Option<LocalLiveboardHost>,
+    #[cfg(target_os = "macos")]
+    liveboard_notifier: Option<LiveboardLinkNotifier>,
 }
 
 struct LocalProcessObservers {
@@ -88,9 +100,30 @@ impl LocalHostRuntime {
         self.history.runtime_id()
     }
 
+    #[cfg(target_os = "macos")]
+    pub(crate) fn liveboard_url(&self) -> Option<&str> {
+        self.liveboard_host.as_ref().map(LocalLiveboardHost::url)
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn liveboard_is_finished(&self) -> bool {
+        self.liveboard_host
+            .as_ref()
+            .is_some_and(LocalLiveboardHost::is_finished)
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn disable_liveboard_notifier(&self) {
+        if let Some(notifier) = self.liveboard_notifier.as_ref() {
+            notifier.stop_accepting();
+        }
+    }
+
     /// Close the side-effect admission boundary before external ingress is
     /// removed. The lifecycle owner calls this before terminating the tunnel.
     pub async fn close_admission(&self) {
+        #[cfg(target_os = "macos")]
+        self.disable_liveboard_notifier();
         self.service.close_admission().await;
         self.mcp_server.request_shutdown();
     }
@@ -102,10 +135,33 @@ impl LocalHostRuntime {
             mcp_server,
             observability_server,
             history,
+            #[cfg(target_os = "macos")]
+            liveboard_host,
+            #[cfg(target_os = "macos")]
+            liveboard_notifier,
         } = self;
         let mut first_error = None;
+        #[cfg(target_os = "macos")]
+        if let Some(host) = liveboard_host.as_ref() {
+            host.request_shutdown();
+        }
         if let Err(error) = service.shutdown_sessions().await {
             first_error = Some(error.context("failed to stop Local command sessions"));
+        }
+        #[cfg(target_os = "macos")]
+        if let Some(notifier) = liveboard_notifier {
+            match tokio::task::spawn_blocking(move || notifier.shutdown()).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) if first_error.is_none() => {
+                    first_error = Some(error.context("failed to stop Local Liveboard notifier"));
+                }
+                Err(error) if first_error.is_none() => {
+                    first_error = Some(anyhow::anyhow!(
+                        "Local Liveboard notifier shutdown worker failed: {error}"
+                    ));
+                }
+                _ => {}
+            }
         }
         if let Err(error) = mcp_server.shutdown().await
             && first_error.is_none()
@@ -121,6 +177,13 @@ impl LocalHostRuntime {
             && first_error.is_none()
         {
             first_error = Some(error.context("failed to stop Local observability listener"));
+        }
+        #[cfg(target_os = "macos")]
+        if let Some(host) = liveboard_host
+            && let Err(error) = host.shutdown().await
+            && first_error.is_none()
+        {
+            first_error = Some(error.context("failed to stop Local Liveboard listener"));
         }
         first_error.map_or(Ok(()), Err)
     }
@@ -187,27 +250,86 @@ pub async fn start_local_host_runtime(
             options.paths.observability_bearer_file().display()
         )
     });
-    let observability_server = match bearer {
-        Ok(bearer) => {
-            match start_local_observability_server(history.clone(), bearer.trim()).await {
-                Ok(server) => server,
-                Err(error) => {
-                    cleanup_failed_runtime_start(service.clone(), mcp_server, history.clone())
-                        .await;
-                    return Err(error.context("failed to start Local observability server"));
-                }
-            }
-        }
+    let bearer = match bearer {
+        Ok(bearer) => bearer,
         Err(error) => {
             cleanup_failed_runtime_start(service.clone(), mcp_server, history.clone()).await;
             return Err(error);
         }
+    };
+    let observability_server =
+        match start_local_observability_server(history.clone(), bearer.trim()).await {
+            Ok(server) => server,
+            Err(error) => {
+                cleanup_failed_runtime_start(service.clone(), mcp_server, history.clone()).await;
+                return Err(error.context("failed to start Local observability server"));
+            }
+        };
+    #[cfg(target_os = "macos")]
+    let liveboard_host = match LocalObserverClient::attach(
+        &observability_server.base_url(),
+        bearer.trim(),
+        history.runtime_id(),
+    ) {
+        Ok(client) => match start_liveboard_host(&options.paths, client).await {
+            Ok(host) => Some(host),
+            Err(error) => {
+                warn!(
+                    event = "local_liveboard_sidecar_unavailable",
+                    error = %error,
+                    "Local MCP runtime will continue without Liveboard"
+                );
+                None
+            }
+        },
+        Err(error) => {
+            warn!(
+                event = "local_liveboard_sidecar_unavailable",
+                error = %error,
+                "Local MCP runtime will continue without Liveboard"
+            );
+            None
+        }
+    };
+    #[cfg(target_os = "macos")]
+    let liveboard_notifier = if let Some(host) = liveboard_host.as_ref() {
+        match LocalLiveboardDiscovery::new(history.runtime_id(), host.url())
+            .and_then(LiveboardLinkNotifier::start)
+        {
+            Ok(notifier) => {
+                if let Err(error) = history.install_agent_first_seen_observer(notifier.observer()) {
+                    let _ = notifier.shutdown();
+                    warn!(
+                        event = "local_liveboard_notifier_unavailable",
+                        error = %error,
+                        "Local MCP runtime will continue without focused-link notifications"
+                    );
+                    None
+                } else {
+                    Some(notifier)
+                }
+            }
+            Err(error) => {
+                warn!(
+                    event = "local_liveboard_notifier_unavailable",
+                    error = %error,
+                    "Local MCP runtime will continue without focused-link notifications"
+                );
+                None
+            }
+        }
+    } else {
+        None
     };
     Ok(LocalHostRuntime {
         service,
         mcp_server,
         observability_server,
         history,
+        #[cfg(target_os = "macos")]
+        liveboard_host,
+        #[cfg(target_os = "macos")]
+        liveboard_notifier,
     })
 }
 
@@ -265,6 +387,17 @@ mod tests {
         assert!(runtime.observability_addr().ip().is_loopback());
         assert_ne!(runtime.mcp_addr(), runtime.observability_addr());
         assert_ne!(runtime.mcp_url(), runtime.observability_url());
+        #[cfg(target_os = "macos")]
+        if let Some(liveboard_url) = runtime.liveboard_url() {
+            let url = reqwest::Url::parse(liveboard_url).unwrap();
+            let liveboard_addr =
+                std::net::SocketAddr::new("127.0.0.1".parse().unwrap(), url.port().unwrap());
+            assert_ne!(liveboard_addr, runtime.mcp_addr());
+            assert_ne!(liveboard_addr, runtime.observability_addr());
+            tokio::net::TcpStream::connect(liveboard_addr)
+                .await
+                .expect("runtime-owned Liveboard listener should accept loopback connections");
+        }
 
         runtime.shutdown().await.unwrap();
     }

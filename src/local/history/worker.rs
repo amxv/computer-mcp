@@ -223,7 +223,10 @@ pub struct LocalHistoryRuntime {
     active_process_invocation_ids: Mutex<HashSet<i64>>,
     active_process_counts: Mutex<HashMap<String, u64>>,
     active_process_count: AtomicU64,
+    agent_first_seen_observer: Mutex<Option<AgentFirstSeenObserver>>,
 }
+
+type AgentFirstSeenObserver = Arc<dyn Fn(String) + Send + Sync>;
 
 impl LocalHistoryRuntime {
     pub fn open(config: LocalHistoryRuntimeConfig) -> Result<Arc<Self>> {
@@ -281,7 +284,23 @@ impl LocalHistoryRuntime {
             active_process_invocation_ids: Mutex::new(HashSet::new()),
             active_process_counts: Mutex::new(HashMap::new()),
             active_process_count: AtomicU64::new(0),
+            agent_first_seen_observer: Mutex::new(None),
         }))
+    }
+
+    pub(crate) fn install_agent_first_seen_observer(
+        &self,
+        observer: AgentFirstSeenObserver,
+    ) -> Result<()> {
+        let mut guard = self
+            .agent_first_seen_observer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if guard.is_some() {
+            bail!("Local Agent first-seen observer is already installed")
+        }
+        *guard = Some(observer);
+        Ok(())
     }
 
     pub fn runtime_id(&self) -> &str {
@@ -490,6 +509,16 @@ impl InvocationEvidenceRecorder for LocalHistoryRuntime {
                 let presentation_root_invocation_id = begin.presentation_root_invocation_id;
                 let agent_id = context.agent_id.as_deref();
                 if begin.agent_first_seen_in_runtime {
+                    if let Some(agent_id) = agent_id {
+                        let observer = self
+                            .agent_first_seen_observer
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .clone();
+                        if let Some(observer) = observer {
+                            observer(agent_id.to_string());
+                        }
+                    }
                     self.events.emit_with(
                         "agent_first_seen",
                         agent_id,

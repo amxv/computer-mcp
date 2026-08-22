@@ -19,11 +19,13 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use super::super::LocalPaths;
+use super::super::observer_client::LocalObserverClient;
 use super::assets;
 use super::bridge::LiveboardObserverBridge;
 use super::prefs::{LiveboardPreferencesPatch, LiveboardPreferencesStore};
 
 const PREFERENCE_BODY_LIMIT: usize = 64 * 1024;
+const LIVEBOARD_SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'";
 
 #[derive(Clone)]
@@ -49,22 +51,40 @@ impl LocalLiveboardHost {
         &self.url
     }
 
+    pub(crate) fn is_finished(&self) -> bool {
+        self.task.is_finished()
+    }
+
     pub(crate) fn request_shutdown(&self) {
         self.cancellation.cancel();
     }
 
     pub(crate) async fn shutdown(self) -> Result<()> {
         self.request_shutdown();
-        self.task
-            .await
-            .context("Liveboard host task failed to join")??;
-        Ok(())
+        let mut task = self.task;
+        match tokio::time::timeout(LIVEBOARD_SHUTDOWN_TIMEOUT, &mut task).await {
+            Ok(joined) => {
+                joined.context("Liveboard host task failed to join")??;
+                Ok(())
+            }
+            Err(_) => {
+                task.abort();
+                let _ = task.await;
+                bail!(
+                    "Liveboard host did not stop within the bounded {}s shutdown deadline",
+                    LIVEBOARD_SHUTDOWN_TIMEOUT.as_secs()
+                )
+            }
+        }
     }
 }
 
-pub(crate) async fn start_liveboard_host(paths: &LocalPaths) -> Result<LocalLiveboardHost> {
+pub(crate) async fn start_liveboard_host(
+    paths: &LocalPaths,
+    observer_client: LocalObserverClient,
+) -> Result<LocalLiveboardHost> {
     assets::ensure_available()?;
-    let observer = Arc::new(LiveboardObserverBridge::discover(paths).await?);
+    let observer = Arc::new(LiveboardObserverBridge::runtime_bound(observer_client));
     let preferences = LiveboardPreferencesStore::new(paths);
     preferences.load()?;
 

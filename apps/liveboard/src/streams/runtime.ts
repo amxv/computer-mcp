@@ -2,6 +2,7 @@ import { createSignal, type Accessor } from 'solid-js'
 
 import {
   eventStreamUrl,
+  fetchAgent,
   fetchCurrentAgents,
   fetchOutputMetadata,
   fetchOutputPage,
@@ -17,6 +18,7 @@ import {
   type HistoryLiveEvent,
   type TimelineQuery,
 } from '../api/client'
+import type { LiveboardView } from '../app/view'
 import {
   createAgentStreamController,
   type AgentStreamController,
@@ -54,6 +56,7 @@ export interface EventSourceLike {
 
 export interface RuntimeApi {
   fetchStatus: () => Promise<ApiStatus>
+  fetchAgent?: (agentId: string, runtimeId: string) => Promise<ApiAgent>
   fetchCurrentAgents: (runtimeId: string) => Promise<{ agents: ApiAgent[] }>
   fetchTimeline: (
     query: TimelineQuery,
@@ -98,11 +101,13 @@ interface RuntimeConnectionOptions {
   initialVisibleAgentIds: readonly string[]
   initialDiffProjection?: DiffProjection
   viewerAttachWatermarkMs: number
+  view?: LiveboardView
   api?: RuntimeApi
 }
 
 const browserRuntimeApi: RuntimeApi = {
   fetchStatus,
+  fetchAgent,
   fetchCurrentAgents,
   fetchTimeline,
   fetchTimelineDetail,
@@ -126,6 +131,8 @@ export function createRuntimeConnection(
   options: RuntimeConnectionOptions,
 ): RuntimeConnection {
   const api = options.api ?? browserRuntimeApi
+  const view = options.view ?? { kind: 'unified' as const }
+  const focusedAgentId = view.kind === 'focused' ? view.agentId : undefined
   const [runtimeId, setRuntimeId] = createSignal(options.initialStatus.runtime_id)
   const [agents, setAgents] = createSignal<ApiAgent[]>([...options.initialAgents])
   const [connectionState, setConnectionState] =
@@ -270,6 +277,16 @@ export function createRuntimeConnection(
   }
 
   const refreshAgents = async (expectedRuntimeId = runtimeId()) => {
+    if (focusedAgentId) {
+      if (!api.fetchAgent) throw new Error('Focused Agent lookup is unavailable')
+      const agent = await api.fetchAgent(focusedAgentId, expectedRuntimeId)
+      if (!agent.seen_in_current_runtime) {
+        throw new Error(`Focused Agent ${focusedAgentId} is incompatible with this Local runtime`)
+      }
+      if (expectedRuntimeId !== runtimeId()) return
+      setAgents([agent])
+      return
+    }
     const list = await api.fetchCurrentAgents(expectedRuntimeId)
     if (expectedRuntimeId !== runtimeId()) return
     setAgents([...list.agents])
@@ -457,6 +474,9 @@ export function createRuntimeConnection(
       const status = await api.fetchStatus()
       const runtimeChanged = status.runtime_id !== runtimeId()
       if (runtimeChanged) {
+        if (focusedAgentId) {
+          throw new Error('Focused Liveboard capability is incompatible with the active runtime')
+        }
         const boundary = disconnectStartedAtMs ?? Date.now()
         const list = await api.fetchCurrentAgents(status.runtime_id)
         resetRuntime(status.runtime_id, list.agents, boundary)
@@ -506,6 +526,9 @@ export function createRuntimeConnection(
       try {
         const status = await api.fetchStatus()
         if (status.runtime_id !== event.runtime_id) return
+        if (focusedAgentId) {
+          throw new Error('Focused Liveboard capability is incompatible with the active runtime')
+        }
         const list = await api.fetchCurrentAgents(status.runtime_id)
         const boundary = disconnectStartedAtMs ?? event.emitted_at_ms
         resetRuntime(status.runtime_id, list.agents, boundary)
@@ -515,8 +538,9 @@ export function createRuntimeConnection(
         setConnectionError(undefined)
         setConnectionState('connected')
       } catch (error) {
-        setConnectionError(`Runtime recovery failed: ${messageFrom(error)}`)
-        setConnectionState('disconnected')
+        const message = `Runtime recovery failed: ${messageFrom(error)}`
+        setConnectionError(message)
+        setConnectionState(message.includes('incompatible') ? 'incompatible' : 'disconnected')
       }
     })
   }
@@ -606,7 +630,9 @@ export function createRuntimeConnection(
 
   const openSource = (purpose: 'initial' | 'handover') => {
     if (disposed) return
-    const source = api.openEventSource(eventStreamUrl(visibleAgentIds(), diffProjection()))
+    const source = api.openEventSource(
+      eventStreamUrl(visibleAgentIds(), diffProjection(), focusedAgentId),
+    )
     if (purpose === 'initial') activeSource = source
     attachListeners(source)
     let openedOnce = false
@@ -655,6 +681,12 @@ export function createRuntimeConnection(
   }
 
   const setVisibleAgentIds = (ids: readonly string[]) => {
+    if (focusedAgentId) {
+      if (!sameIdMembership([focusedAgentId], visibleAgentIds())) {
+        setVisibleIds([focusedAgentId])
+      }
+      return
+    }
     const unique = [...new Set(ids)]
     if (sameIdMembership(unique, visibleAgentIds())) return
     const removed = visibleAgentIds().filter((id) => !unique.includes(id))

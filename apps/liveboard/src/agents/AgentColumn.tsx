@@ -32,6 +32,8 @@ interface AgentColumnProps {
   onAliasSave: (alias: string) => void
   onReorderPointerDown: (event: PointerEvent) => void
   onResizePointerDown?: (event: PointerEvent) => void
+  focused?: boolean
+  onFocus?: () => void
   children?: JSX.Element
 }
 
@@ -95,15 +97,17 @@ export function AgentColumn(props: AgentColumnProps) {
     >
       <header class="agent-header">
         <div class="agent-header-topline">
-          <button
-            type="button"
-            class="icon-button drag-handle"
-            aria-label={`Drag Agent ${props.agent.id} to reorder`}
-            title="Drag to reorder"
-            onPointerDown={(event) => props.onReorderPointerDown(event)}
-          >
-            <GripIcon />
-          </button>
+          <Show when={!props.focused}>
+            <button
+              type="button"
+              class="icon-button drag-handle"
+              aria-label={`Drag Agent ${props.agent.id} to reorder`}
+              title="Drag to reorder"
+              onPointerDown={(event) => props.onReorderPointerDown(event)}
+            >
+              <GripIcon />
+            </button>
+          </Show>
           <div class="agent-identity">
             <Show
               when={editingAlias()}
@@ -158,6 +162,19 @@ export function AgentColumn(props: AgentColumnProps) {
             </Show>
           </div>
           <div class="agent-header-actions">
+            <Show when={!props.focused && props.onFocus}>
+              {(handler) => (
+                <button
+                  type="button"
+                  class="agent-focus-button"
+                  aria-label={`Focus Agent ${props.agent.id}`}
+                  title="Open focused view"
+                  onClick={() => handler()()}
+                >
+                  Focus
+                </button>
+              )}
+            </Show>
             <Show when={workdirsOverflow()}>
               <button
                 type="button"
@@ -170,15 +187,17 @@ export function AgentColumn(props: AgentColumnProps) {
                 {workdirsExpanded() ? <ChevronUpIcon /> : <FolderIcon />}
               </button>
             </Show>
-            <button
-              type="button"
-              class="icon-button agent-header-control"
-              aria-label={`Remove Agent ${props.agent.id} from board`}
-              title="Remove from board"
-              onClick={props.onHide}
-            >
-              <CloseIcon />
-            </button>
+            <Show when={!props.focused}>
+              <button
+                type="button"
+                class="icon-button agent-header-control"
+                aria-label={`Remove Agent ${props.agent.id} from board`}
+                title="Remove from board"
+                onClick={props.onHide}
+              >
+                <CloseIcon />
+              </button>
+            </Show>
           </div>
         </div>
         <div class="agent-context-row">
@@ -233,7 +252,7 @@ export function AgentColumn(props: AgentColumnProps) {
       >
         {props.children}
       </Show>
-      <Show when={props.onResizePointerDown}>
+      <Show when={!props.focused && props.onResizePointerDown}>
         {(handler) => (
           <button
             type="button"

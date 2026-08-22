@@ -97,6 +97,43 @@ afterEach(() => {
 })
 
 describe('responsive Agent board layout', () => {
+  it('renders focused mode as a fixed one-Agent board with navigation instead of layout controls', async () => {
+    const patches: unknown[] = []
+    let openedAll = 0
+    const container = document.createElement('div')
+    container.style.width = '900px'
+    container.style.height = '600px'
+    document.body.append(container)
+    containerCurrent = container
+    disposeCurrent = render(
+      () => (
+        <div class="app-shell">
+          <Board
+            agents={[agent('a111', 0)]}
+            preferences={preferences}
+            focusedAgentId="a111"
+            nowMs={10_000}
+            saving={false}
+            onPatch={(patch) => patches.push(patch)}
+            onOpenAllAgents={() => {
+              openedAll += 1
+            }}
+          />
+        </div>
+      ),
+      container,
+    )
+
+    expect(container.querySelectorAll('[data-agent-column]')).toHaveLength(1)
+    expect(container.textContent).toContain('Focused · a111')
+    expect(container.querySelector('[aria-label="Drag Agent a111 to reorder"]')).toBeNull()
+    expect(container.querySelector('[aria-label="Remove Agent a111 from board"]')).toBeNull()
+    const allAgents = container.querySelector<HTMLButtonElement>('[aria-label="All Agents"]')!
+    allAgents.click()
+    expect(openedAll).toBe(1)
+    expect(patches).toEqual([])
+  })
+
   it('handles 0/1/2/5 current Agents while respecting the configured four-column cap', async () => {
     const [agents, setAgents] = createSignal<ApiAgent[]>([])
     const container = document.createElement('div')

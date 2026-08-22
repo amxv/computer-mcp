@@ -32,6 +32,12 @@ export interface ApiAgentList {
   agents: ApiAgent[]
 }
 
+export interface ApiAgentDetail {
+  schema_version: number
+  runtime_id: string
+  agent: ApiAgent
+}
+
 export interface PresentationEvidence {
   evidence_state: string
   capture_state: string
@@ -415,6 +421,18 @@ export async function fetchCurrentAgents(runtimeId: string): Promise<ApiAgentLis
   return list
 }
 
+export async function fetchAgent(agentId: string, runtimeId: string): Promise<ApiAgent> {
+  const detail = await fetchJson<ApiAgentDetail>(`api/agents/${encodeURIComponent(agentId)}`)
+  if (
+    detail.schema_version !== OBSERVER_API_VERSION ||
+    detail.runtime_id !== runtimeId ||
+    detail.agent.id !== agentId
+  ) {
+    throw new Error('Local Agent detail belongs to an incompatible or changed runtime')
+  }
+  return detail.agent
+}
+
 export async function fetchTimelineDetail(
   presentationId: string,
   runtimeId: string,
@@ -546,8 +564,10 @@ export async function fetchTimeline(
 export function eventStreamUrl(
   outputAgentIds: readonly string[],
   diffs: DiffProjection = 'full',
+  focusedAgentId?: string,
 ): string {
   const params = new URLSearchParams()
+  if (focusedAgentId) params.set('agent_id', focusedAgentId)
   params.set('output_agent_ids', outputAgentIds.join(','))
   params.set('diffs', diffs)
   return `api/events?${params.toString()}`
@@ -569,15 +589,26 @@ export function presentationRecordFromLiveEvent(
   return record as PresentationRecord
 }
 
-export async function loadBootstrap() {
-  const [status, agents, preferences] = await Promise.all([
+export async function loadBootstrap(
+  view: import('../app/view').LiveboardView = { kind: 'unified' },
+) {
+  const [status, preferences] = await Promise.all([
     fetchStatus(),
-    fetchJson<ApiAgentList>('api/agents?runtime=current'),
     fetchJson<LiveboardPreferences>('preferences'),
   ])
-  if (status.runtime_id !== agents.runtime_id) {
-    throw new Error('Local runtime changed during Liveboard bootstrap')
+  let agents: ApiAgentList
+  if (view.kind === 'focused') {
+    const agent = await fetchAgent(view.agentId, status.runtime_id)
+    if (!agent.seen_in_current_runtime) {
+      throw new Error(`Focused Agent ${view.agentId} is not active in this Local runtime`)
+    }
+    agents = {
+      schema_version: OBSERVER_API_VERSION,
+      runtime_id: status.runtime_id,
+      agents: [agent],
+    }
+  } else {
+    agents = await fetchCurrentAgents(status.runtime_id)
   }
-  validateAgentList(agents, status.runtime_id)
   return { status, agents, preferences }
 }

@@ -326,6 +326,12 @@ fn stale_cleanup_removes_only_disposable_runtime_artifacts() {
     fs::write(paths.environment_handoff_file(), "unconsumed").unwrap();
     fs::write(paths.history_dir().join("keep"), "history").unwrap();
     fs::write(paths.observability_bearer_file(), "stable-bearer").unwrap();
+    fs::write(
+        paths.liveboard_discovery_file(),
+        "private-runtime-capability",
+    )
+    .unwrap();
+    fs::write(paths.liveboard_preferences_file(), "durable-preferences").unwrap();
     let launchd = FakeLaunchd::loaded();
 
     cleanup_stale_runtime(&paths, &launchd).unwrap();
@@ -338,6 +344,10 @@ fn stale_cleanup_removes_only_disposable_runtime_artifacts() {
     assert_eq!(
         fs::read_to_string(paths.observability_bearer_file()).unwrap(),
         "stable-bearer"
+    );
+    assert_eq!(
+        fs::read_to_string(paths.liveboard_preferences_file()).unwrap(),
+        "durable-preferences"
     );
     assert_eq!(launchd.bootout_calls(), 1);
 }

@@ -89,11 +89,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var upgradeCheckInFlight = false
     private var upgradeInFlight = false
 
-    private var liveboardProcess: Process?
-    private var liveboardURL: URL?
-    private var liveboardRuntimeID: String?
-    private var pendingLiveboardOpen = false
-
     init(zodexURL: URL) {
         self.zodexURL = zodexURL
         super.init()
@@ -127,10 +122,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         updateStartFolderItems()
         updateLaunchAtLoginItem()
         disableRuntimeActions()
-    }
-
-    func applicationWillTerminate(_ notification: Notification) {
-        stopLiveboardHost()
     }
 
     func menuWillOpen(_ menu: NSMenu) {
@@ -240,12 +231,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func apply(status: LocalStatus) {
         currentRuntimeID = status.runtime?.runtime_id
 
-        if liveboardProcess?.isRunning == true,
-           (status.state != "running" || liveboardRuntimeID != currentRuntimeID)
-        {
-            stopLiveboardHost()
-        }
-
         switch status.state {
         case "running":
             startItem.title = "Zodex is Running"
@@ -309,9 +294,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         runZodex(["local", "stop"]) { [weak self] result in
             guard let self else { return }
             self.commandInFlight = false
-            if result.exitCode == 0 {
-                self.stopLiveboardHost()
-            } else {
+            if result.exitCode != 0 {
                 self.startItem.title = "Zodex is Running"
                 self.showCommandError("Stop Zodex failed", result: result)
             }
@@ -320,83 +303,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func openLiveboard() {
-        if liveboardProcess?.isRunning == true {
-            if let liveboardURL {
-                NSWorkspace.shared.open(liveboardURL)
-            } else {
-                pendingLiveboardOpen = true
+        liveboardItem.isEnabled = false
+        runZodex(["local", "watch", "--no-open"]) { [weak self] result in
+            guard let self else { return }
+            self.refreshStatus()
+            guard result.exitCode == 0 else {
+                self.showCommandError("Open Liveboard failed", result: result)
+                return
             }
-            return
-        }
-
-        let process = Process()
-        let outputPipe = Pipe()
-        process.executableURL = zodexURL
-        process.arguments = ["local", "watch", "--no-open"]
-        process.standardInput = FileHandle.nullDevice
-        process.standardOutput = outputPipe
-        process.standardError = outputPipe
-
-        liveboardProcess = process
-        liveboardURL = nil
-        liveboardRuntimeID = currentRuntimeID
-        pendingLiveboardOpen = true
-
-        do {
-            try process.run()
-        } catch {
-            liveboardProcess = nil
-            liveboardRuntimeID = nil
-            pendingLiveboardOpen = false
-            showError("Open Liveboard failed", detail: error.localizedDescription)
-            return
-        }
-
-        let handle = outputPipe.fileHandleForReading
-        DispatchQueue.global(qos: .utility).async { [weak self, process] in
-            var output = ""
-            var discoveredURL: URL?
-
-            while true {
-                let data = handle.availableData
-                if data.isEmpty {
-                    break
-                }
-                output += String(decoding: data, as: UTF8.self)
-
-                if discoveredURL == nil, let url = Self.liveboardURL(in: output) {
-                    discoveredURL = url
-                    DispatchQueue.main.async { [weak self, process] in
-                        guard let self, self.liveboardProcess === process else {
-                            return
-                        }
-                        self.liveboardURL = url
-                        if self.pendingLiveboardOpen {
-                            self.pendingLiveboardOpen = false
-                            NSWorkspace.shared.open(url)
-                        }
-                    }
-                }
+            guard let url = Self.liveboardURL(in: result.output) else {
+                self.showError(
+                    "Open Liveboard failed",
+                    detail: "Zodex did not return a valid runtime-owned Liveboard URL."
+                )
+                return
             }
-
-            process.waitUntilExit()
-            let exitCode = process.terminationStatus
-            DispatchQueue.main.async { [weak self, process] in
-                guard let self, self.liveboardProcess === process else {
-                    return
-                }
-                self.liveboardProcess = nil
-                self.liveboardURL = nil
-                self.liveboardRuntimeID = nil
-                self.pendingLiveboardOpen = false
-                if exitCode != 0 {
-                    let detail = output.trimmingCharacters(in: .whitespacesAndNewlines)
-                    self.showError(
-                        "Open Liveboard failed",
-                        detail: detail.isEmpty ? "zodex local watch exited with status \(exitCode)." : detail
-                    )
-                }
-            }
+            NSWorkspace.shared.open(url)
         }
     }
 
@@ -406,25 +328,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard text.hasPrefix("Liveboard: ") else {
                 continue
             }
-            return URL(string: String(text.dropFirst("Liveboard: ".count)))
+            let value = String(text.dropFirst("Liveboard: ".count))
+            guard let components = URLComponents(string: value),
+                  components.scheme == "http",
+                  components.host == "127.0.0.1",
+                  components.port != nil,
+                  components.user == nil,
+                  components.password == nil,
+                  components.query == nil,
+                  components.fragment == nil,
+                  components.path.split(separator: "/").count == 1,
+                  components.path.hasSuffix("/"),
+                  let url = components.url
+            else {
+                continue
+            }
+            return url
         }
         return nil
-    }
-
-    private func stopLiveboardHost() {
-        guard let process = liveboardProcess else {
-            liveboardURL = nil
-            liveboardRuntimeID = nil
-            pendingLiveboardOpen = false
-            return
-        }
-        liveboardProcess = nil
-        liveboardURL = nil
-        liveboardRuntimeID = nil
-        pendingLiveboardOpen = false
-        if process.isRunning {
-            kill(process.processIdentifier, SIGINT)
-        }
     }
 
     @objc private func changeStartFolder() {
@@ -612,7 +533,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func quit() {
-        stopLiveboardHost()
         NSApp.terminate(nil)
     }
 

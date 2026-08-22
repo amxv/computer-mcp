@@ -40,8 +40,11 @@ interface BoardProps {
   error?: string
   connectionState?: RuntimeConnectionState
   connectionError?: string
+  focusedAgentId?: string
   onPatch: (patch: LiveboardPreferencesPatch) => void
   onVisibleAgentsChange?: (agentIds: readonly string[]) => void
+  onFocusAgent?: (agentId: string) => void
+  onOpenAllAgents?: () => void
   renderTimeline?: (agentId: string) => JSX.Element
 }
 
@@ -81,7 +84,11 @@ export function Board(props: BoardProps) {
     ),
   )
   const [visibleIds, setVisibleIds] = createSignal(
-    initialVisibleAgentIds(props.agents, props.preferences),
+    props.focusedAgentId
+      ? props.agents.some((agent) => agent.id === props.focusedAgentId)
+        ? [props.focusedAgentId]
+        : []
+      : initialVisibleAgentIds(props.agents, props.preferences),
   )
   // Keep mounted column identity independent from visual board order. Reordering
   // must never reparent a virtualized timeline subtree just to move a column.
@@ -105,6 +112,13 @@ export function Board(props: BoardProps) {
       () => props.agents,
       (nextAgents) => {
         setVisibleIds((previous) => {
+          if (props.focusedAgentId) {
+            return nextAgents.some(
+              (agent) => agent.id === props.focusedAgentId && agent.seen_in_current_runtime,
+            )
+              ? [props.focusedAgentId]
+              : []
+          }
           let next = previous.filter((id) =>
             nextAgents.some(
               (agent) => agent.id === id && agent.seen_in_current_runtime,
@@ -189,6 +203,10 @@ export function Board(props: BoardProps) {
   }
 
   const openAgents = () => {
+    if (props.focusedAgentId) {
+      props.onOpenAllAgents?.()
+      return
+    }
     setSettingsOpen(false)
     setDrawerOpen(true)
   }
@@ -436,6 +454,7 @@ export function Board(props: BoardProps) {
         error={props.error}
         connectionState={props.connectionState}
         connectionError={props.connectionError}
+        focusedAgentId={props.focusedAgentId}
         onOpenAgents={openAgents}
         onOpenSettings={openSettings}
       />
@@ -466,6 +485,10 @@ export function Board(props: BoardProps) {
                         nowMs={props.nowMs}
                         weight={weights()[agentId] ?? 1}
                         order={Math.max(0, visualIndex())}
+                        focused={Boolean(props.focusedAgentId)}
+                        onFocus={
+                          props.onFocusAgent ? () => props.onFocusAgent?.(agentId) : undefined
+                        }
                         onHide={() => hideAgent(agentId)}
                         onAliasSave={(alias) =>
                           props.onPatch({ agents: { [agentId]: { alias } } })
@@ -488,7 +511,7 @@ export function Board(props: BoardProps) {
         </div>
       </div>
       <AgentDrawer
-        open={drawerOpen()}
+        open={!props.focusedAgentId && drawerOpen()}
         agents={agents()}
         visibleIds={visibleIds()}
         preferences={props.preferences}
@@ -502,6 +525,7 @@ export function Board(props: BoardProps) {
         onClose={() => setSettingsOpen(false)}
         onPatch={props.onPatch}
         onMaximumChange={setMaximum}
+        showBoardSettings={!props.focusedAgentId}
       />
     </>
   )

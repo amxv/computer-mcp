@@ -67,17 +67,17 @@ enum LocalCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Open the read-only Local Liveboard, or explicitly use the terminal viewer.
-    #[command(after_help = "Examples:\n  zodex local watch\n  zodex local watch --no-open\n  zodex local watch --tui\n  zodex local watch --tui --agent k7m2\n  zodex local watch --tui --all")]
+    /// Open the runtime-owned Local Liveboard, or explicitly use the terminal viewer.
+    #[command(after_help = "Examples:\n  zodex local watch\n  zodex local watch --agent k7m2\n  zodex local watch --no-open --agent k7m2\n  zodex local watch --tui\n  zodex local watch --tui --agent k7m2\n  zodex local watch --tui --all")]
     Watch {
         /// Use the terminal viewer instead of the default web Liveboard.
         #[arg(long)]
         tui: bool,
-        /// Serve Liveboard without opening the default browser.
+        /// Print the Liveboard URL without opening the default browser.
         #[arg(long, conflicts_with = "tui")]
         no_open: bool,
-        /// In TUI mode, open or wait for one four-character Agent ID.
-        #[arg(long, requires = "tui", conflicts_with = "all")]
+        /// Focus one four-character Agent ID in web or TUI mode.
+        #[arg(long, conflicts_with = "all")]
         agent: Option<String>,
         /// In TUI mode, watch combined activity from all Agents.
         #[arg(long, requires = "tui")]
@@ -211,9 +211,9 @@ async fn handle_local_command(command: LocalCommand) -> Result<()> {
             if tui {
                 run_local_watch(&paths, WatchOptions { agent, all }).await
             } else if no_open {
-                run_local_liveboard_without_open(&paths).await
+                run_local_liveboard_without_open(&paths, agent.as_deref()).await
             } else {
-                run_local_liveboard(&paths).await
+                run_local_liveboard(&paths, agent.as_deref()).await
             }
         }
         LocalCommand::Menu => {

@@ -13,6 +13,7 @@ interface ToolbarProps {
   error?: string
   connectionState?: RuntimeConnectionState
   connectionError?: string
+  focusedAgentId?: string
   onOpenAgents: () => void
   onOpenSettings: () => void
 }
@@ -37,6 +38,9 @@ export function Toolbar(props: ToolbarProps) {
     <header class="toolbar">
       <div class="toolbar-brand-group">
         <strong class="brand">zodex</strong>
+        {props.focusedAgentId ? (
+          <span class="focused-agent-badge">Focused · {props.focusedAgentId}</span>
+        ) : null}
       </div>
       <div class="toolbar-controls">
         <span class="preference-state" role="status" aria-live="polite">

@@ -23,6 +23,7 @@ cp "${component_root}/Info.plist" "${output}/Contents/Info.plist"
 swiftc -O \
   -target arm64-apple-macos13.0 \
   "${component_root}/Sources/AppDelegate.swift" \
+  "${component_root}/Sources/LiveboardCopyHUD.swift" \
   "${component_root}/Sources/SystemIntegration.swift" \
   "${component_root}/Sources/main.swift" \
   -o "${binary}"

@@ -374,6 +374,26 @@ mod tests {
     }
 
     #[test]
+    fn status_serialization_never_exposes_private_liveboard_discovery() {
+        let (_dir, paths) = test_paths();
+        paths.ensure_persistent_dirs().unwrap();
+        std::fs::create_dir_all(paths.runtime_dir()).unwrap();
+        let capability = "supersecretliveboardcapability012345";
+        std::fs::write(
+            paths.liveboard_discovery_file(),
+            format!(
+                "{{\"schema_version\":1,\"runtime_id\":\"runtime-a\",\"base_url\":\"http://127.0.0.1:43123/{capability}/\"}}"
+            ),
+        )
+        .unwrap();
+
+        let json = serde_json::to_string(&LocalStatusDocument::inspect(&paths).unwrap()).unwrap();
+        assert!(!json.contains(capability));
+        assert!(!json.contains("liveboard.json"));
+        assert!(!json.contains("43123"));
+    }
+
+    #[test]
     fn offline_mutation_guard_rejects_active_runtime_marker() {
         let (_dir, paths) = test_paths();
         std::fs::create_dir_all(paths.runtime_dir()).unwrap();

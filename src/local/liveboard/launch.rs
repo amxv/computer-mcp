@@ -2,12 +2,14 @@
 use std::process::Command;
 
 #[cfg(target_os = "macos")]
-use anyhow::Context;
+use anyhow::{Context, anyhow};
 use anyhow::{Result, bail};
 
 use super::super::LocalPaths;
 #[cfg(target_os = "macos")]
-use super::server::start_liveboard_host;
+use super::super::{LocalRuntimeLifecycle, load_runtime_discovery, load_runtime_state};
+#[cfg(target_os = "macos")]
+use super::discovery::{load_liveboard_discovery, validate_agent_id};
 
 #[cfg(target_os = "macos")]
 pub(crate) trait BrowserLauncher: Send + Sync {
@@ -32,44 +34,82 @@ impl BrowserLauncher for SystemBrowserLauncher {
 }
 
 #[cfg(target_os = "macos")]
-pub async fn run_local_liveboard(paths: &LocalPaths) -> Result<()> {
-    run_local_liveboard_with_launcher(paths, Some(&SystemBrowserLauncher)).await
+pub async fn run_local_liveboard(paths: &LocalPaths, agent_id: Option<&str>) -> Result<()> {
+    run_local_liveboard_with_launcher(paths, agent_id, Some(&SystemBrowserLauncher)).await
 }
 
 #[cfg(not(target_os = "macos"))]
-pub async fn run_local_liveboard(_paths: &LocalPaths) -> Result<()> {
+pub async fn run_local_liveboard(_paths: &LocalPaths, _agent_id: Option<&str>) -> Result<()> {
     bail!("Zodex Local Liveboard is only available on macOS")
 }
 
 #[cfg(target_os = "macos")]
-pub async fn run_local_liveboard_without_open(paths: &LocalPaths) -> Result<()> {
-    run_local_liveboard_with_launcher(paths, None).await
+pub async fn run_local_liveboard_without_open(
+    paths: &LocalPaths,
+    agent_id: Option<&str>,
+) -> Result<()> {
+    run_local_liveboard_with_launcher(paths, agent_id, None).await
 }
 
 #[cfg(not(target_os = "macos"))]
-pub async fn run_local_liveboard_without_open(_paths: &LocalPaths) -> Result<()> {
+pub async fn run_local_liveboard_without_open(
+    _paths: &LocalPaths,
+    _agent_id: Option<&str>,
+) -> Result<()> {
     bail!("Zodex Local Liveboard is only available on macOS")
 }
 
 #[cfg(target_os = "macos")]
 pub(crate) async fn run_local_liveboard_with_launcher(
     paths: &LocalPaths,
+    agent_id: Option<&str>,
     launcher: Option<&dyn BrowserLauncher>,
 ) -> Result<()> {
-    let host = start_liveboard_host(paths).await?;
-    println!("Liveboard: {}", host.url());
+    if let Some(agent_id) = agent_id {
+        validate_agent_id(agent_id)?;
+    }
+    let runtime = load_runtime_state(paths)?
+        .context("Zodex Local is not running: runtime state is unavailable")?;
+    if runtime.lifecycle != LocalRuntimeLifecycle::Ready {
+        bail!("Zodex Local is not ready; inspect `zodex local status`")
+    }
+    let discovery = load_runtime_discovery(paths)?
+        .context("Zodex Local is not ready: active runtime discovery is unavailable")?;
+    if discovery.runtime_id != runtime.runtime_id {
+        bail!("Zodex Local runtime discovery is stale; restart Local")
+    }
+    let liveboard = load_liveboard_discovery(paths, &runtime.runtime_id)?;
+    let url = match agent_id {
+        Some(agent_id) => liveboard.focused_url(agent_id)?,
+        None => liveboard.base_url.clone(),
+    };
+    probe_liveboard(&url).await?;
+
+    println!("Liveboard: {url}");
     if let Some(launcher) = launcher
-        && let Err(error) = launcher.open(host.url())
+        && let Err(error) = launcher.open(&url)
     {
         eprintln!(
-            "warning: could not open the default browser automatically: {error:#}\nOpen {} manually.",
-            host.url()
+            "warning: could not open the default browser automatically: {error:#}. Use the Liveboard URL printed above."
         );
     }
-    tokio::signal::ctrl_c()
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+async fn probe_liveboard(url: &str) -> Result<()> {
+    let response = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| anyhow!("failed to construct Liveboard readiness client"))?
+        .get(url)
+        .send()
         .await
-        .context("failed to wait for Liveboard Ctrl-C")?;
-    host.shutdown().await
+        .map_err(|_| anyhow!("Local Liveboard host is unavailable; restart Zodex Local"))?;
+    if !response.status().is_success() {
+        bail!("Local Liveboard host rejected its private capability; restart Zodex Local")
+    }
+    Ok(())
 }
 
 #[cfg(all(test, target_os = "macos"))]

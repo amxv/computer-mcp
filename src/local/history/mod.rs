@@ -14,6 +14,8 @@ mod timeline_polls;
 mod worker;
 
 #[cfg(test)]
+mod first_seen_tests;
+#[cfg(test)]
 mod lifecycle_tests;
 #[cfg(test)]
 mod maintenance_tests;

@@ -184,6 +184,24 @@
   display: block;
 }
 
+.agent-focus-button {
+  height: 26px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.agent-focus-button:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
 .icon-button:hover:not(:disabled) {
   background: var(--surface-hover);
   color: var(--text);

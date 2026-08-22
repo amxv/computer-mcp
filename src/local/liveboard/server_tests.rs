@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use tempfile::tempdir;
 
 use crate::invocation::{InvocationContext, InvocationEvidenceRecorder, InvocationStart};
+use crate::local::observer_client::LocalObserverClient;
 use crate::local::{
     LOCAL_DISCOVERY_SCHEMA_VERSION, LocalHistoryRuntime, LocalHistoryRuntimeConfig,
     LocalObservabilityDiscovery, LocalPaths, LocalRuntimeDiscovery,
@@ -20,6 +21,7 @@ const BEARER: &str = "liveboard-host-observer-bearer-0123456789abcdef";
 
 struct ObserverFixture {
     paths: LocalPaths,
+    runtime_id: String,
     history: Arc<LocalHistoryRuntime>,
     server: crate::local::LocalObservabilityServer,
 }
@@ -60,9 +62,14 @@ impl ObserverFixture {
         .unwrap();
         Self {
             paths,
+            runtime_id: runtime_id.to_string(),
             history,
             server,
         }
+    }
+
+    fn client(&self) -> LocalObserverClient {
+        LocalObserverClient::attach(&self.server.base_url(), BEARER, &self.runtime_id).unwrap()
     }
 
     async fn shutdown(self) {
@@ -82,7 +89,9 @@ async fn host_serves_embedded_assets_and_only_allowlisted_same_origin_resources(
     }
     let dir = tempdir().unwrap();
     let observer = ObserverFixture::start(dir.path(), "runtime-liveboard-host").await;
-    let host = start_liveboard_host(&observer.paths).await.unwrap();
+    let host = start_liveboard_host(&observer.paths, observer.client())
+        .await
+        .unwrap();
     let client = reqwest::Client::new();
 
     let root = client.get(host.url()).send().await.unwrap();
@@ -244,6 +253,20 @@ async fn host_serves_embedded_assets_and_only_allowlisted_same_origin_resources(
     let wrong_capability = client.get(wrong_capability).send().await.unwrap();
     assert_eq!(wrong_capability.status(), StatusCode::NOT_FOUND);
 
+    let focused_root = client
+        .get(format!("{}?agent=k7m2", host.url()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(focused_root.status(), StatusCode::OK);
+    assert_eq!(focused_root.headers()["referrer-policy"], "no-referrer");
+    assert!(
+        focused_root
+            .headers()
+            .get("access-control-allow-origin")
+            .is_none()
+    );
+
     let capability = reqwest::Url::parse(host.url())
         .unwrap()
         .path_segments()
@@ -264,14 +287,16 @@ async fn host_serves_embedded_assets_and_only_allowlisted_same_origin_resources(
 }
 
 #[tokio::test]
-async fn host_streams_sse_without_buffering_and_rediscoveries_after_local_restart() {
+async fn host_streams_sse_without_buffering_and_stays_bound_to_its_runtime() {
     if assets::ensure_available().is_err() {
         return;
     }
     let dir = tempdir().unwrap();
     let observer = ObserverFixture::start(dir.path(), "runtime-one").await;
     let paths = observer.paths.clone();
-    let host = start_liveboard_host(&paths).await.unwrap();
+    let host = start_liveboard_host(&paths, observer.client())
+        .await
+        .unwrap();
     let client = reqwest::Client::new();
 
     let response = client
@@ -315,9 +340,9 @@ async fn host_streams_sse_without_buffering_and_rediscoveries_after_local_restar
         .send()
         .await
         .unwrap();
-    assert_eq!(status.status(), StatusCode::OK);
-    let status: Value = status.json().await.unwrap();
-    assert_eq!(status["runtime_id"], "runtime-two");
+    assert_eq!(status.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let status = status.text().await.unwrap();
+    assert!(!status.contains("runtime-two"));
 
     host.shutdown().await.unwrap();
     replacement.shutdown().await;
@@ -325,13 +350,15 @@ async fn host_streams_sse_without_buffering_and_rediscoveries_after_local_restar
 }
 
 #[tokio::test]
-async fn host_cancellation_stops_only_the_foreground_viewer() {
+async fn host_cancellation_stops_only_the_runtime_sidecar() {
     if assets::ensure_available().is_err() {
         return;
     }
     let dir = tempdir().unwrap();
     let observer = ObserverFixture::start(dir.path(), "runtime-cancel-host").await;
-    let host = start_liveboard_host(&observer.paths).await.unwrap();
+    let host = start_liveboard_host(&observer.paths, observer.client())
+        .await
+        .unwrap();
     host.request_shutdown();
     tokio::time::timeout(Duration::from_secs(2), host.shutdown())
         .await

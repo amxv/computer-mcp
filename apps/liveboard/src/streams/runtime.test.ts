@@ -165,6 +165,81 @@ afterEach(() => {
 })
 
 describe('runtime connection', () => {
+  it('keeps focused recovery, SSE, and visible state scoped to one Agent', async () => {
+    const sources: FakeEventSource[] = []
+    const timelineQueries: TimelineQuery[] = []
+    let allAgentsFetches = 0
+    const api: RuntimeApi = {
+      fetchStatus: async () => status(),
+      fetchAgent: async (agentId) => agent(agentId),
+      fetchCurrentAgents: async () => {
+        allAgentsFetches += 1
+        return { agents: [agent('a111'), agent('b222')] }
+      },
+      fetchTimeline: async (query, runtimeId) => {
+        timelineQueries.push({ ...query })
+        return page(runtimeId, query.agentId === 'a111' ? [record(1, 'a111')] : [])
+      },
+      fetchTimelineDetail: async (presentationId, runtimeId) => ({
+        schema_version: 1,
+        presentation_version: 3,
+        runtime_id: runtimeId,
+        record: record(Number(presentationId.slice(4)), 'a111'),
+      }),
+      fetchTimelineDiffBatch: async (_presentationIds, runtimeId) => ({
+        schema_version: 1,
+        presentation_version: 3,
+        runtime_id: runtimeId,
+        records: [],
+      }),
+      fetchOutputMetadata: async () => {
+        throw new Error('output metadata not expected')
+      },
+      fetchOutputPage: async () => {
+        throw new Error('output page not expected')
+      },
+      openEventSource: (url) => {
+        const source = new FakeEventSource(url)
+        sources.push(source)
+        return source
+      },
+    }
+
+    const runtime = createRuntimeConnection({
+      initialStatus: status(),
+      initialAgents: [agent('a111')],
+      initialVisibleAgentIds: ['a111'],
+      viewerAttachWatermarkMs: 1_000,
+      view: { kind: 'focused', agentId: 'a111' },
+      api,
+    })
+    runtime.start()
+    expect(sources[0]?.url).toBe(
+      'api/events?agent_id=a111&output_agent_ids=a111&diffs=full',
+    )
+    sources[0]!.open()
+    await vi.waitFor(() => expect(runtime.connectionState()).toBe('connected'))
+    expect(timelineQueries.every((query) => query.agentId === 'a111')).toBe(true)
+    expect(allAgentsFetches).toBe(0)
+
+    runtime.setVisibleAgentIds(['b222'])
+    expect(runtime.visibleAgentIds()).toEqual(['a111'])
+    expect(sources).toHaveLength(1)
+
+    sources[0]!.emit(
+      liveEvent({
+        sequence: 1,
+        event_type: 'presentation_updated',
+        agent_id: 'b222',
+        invocation_id: 22,
+        presentation_id: 'inv-22',
+        payload: { record: record(22, 'b222') },
+      }),
+    )
+    expect(runtime.controllerFor('a111').record('inv-22')).toBeUndefined()
+    runtime.dispose()
+  })
+
   it('recovers only visible Agents, coalesces canonical detail, and overlaps output-selection handoff', async () => {
     const sources: FakeEventSource[] = []
     const timelineQueries: TimelineQuery[] = []

@@ -116,6 +116,10 @@ impl LocalPaths {
         self.runtime_dir().join("discovery.json")
     }
 
+    pub fn liveboard_discovery_file(&self) -> PathBuf {
+        self.runtime_dir().join("liveboard.json")
+    }
+
     pub fn owned_process_registry_file(&self) -> PathBuf {
         self.runtime_dir().join("owned-processes.json")
     }
@@ -268,6 +272,15 @@ mod tests {
                 .ends_with("local/liveboard/preferences.lock")
         );
         assert!(paths.runtime_dir().ends_with("local/runtime"));
+        assert!(
+            paths
+                .liveboard_discovery_file()
+                .ends_with("local/runtime/liveboard.json")
+        );
+        assert_ne!(
+            paths.liveboard_discovery_file(),
+            paths.liveboard_preferences_file()
+        );
         assert!(
             paths
                 .owned_process_registry_file()

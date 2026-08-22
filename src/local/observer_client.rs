@@ -59,23 +59,11 @@ impl LocalObserverClient {
                     discovery.observability.bearer_token_path.display()
                 )
             })?;
-        let bearer = bearer.trim().to_owned();
-        if bearer.len() < MIN_BEARER_LEN || bearer.contains(['\r', '\n']) {
-            bail!("Local observability bearer is invalid; run `zodex local setup` again");
-        }
-
-        let base_url = validate_base_url(&discovery.observability.base_url)?;
-        let http = Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(REQUEST_TIMEOUT)
-            .build()
-            .context("failed to construct Local observer HTTP client")?;
-        let client = Self {
-            http,
-            base_url,
-            bearer,
-            runtime_id: discovery.runtime_id.clone(),
-        };
+        let client = Self::attach(
+            &discovery.observability.base_url,
+            bearer.trim(),
+            &discovery.runtime_id,
+        )?;
         let status = client.status().await?;
         let agents = client.current_agents().await?;
         Ok((
@@ -86,6 +74,26 @@ impl LocalObserverClient {
                 agents,
             },
         ))
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn attach(base_url: &str, bearer: &str, runtime_id: &str) -> Result<Self> {
+        if bearer.len() < MIN_BEARER_LEN || bearer.contains(['\r', '\n']) {
+            bail!("Local observability bearer is invalid; run `zodex local setup` again");
+        }
+        crate::install_rustls_crypto_provider();
+        let base_url = validate_base_url(base_url)?;
+        let http = Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(REQUEST_TIMEOUT)
+            .build()
+            .context("failed to construct Local observer HTTP client")?;
+        Ok(Self {
+            http,
+            base_url,
+            bearer: bearer.to_owned(),
+            runtime_id: runtime_id.to_owned(),
+        })
     }
 
     pub(crate) fn runtime_id(&self) -> &str {

@@ -75,4 +75,61 @@ describe('Liveboard browser bootstrap', () => {
     expect(document.documentElement.dataset.theme).toBe('dark')
     expect(getComputedStyle(document.documentElement).colorScheme).toBe('dark')
   })
+
+  it('bootstraps a focused view without fetching the global Agent list', async () => {
+    const requests: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const path =
+          typeof input === 'string'
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : input.url
+        requests.push(path)
+        const payloads: Record<string, unknown> = {
+          'api/status': {
+            schema_version: 1,
+            api_version: 1,
+            presentation_version: 3,
+            runtime_id: 'runtime-focused',
+            current_runtime_agent_count: 3,
+            active_process_count: 1,
+          },
+          preferences: {
+            schema_version: 1,
+            theme: 'system',
+            max_visible_agents: 4,
+            command_outputs_expanded: false,
+            diffs_expanded: true,
+            show_raw_button: false,
+            editor_command: 'zed',
+            agents: {},
+          },
+          'api/agents/k7m2': {
+            schema_version: 1,
+            runtime_id: 'runtime-focused',
+            agent: {
+              id: 'k7m2',
+              first_seen_at_ms: 1,
+              last_seen_at_ms: 2,
+              seen_in_current_runtime: true,
+              active_process_count: 1,
+              workdirs: [],
+            },
+          },
+        }
+        const payload = payloads[path]
+        return payload
+          ? new Response(JSON.stringify(payload), { status: 200 })
+          : new Response('{}', { status: 404 })
+      }),
+    )
+
+    const bootstrap = await loadBootstrap({ kind: 'focused', agentId: 'k7m2' })
+    expect(bootstrap.agents.agents.map((agent) => agent.id)).toEqual(['k7m2'])
+    expect(requests).toContain('api/agents/k7m2')
+    expect(requests).not.toContain('api/agents?runtime=current')
+  })
 })

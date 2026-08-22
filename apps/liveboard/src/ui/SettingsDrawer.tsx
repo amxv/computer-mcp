@@ -14,6 +14,7 @@ export function SettingsDrawer(props: {
   onClose: () => void
   onPatch: (patch: LiveboardPreferencesPatch) => void
   onMaximumChange: (maximum: number) => void
+  showBoardSettings?: boolean
 }) {
   const [editorDraft, setEditorDraft] = createSignal(props.preferences.editor_command)
   let closeButton: HTMLButtonElement | undefined
@@ -92,26 +93,28 @@ export function SettingsDrawer(props: {
               </label>
             </section>
 
-            <section class="settings-section">
-              <h3>Board</h3>
-              <label class="settings-row">
-                <span class="settings-copy">
-                  <strong>Maximum visible agents</strong>
-                  <small>Limit how many agent columns can be on the board at once.</small>
-                </span>
-                <select
-                  aria-label="Maximum visible Agents"
-                  value={props.preferences.max_visible_agents}
-                  onChange={(event) =>
-                    props.onMaximumChange(Number(event.currentTarget.value))
-                  }
-                >
-                  {[1, 2, 3, 4, 5, 6, 7, 8].map((value) => (
-                    <option value={value}>{value}</option>
-                  ))}
-                </select>
-              </label>
-            </section>
+            <Show when={props.showBoardSettings ?? true}>
+              <section class="settings-section">
+                <h3>Board</h3>
+                <label class="settings-row">
+                  <span class="settings-copy">
+                    <strong>Maximum visible agents</strong>
+                    <small>Limit how many agent columns can be on the board at once.</small>
+                  </span>
+                  <select
+                    aria-label="Maximum visible Agents"
+                    value={props.preferences.max_visible_agents}
+                    onChange={(event) =>
+                      props.onMaximumChange(Number(event.currentTarget.value))
+                    }
+                  >
+                    {[1, 2, 3, 4, 5, 6, 7, 8].map((value) => (
+                      <option value={value}>{value}</option>
+                    ))}
+                  </select>
+                </label>
+              </section>
+            </Show>
 
             <section class="settings-section">
               <h3>Timeline defaults</h3>
