@@ -88,6 +88,8 @@ Common causes:
 - a stale runtime/tunnel state needs cleanup;
 - outbound HTTPS to OpenAI is blocked.
 
+When repeatedly installing locally compiled builds, a Keychain password prompt after each rebuild means the ad-hoc code signature changed. Maintainers can enroll the stable local signer described in [Development](/docs/reference/development#stable-keychain-access-for-source-builds). Normal signed release upgrades do not need this development setup.
+
 Try a clean stop/start:
 
 ```bash
@@ -224,7 +226,7 @@ zodex local config get history.max-age
 zodex local config get history.max-size
 ```
 
-A single newest complete invocation can temporarily remain over budget rather than being corrupted. If you want different retention:
+A single newest complete invocation can temporarily remain over budget rather than being corrupted. Status can also remain temporarily over budget while already-pruned database pages are reclaimed incrementally. If you want different retention:
 
 ```bash
 zodex local stop

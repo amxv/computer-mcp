@@ -10,6 +10,7 @@ ZODEX_ASSET_URL="${ZODEX_ASSET_URL:-}"
 ZODEX_SOURCE_REF="${ZODEX_SOURCE_REF:-main}"
 ZODEX_BINARY_SOURCE_DIR="${ZODEX_BINARY_SOURCE_DIR:-}"
 ZODEX_INSTALL_DIR="${ZODEX_INSTALL_DIR:-/usr/local/bin}"
+ZODEX_CODESIGN_IDENTITY="${ZODEX_CODESIGN_IDENTITY:-}"
 ZODEX_CONFIG_PATH="${ZODEX_CONFIG_PATH:-/etc/zodex/config.toml}"
 ZODEX_STATE_DIR="${ZODEX_STATE_DIR:-/var/lib/zodex}"
 ZODEX_SERVICE_PORT="${ZODEX_SERVICE_PORT:-8080}"
@@ -286,6 +287,38 @@ ensure_local_stopped_before_operator_replace() {
   done
 }
 
+resolve_operator_codesign_identity() {
+  [[ "$(uname -s)" == "Darwin" ]] || return 0
+  [[ "${ZODEX_CODESIGN_IDENTITY}" != "-" ]] || return 0
+
+  local identity="${ZODEX_CODESIGN_IDENTITY:-Zodex Local Development}"
+  if security find-identity -v -p codesigning 2>/dev/null \
+      | grep -Fq "\"${identity}\""; then
+    printf '%s\n' "${identity}"
+  elif [[ -n "${ZODEX_CODESIGN_IDENTITY}" ]]; then
+    die "requested code-signing identity '${identity}' is not available"
+  fi
+}
+
+sign_local_operator_if_configured() {
+  local binary="$1"
+  [[ "$(uname -s)" == "Darwin" ]] || return 0
+  file -b "${binary}" | grep -Fq 'Mach-O' || return 0
+
+  local signature
+  signature="$(codesign -dv --verbose=4 "${binary}" 2>&1 || true)"
+  [[ "${signature}" == *"Signature=adhoc"* || "${signature}" == *"adhoc,"* ]] || return 0
+
+  local identity
+  identity="$(resolve_operator_codesign_identity)"
+  [[ -n "${identity}" ]] || return 0
+  codesign --force --sign "${identity}" --identifier com.amxv.zodex.local "${binary}" \
+    || die "failed to sign the Local operator with '${identity}'"
+  codesign --verify --strict "${binary}" \
+    || die "the signed Local operator failed verification"
+  log "signed Local operator with ${identity}"
+}
+
 install_operator_binary_atomically() {
   local source="$1"
   local destination="$2"
@@ -298,6 +331,7 @@ install_operator_binary_atomically() {
     /bin/rm -f "${temporary}"
     return 1
   fi
+  sign_local_operator_if_configured "${temporary}"
   if ! mv -f "${temporary}" "${destination}"; then
     /bin/rm -f "${temporary}"
     return 1

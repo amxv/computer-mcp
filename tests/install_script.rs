@@ -375,6 +375,49 @@ fn install_script_is_valid_bash_syntax() {
 }
 
 #[test]
+fn operator_installer_signs_adhoc_macho_with_available_local_identity() {
+    let command = r#"
+eval "$(sed -n '/^resolve_operator_codesign_identity()/,/^}/p' "${INSTALL_SCRIPT}")"
+eval "$(sed -n '/^sign_local_operator_if_configured()/,/^}/p' "${INSTALL_SCRIPT}")"
+ZODEX_CODESIGN_IDENTITY=""
+uname() { printf 'Darwin\n'; }
+file() { printf 'Mach-O 64-bit executable arm64\n'; }
+security() { printf '  1) HASH "Zodex Local Development"\n'; }
+codesign() {
+  if [[ "$1" == "-dv" ]]; then
+    printf 'Signature=adhoc\n' >&2
+  elif [[ "$1" == "--force" ]]; then
+    printf '%s\n' "$*" >>"${TRACE}"
+  fi
+}
+log() { :; }
+die() { printf '%s\n' "$*" >&2; exit 1; }
+sign_local_operator_if_configured "${BINARY}"
+"#;
+    let temporary =
+        std::env::temp_dir().join(format!("zodex-signing-install-test-{}", std::process::id()));
+    std::fs::create_dir_all(&temporary).expect("create signing test directory");
+    let trace = temporary.join("trace");
+    let output = Command::new("bash")
+        .arg("-c")
+        .arg(command)
+        .env("INSTALL_SCRIPT", install_script_path())
+        .env("TRACE", &trace)
+        .env("BINARY", temporary.join("zodex"))
+        .output()
+        .expect("exercise local operator signing");
+    assert!(
+        output.status.success(),
+        "signing fixture failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let invocation = std::fs::read_to_string(&trace).expect("read codesign invocation");
+    assert!(invocation.contains("--sign Zodex Local Development"));
+    assert!(invocation.contains("--identifier com.amxv.zodex.local"));
+    std::fs::remove_dir_all(&temporary).expect("remove signing test directory");
+}
+
+#[test]
 fn operator_upgrade_can_install_preextracted_release_without_fresh_install_chatter() {
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -482,6 +525,8 @@ fn operator_install_falls_back_to_user_local_bin_without_root() {
     let command = r#"
 eval "$(sed -n '/^operator_local_runtime_dir()/,/^}/p' "${INSTALL_SCRIPT}")"
 eval "$(sed -n '/^ensure_local_stopped_before_operator_replace()/,/^}/p' "${INSTALL_SCRIPT}")"
+eval "$(sed -n '/^resolve_operator_codesign_identity()/,/^}/p' "${INSTALL_SCRIPT}")"
+eval "$(sed -n '/^sign_local_operator_if_configured()/,/^}/p' "${INSTALL_SCRIPT}")"
 eval "$(sed -n '/^install_operator_binary_atomically()/,/^}/p' "${INSTALL_SCRIPT}")"
 eval "$(sed -n '/^install_operator_binaries_from_dir()/,/^}/p' "${INSTALL_SCRIPT}")"
 uname() { printf 'Darwin\n'; }
@@ -566,6 +611,8 @@ fn operator_update_refuses_to_replace_zodex_while_local_runtime_state_exists() {
     let command = r#"
 eval "$(sed -n '/^operator_local_runtime_dir()/,/^}/p' "${INSTALL_SCRIPT}")"
 eval "$(sed -n '/^ensure_local_stopped_before_operator_replace()/,/^}/p' "${INSTALL_SCRIPT}")"
+eval "$(sed -n '/^resolve_operator_codesign_identity()/,/^}/p' "${INSTALL_SCRIPT}")"
+eval "$(sed -n '/^sign_local_operator_if_configured()/,/^}/p' "${INSTALL_SCRIPT}")"
 eval "$(sed -n '/^install_operator_binary_atomically()/,/^}/p' "${INSTALL_SCRIPT}")"
 eval "$(sed -n '/^install_operator_binaries_from_dir()/,/^}/p' "${INSTALL_SCRIPT}")"
 uname() { printf 'Darwin\n'; }
@@ -615,6 +662,7 @@ fn atomic_operator_replacement_preserves_existing_binary_if_rename_fails() {
     let script_path = install_script_path();
     let command = r#"
 eval "$(sed -n '/^install_operator_binary_atomically()/,/^}/p' "${INSTALL_SCRIPT}")"
+sign_local_operator_if_configured() { :; }
 mv() { return 1; }
 if install_operator_binary_atomically "${SOURCE}" "${DESTINATION}"; then
   exit 9

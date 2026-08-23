@@ -805,10 +805,7 @@ fn retention_removes_whole_old_units_recomputes_summaries_and_keeps_newest_over_
         1,
         "newest invocation is retained even over size budget"
     );
-    assert_eq!(
-        records[0].invocation_id_for_test(),
-        new.invocation_id.unwrap()
-    );
+    assert_eq!(records[0].id, new.invocation_id.unwrap());
     let status = LocalHistoryReader::status(&path).unwrap();
     assert!(status.over_budget);
 }
@@ -954,6 +951,10 @@ fn size_retention_after_restart_deletes_oldest_complete_unit_and_reclaims_physic
         after < before,
         "physical retention must reclaim pages/WAL, before={before} after={after}"
     );
+    assert!(
+        before.saturating_sub(after) > 64 * 1024,
+        "bounded retention must drain multiple vacuum steps, before={before} after={after}"
+    );
     drop(reopened);
 
     let records = LocalHistoryReader::query(&path, &HistoryQuery::recent(20)).unwrap();
@@ -986,14 +987,4 @@ fn size_retention_after_restart_deletes_oldest_complete_unit_and_reclaims_physic
         status.physical_size_bytes > budget,
         "retention budget state must describe the footprint it reports"
     );
-}
-
-trait HistoryInvocationTestExt {
-    fn invocation_id_for_test(&self) -> i64;
-}
-
-impl HistoryInvocationTestExt for super::query::HistoryInvocation {
-    fn invocation_id_for_test(&self) -> i64 {
-        self.id
-    }
 }

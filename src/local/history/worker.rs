@@ -35,10 +35,6 @@ const OUTPUT_BATCH_LIMIT: usize = 128;
 const OUTPUT_BATCH_WAIT: Duration = Duration::from_millis(25);
 const RETENTION_MIN_INTERVAL: Duration = Duration::from_secs(30);
 const MATERIALIZATION_BACKFILL_INTERVAL: Duration = Duration::from_millis(250);
-// Remote MCP ingress and command-session shutdown are already closed before
-// this evidence-only drain runs. Give the detached PTY reader enough room to
-// observe EOF even on a heavily loaded host, while retaining a hard bound so
-// a descendant that keeps the slave open cannot stall Local shutdown forever.
 const SHUTDOWN_CAPTURE_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
 const SHUTDOWN_CAPTURE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
@@ -248,15 +244,19 @@ impl LocalHistoryRuntime {
         };
         let max_age_seconds = config.max_age_seconds;
         let max_size_bytes = config.max_size_bytes;
-        // Enforce retention before the runtime is returned and can admit its
-        // first invocation. Keeping this startup pass out of the writer loop
-        // prevents maintenance from cutting in front of the first queued
-        // completion while preserving immediate startup cleanup.
+        // Enforce retention before admitting the first invocation. Keeping
+        // this pass out of the writer loop avoids delaying queued completions.
         if let Err(error) = store.run_retention(max_age_seconds, max_size_bytes) {
             mark_retention_error_best_effort(&store, &error.to_string());
         }
         let (sender, receiver) = std::sync::mpsc::sync_channel(config.output_queue_capacity.max(1));
         let health = Arc::new(HistoryHealth::new());
+        health.maintenance_requested.store(
+            store
+                .physical_size()
+                .is_ok_and(|size| size > max_size_bytes),
+            Ordering::Release,
+        );
         let worker_store = store.clone();
         let worker_health = health.clone();
         let worker_events = events.clone();
@@ -785,16 +785,18 @@ fn run_worker(
                 .unwrap_or(true);
         if maintenance_due && health.maintenance_requested.swap(false, Ordering::AcqRel) {
             last_maintenance = Some(Instant::now());
-            if let Err(error) = store.run_retention(max_age_seconds, max_size_bytes) {
-                mark_retention_error_best_effort(&store, &error.to_string());
+            match store.run_retention(max_age_seconds, max_size_bytes) {
+                Ok(()) => health.maintenance_requested.store(
+                    store
+                        .physical_size()
+                        .is_ok_and(|size| size > max_size_bytes),
+                    Ordering::Release,
+                ),
+                Err(error) => mark_retention_error_best_effort(&store, &error.to_string()),
             }
         }
     }
 
-    // One final maintenance pass after all queued output has been flushed.
-    if let Err(error) = store.run_retention(max_age_seconds, max_size_bytes) {
-        warn!(event = "local_history_shutdown_retention_failed", error = %error);
-    }
     health.persist_degraded_state(&store);
 }
 

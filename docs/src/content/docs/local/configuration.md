@@ -51,6 +51,7 @@ zodex local config set history.max-size 2gb
 ```
 
 Retention removes old complete invocation history. It does not intentionally keep half an invocation just to hit a byte limit.
+Zodex prunes old complete history before a new Local runtime accepts commands, then reclaims physical database pages in bounded increments while it runs. Shutdown flushes queued evidence but does not wait for physical database compaction.
 
 ## Tunnel ID
 

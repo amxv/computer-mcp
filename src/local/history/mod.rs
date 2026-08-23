@@ -6,6 +6,7 @@ mod live_display;
 mod materialized;
 mod output_display;
 mod query;
+mod retention;
 mod schema;
 mod store;
 mod timeline;

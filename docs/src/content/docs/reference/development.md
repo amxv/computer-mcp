@@ -27,6 +27,18 @@ cargo run --quiet --bin zodex-agent -- github publish-pr --help
 
 The tests cover binary manifests, CLI behavior, GitHub App scripts, install behavior, Sprite scripts, zodex-agent forwarding, MCP tool registration, session handling, redaction, patch application, and mode-first product contracts.
 
+## Stable Keychain access for source builds
+
+macOS Keychain tracks the code signature of the program that reads the Local tunnel key. A newly compiled ad-hoc binary has a new identity and therefore prompts again. Maintainers who repeatedly install source builds can create a stable, machine-local signing identity once:
+
+```bash
+bash scripts/setup-local-codesigning.sh
+```
+
+macOS asks for one-time approval to trust that identity for code signing. Afterward, `scripts/install.sh` automatically signs ad-hoc local operator builds with `Zodex Local Development`. Release binaries that already have a stable signature are left unchanged. Set `ZODEX_CODESIGN_IDENTITY` to another available identity, or to `-` to disable local signing explicitly.
+
+The signing private key remains in the user's login Keychain. The tunnel runtime key remains a separate Keychain item and is never exported by this setup.
+
 ## Liveboard checks
 
 Liveboard is an isolated frontend app under `apps/liveboard`. On macOS its production assets are embedded into the `zodex` binary by `build.rs`; Linux/Sprite builds do not require frontend tooling.
@@ -102,6 +114,7 @@ Useful scripts include:
 
 ```bash
 scripts/install.sh
+scripts/setup-local-codesigning.sh
 scripts/mint-gh-app-installation-token.sh
 scripts/protect-main-branch.sh
 scripts/github_actions_fail_fast.py

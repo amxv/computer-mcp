@@ -458,115 +458,6 @@ impl HistoryStore {
             .context("failed to decode pending Local output captures")
     }
 
-    pub(super) fn run_retention(&self, max_age_seconds: u64, max_size_bytes: u64) -> Result<()> {
-        let cutoff = now_ms()?.saturating_sub(
-            i64::try_from(max_age_seconds)
-                .unwrap_or(i64::MAX)
-                .saturating_mul(1000),
-        );
-        {
-            let mut connection = self.lock_connection();
-            let transaction = connection
-                .transaction()
-                .context("failed to start age-retention transaction")?;
-            transaction
-                .execute(
-                    "DELETE FROM invocations
-                     WHERE evidence_state != 'pending'
-                       AND capture_state != 'pending'
-                       AND id NOT IN (SELECT invocation_id FROM active_process_invocations)
-                       AND COALESCE(completed_at_ms, started_at_ms) < ?1",
-                    [cutoff],
-                )
-                .context("failed to delete age-expired Local invocation units")?;
-            recompute_summaries(&transaction)?;
-            transaction
-                .commit()
-                .context("failed to commit Local age retention")?;
-        }
-
-        self.reclaim_pages()?;
-        let mut over_budget = physical_store_size(&self.path)? > max_size_bytes;
-        if over_budget && self.discard_presentation_materializations()? > 0 {
-            self.reclaim_pages()?;
-            over_budget = physical_store_size(&self.path)? > max_size_bytes;
-        }
-        while over_budget {
-            let deleted = {
-                let mut connection = self.lock_connection();
-                let eligible_count: i64 = connection
-                    .query_row(
-                        "SELECT COUNT(*) FROM invocations
-                         WHERE evidence_state != 'pending' AND capture_state != 'pending'
-                           AND id NOT IN (SELECT invocation_id FROM active_process_invocations)",
-                        [],
-                        |row| row.get(0),
-                    )
-                    .context("failed to count size-retention candidates")?;
-                if eligible_count <= 1 {
-                    false
-                } else {
-                    let transaction = connection
-                        .transaction()
-                        .context("failed to start size-retention transaction")?;
-                    let oldest: Option<i64> = transaction
-                        .query_row(
-                            "SELECT id FROM invocations
-                             WHERE evidence_state != 'pending' AND capture_state != 'pending'
-                               AND id NOT IN (SELECT invocation_id FROM active_process_invocations)
-                             ORDER BY COALESCE(completed_at_ms, started_at_ms) ASC, id ASC LIMIT 1",
-                            [],
-                            |row| row.get(0),
-                        )
-                        .optional()
-                        .context("failed to choose oldest complete invocation for retention")?;
-                    if let Some(id) = oldest {
-                        transaction
-                            .execute("DELETE FROM invocations WHERE id = ?1", [id])
-                            .context("failed to delete oldest complete invocation unit")?;
-                        recompute_summaries(&transaction)?;
-                        transaction
-                            .commit()
-                            .context("failed to commit Local size retention")?;
-                        true
-                    } else {
-                        false
-                    }
-                }
-            };
-            if !deleted {
-                break;
-            }
-            self.reclaim_pages()?;
-            over_budget = physical_store_size(&self.path)? > max_size_bytes;
-        }
-        over_budget = physical_store_size(&self.path)? > max_size_bytes;
-        self.set_retention_state(over_budget, None)?;
-        Ok(())
-    }
-
-    pub(super) fn physical_size(&self) -> Result<u64> {
-        physical_store_size(&self.path)
-    }
-
-    fn reclaim_pages(&self) -> Result<()> {
-        let connection = self.lock_connection();
-        let _checkpoint: (i64, i64, i64) = connection
-            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-            })
-            .context("failed to checkpoint Local history WAL")?;
-        let freelist: i64 = connection
-            .pragma_query_value(None, "freelist_count", |row| row.get(0))
-            .context("failed to inspect Local history freelist")?;
-        if freelist > 0 {
-            connection
-                .execute_batch(&format!("PRAGMA incremental_vacuum({freelist});"))
-                .context("failed to incrementally reclaim Local history pages")?;
-        }
-        Ok(())
-    }
-
     fn recover_interrupted_capture(&self) -> Result<()> {
         self.lock_connection()
             .execute(
@@ -758,7 +649,7 @@ fn update_agent_workdir_summary(
     Ok(true)
 }
 
-fn recompute_summaries(transaction: &Transaction<'_>) -> Result<()> {
+pub(super) fn recompute_summaries(transaction: &Transaction<'_>) -> Result<()> {
     transaction
         .execute("DELETE FROM agent_workdirs", [])
         .context("failed to reset retained Local Agent workdir summaries")?;
