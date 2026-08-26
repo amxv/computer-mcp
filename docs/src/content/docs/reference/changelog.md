@@ -8,6 +8,11 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.3.11 — 2026-08-27
+
+- Added Agent-focused Liveboard links for Local so a ChatGPT conversation can resolve to its Zodex Agent and open or copy a Liveboard view focused on that Agent.
+- Hardened Local history retention during startup and added stable machine-local code signing for source builds so repeated developer installs can reuse Keychain access without a fresh prompt after every rebuild.
+
 ## 0.3.10 — 2026-08-22
 
 - Raised the managed Local runtime's soft and hard open-file limits to 10,240 so larger concurrent Agent workloads have sufficient descriptor capacity.
