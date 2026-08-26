@@ -30,8 +30,5 @@ fi
 echo "==> cargo clippy --all-targets -- -D warnings"
 cargo clippy --quiet --all-targets -- -D warnings
 
-echo "==> source file LOC guard"
-cargo test --quiet --test source_file_size source_files_stay_under_1000_lines
-
 echo "==> cargo test"
 cargo test --quiet
