@@ -288,6 +288,7 @@ impl LocalHistoryRuntime {
         }))
     }
 
+    #[cfg(any(target_os = "macos", test))]
     pub(crate) fn install_agent_first_seen_observer(
         &self,
         observer: AgentFirstSeenObserver,
