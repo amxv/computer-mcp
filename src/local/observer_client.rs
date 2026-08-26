@@ -76,7 +76,6 @@ impl LocalObserverClient {
         ))
     }
 
-    #[cfg(target_os = "macos")]
     pub(crate) fn attach(base_url: &str, bearer: &str, runtime_id: &str) -> Result<Self> {
         if bearer.len() < MIN_BEARER_LEN || bearer.contains(['\r', '\n']) {
             bail!("Local observability bearer is invalid; run `zodex local setup` again");

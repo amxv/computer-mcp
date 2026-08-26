@@ -596,7 +596,7 @@ struct TunnelSupervisorContext<'a> {
 
 async fn supervise_runtime(
     context: &TunnelSupervisorContext<'_>,
-    host: &LocalHostRuntime,
+    _host: &LocalHostRuntime,
     tunnel: &mut ManagedTunnelChild,
     state: &mut LocalRuntimeState,
 ) -> Result<()> {
@@ -607,15 +607,15 @@ async fn supervise_runtime(
     let stop_signal = shutdown_signal();
     tokio::pin!(stop_signal);
     #[cfg(target_os = "macos")]
-    let mut liveboard_published = host.liveboard_url().is_some();
+    let mut liveboard_published = _host.liveboard_url().is_some();
 
     loop {
         tokio::select! {
             _ = ttl_tick.tick() => {
                 #[cfg(target_os = "macos")]
-                if liveboard_published && host.liveboard_is_finished() {
+                if liveboard_published && _host.liveboard_is_finished() {
                     liveboard_published = false;
-                    host.disable_liveboard_notifier();
+                    _host.disable_liveboard_notifier();
                     remove_liveboard_discovery(context.paths);
                     let _ = append_lifecycle_diagnostic(
                         context.paths,
