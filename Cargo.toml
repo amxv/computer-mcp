@@ -67,3 +67,21 @@ security-framework = "3.7"
 
 [dev-dependencies]
 pretty_assertions = "1.4"
+
+# Keep local edit/build/test loops fast while retaining useful file/line
+# backtraces. Dependencies do not need debug info for normal development.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+[profile.test]
+debug = "line-tables-only"
+
+[profile.test.package."*"]
+debug = false
+
+[profile.debugging]
+inherits = "dev"
+debug = true
