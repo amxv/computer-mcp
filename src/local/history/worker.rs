@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use serde_json::json;
 use tracing::{error, warn};
 
@@ -302,7 +302,7 @@ impl LocalHistoryRuntime {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if guard.is_some() {
-            bail!("Local Agent first-seen observer is already installed")
+            anyhow::bail!("Local Agent first-seen observer is already installed")
         }
         *guard = Some(observer);
         Ok(())
