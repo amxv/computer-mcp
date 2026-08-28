@@ -492,6 +492,8 @@ mod tests {
                 correlation_id: Some(format!("invoke-{id}").into()),
                 provider: None,
                 agent_id: Some("k7m2".into()),
+                global_context_pending: false,
+                repo_context_pending: false,
             },
         }
     }

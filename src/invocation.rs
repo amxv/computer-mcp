@@ -9,6 +9,8 @@ pub struct InvocationContext {
     pub correlation_id: Option<Arc<str>>,
     pub provider: Option<ProviderCallMetadata>,
     pub agent_id: Option<Arc<str>>,
+    pub global_context_pending: bool,
+    pub repo_context_pending: bool,
 }
 
 impl InvocationContext {
@@ -119,4 +121,13 @@ pub trait InvocationEvidenceRecorder: Send + Sync {
     /// Persist the exact logical handler result/error after it has been
     /// produced. Failure here must not rewrite the result returned to MCP.
     fn complete(&self, context: &InvocationContext, outcome: InvocationOutcome) -> Result<()>;
+}
+
+pub trait McpResultContextProvider: Send + Sync {
+    fn appended_context(
+        &self,
+        context: &InvocationContext,
+        workdir: Option<&str>,
+        tool_succeeded: bool,
+    ) -> Result<Option<String>>;
 }

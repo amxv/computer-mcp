@@ -10,6 +10,7 @@ use tempfile::tempdir;
 use crate::config::Config;
 use crate::invocation::{
     InvocationContext, InvocationEvidenceRecorder, InvocationOutcome, InvocationStart,
+    McpResultContextProvider,
 };
 use crate::local::{
     HistoryQuery, LocalHistoryReader, LocalHistoryRuntime, LocalHistoryRuntimeConfig,
@@ -144,6 +145,30 @@ fn tool_output(value: &Value) -> ToolOutput {
         .unwrap_or_else(|error| panic!("invalid ToolOutput in MCP response ({error}): {value}"))
 }
 
+fn text_content(value: &Value) -> Vec<&str> {
+    value["result"]["content"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|block| block.get("text").and_then(Value::as_str))
+        .collect()
+}
+
+struct FixedResultContextProvider;
+
+impl McpResultContextProvider for FixedResultContextProvider {
+    fn appended_context(
+        &self,
+        context: &InvocationContext,
+        _workdir: Option<&str>,
+        _tool_succeeded: bool,
+    ) -> Result<Option<String>> {
+        Ok(context.agent_id.as_ref().map(|_| {
+            "Global skills on this machine:\n- demo — demo skill — /tmp/demo/SKILL.md".to_string()
+        }))
+    }
+}
+
 pub(super) fn tool_call(id: u64, name: &str, arguments: Value, session: &str) -> Value {
     json!({
         "jsonrpc": "2.0",
@@ -155,6 +180,57 @@ pub(super) fn tool_call(id: u64, name: &str, arguments: Value, session: &str) ->
             "_meta": modern_meta(Some(session)),
         }
     })
+}
+
+#[tokio::test]
+async fn local_mcp_appends_context_without_changing_structured_tool_output() {
+    let root = tempdir().unwrap();
+    let history = history_runtime(root.path().join("history.sqlite3"));
+    let service = local_service_with_history(Config::default(), history.clone());
+    let server = start_local_mcp_server(
+        service.clone(),
+        LocalMcpServerConfig::new(root.path(), TOKEN)
+            .with_invocation_recorder(history.clone())
+            .with_result_context_provider(Arc::new(FixedResultContextProvider)),
+    )
+    .await
+    .unwrap();
+    let client = test_http_client();
+    let response = json_response(
+        post_mcp(
+            &client,
+            &server.url(),
+            Some(TOKEN),
+            Some("tools/call"),
+            tool_call(
+                91,
+                "exec_command",
+                json!({
+                    "cmd":"printf 'original-output\\n'",
+                    "workdir":root.path(),
+                    "yield_time_ms":2000
+                }),
+                "context-append-session",
+            ),
+        )
+        .await,
+    )
+    .await;
+
+    let output = tool_output(&response);
+    assert!(output.output.contains("original-output"));
+    assert!(!output.output.contains("Global skills on this machine:"));
+    let content = text_content(&response);
+    assert_eq!(content.len(), 2);
+    assert!(content[0].contains("original-output"));
+    assert_eq!(
+        content[1],
+        "Global skills on this machine:\n- demo — demo skill — /tmp/demo/SKILL.md"
+    );
+
+    server.shutdown().await.unwrap();
+    service.shutdown_sessions().await.unwrap();
+    shutdown_history_runtime(history).await;
 }
 
 #[tokio::test]

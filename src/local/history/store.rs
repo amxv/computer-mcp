@@ -7,6 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result, bail};
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use tracing::{error, warn};
 
 use super::event_identity::{HistoryCompletionResult, presentation_root_invocation_id};
@@ -90,6 +91,43 @@ impl HistoryStore {
         &self.path
     }
 
+    pub(super) fn claim_global_context_injection(
+        &self,
+        provider: &ProviderCallMetadata,
+    ) -> Result<bool> {
+        let now = now_ms()?;
+        let provider_fingerprint = provider_fingerprint(provider);
+        let connection = self.lock_connection();
+        let changed = connection
+            .execute(
+                "UPDATE mcp_context_sessions SET global_context_injected_at_ms = ?2
+                 WHERE provider_fingerprint = ?1 AND global_context_injected_at_ms IS NULL",
+                params![provider_fingerprint, now],
+            )
+            .context("failed to claim one-time Local Agent context injection")?;
+        Ok(changed == 1)
+    }
+
+    pub(super) fn claim_repo_agents_check(
+        &self,
+        provider: &ProviderCallMetadata,
+        normalized_workdir: &str,
+    ) -> Result<bool> {
+        let now = now_ms()?;
+        let provider_fingerprint = provider_fingerprint(provider);
+        let workdir_fingerprint = value_fingerprint(normalized_workdir.as_bytes());
+        let connection = self.lock_connection();
+        let changed = connection
+            .execute(
+                "INSERT OR IGNORE INTO mcp_context_workdirs(
+                    provider_fingerprint, workdir_fingerprint, repo_agents_checked_at_ms
+                 ) VALUES (?1, ?2, ?3)",
+                params![provider_fingerprint, workdir_fingerprint, now],
+            )
+            .context("failed to claim one-time Local Agent workdir context check")?;
+        Ok(changed == 1)
+    }
+
     #[cfg(test)]
     pub(super) fn begin(
         &self,
@@ -126,6 +164,10 @@ impl HistoryStore {
         if let Some(agent_id) = agent_id.as_deref() {
             context.agent_id = Some(Arc::from(agent_id));
         }
+        if let Some(provider) = context.provider.as_ref() {
+            ensure_context_session(&transaction, provider)?;
+            context.global_context_pending = agent_global_context_pending(&transaction, provider)?;
+        }
 
         let canonical_args = canonical_json(&start.arguments)?;
         let declared_workdir_exact = start
@@ -136,6 +178,15 @@ impl HistoryStore {
         let declared_workdir_normalized = declared_workdir_exact
             .as_deref()
             .and_then(normalize_declared_workdir);
+        context.repo_context_pending = match (
+            context.provider.as_ref(),
+            declared_workdir_normalized.as_deref(),
+        ) {
+            (Some(provider), Some(workdir)) => {
+                agent_repo_context_pending(&transaction, provider, workdir)?
+            }
+            _ => false,
+        };
         let target_session_handle = start
             .arguments
             .get("session_handle")
@@ -591,6 +642,65 @@ fn resolve_agent(
     bail!(
         "failed to allocate unique four-character Local Agent ID after {AGENT_ID_ATTEMPTS} attempts"
     )
+}
+
+fn ensure_context_session(
+    transaction: &Transaction<'_>,
+    provider: &ProviderCallMetadata,
+) -> Result<()> {
+    transaction
+        .execute(
+            "INSERT OR IGNORE INTO mcp_context_sessions(provider_fingerprint)
+             VALUES (?1)",
+            [provider_fingerprint(provider)],
+        )
+        .context("failed to initialize Local conversation context delivery state")?;
+    Ok(())
+}
+
+fn agent_global_context_pending(
+    transaction: &Transaction<'_>,
+    provider: &ProviderCallMetadata,
+) -> Result<bool> {
+    transaction
+        .query_row(
+            "SELECT global_context_injected_at_ms IS NULL FROM mcp_context_sessions
+             WHERE provider_fingerprint = ?1",
+            [provider_fingerprint(provider)],
+            |row| row.get(0),
+        )
+        .context("failed to inspect Local Agent global-context delivery state")
+}
+
+fn agent_repo_context_pending(
+    transaction: &Transaction<'_>,
+    provider: &ProviderCallMetadata,
+    normalized_workdir: &str,
+) -> Result<bool> {
+    let provider_fingerprint = provider_fingerprint(provider);
+    let workdir_fingerprint = value_fingerprint(normalized_workdir.as_bytes());
+    let existing: Option<i64> = transaction
+        .query_row(
+            "SELECT repo_agents_checked_at_ms FROM mcp_context_workdirs
+             WHERE provider_fingerprint = ?1 AND workdir_fingerprint = ?2",
+            params![provider_fingerprint, workdir_fingerprint],
+            |row| row.get(0),
+        )
+        .optional()
+        .context("failed to inspect Local Agent workdir-context delivery state")?;
+    Ok(existing.is_none())
+}
+
+fn provider_fingerprint(provider: &ProviderCallMetadata) -> Vec<u8> {
+    let mut hasher = Sha256::new();
+    hasher.update(provider.kind.as_bytes());
+    hasher.update([0]);
+    hasher.update(provider.session_key.as_bytes());
+    hasher.finalize().to_vec()
+}
+
+fn value_fingerprint(value: &[u8]) -> Vec<u8> {
+    Sha256::digest(value).to_vec()
 }
 
 fn update_agent_workdir_summary(

@@ -11,6 +11,7 @@ mod lifecycle_start;
 #[cfg(test)]
 mod lifecycle_tests;
 mod liveboard;
+mod mcp_context;
 mod observability;
 mod observer_client;
 mod parse;
@@ -29,7 +30,10 @@ mod watch;
 #[cfg(test)]
 mod setup_tests;
 
-pub use config::{LocalConfig, LocalHistoryConfig, LocalTunnelConfig, ManagedTunnelClientRelease};
+pub use config::{
+    LocalConfig, LocalContextConfig, LocalContextSkillsConfig, LocalHistoryConfig,
+    LocalTunnelConfig, ManagedTunnelClientRelease,
+};
 pub use environment_handoff::{consume_environment_handoff, write_environment_handoff};
 pub use history::{
     HISTORY_SCHEMA_VERSION, HistoryAgentSummary, HistoryAgentWorkdir, HistoryFileEvidence,

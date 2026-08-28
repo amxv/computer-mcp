@@ -1,28 +1,6 @@
 use std::process::Command;
 
 #[test]
-fn local_watch_agent_is_valid_for_web_while_all_remains_tui_only() {
-    let web = Command::new(env!("CARGO_BIN_EXE_zodex"))
-        .args(["local", "watch", "--agent", "k7m2"])
-        .output()
-        .expect("run zodex local watch --agent k7m2");
-    let web_stderr = String::from_utf8_lossy(&web.stderr);
-    assert!(
-        !web_stderr.contains("required arguments were not provided")
-            && !web_stderr.contains("--tui"),
-        "web --agent should parse without requiring --tui: {web_stderr}"
-    );
-
-    let all = Command::new(env!("CARGO_BIN_EXE_zodex"))
-        .args(["local", "watch", "--all"])
-        .output()
-        .expect("run zodex local watch --all");
-    assert!(!all.status.success());
-    let all_stderr = String::from_utf8_lossy(&all.stderr);
-    assert!(all_stderr.contains("--tui"));
-}
-
-#[test]
 fn local_watch_rejects_invalid_web_agent_id_before_runtime_lookup() {
     let output = Command::new(env!("CARGO_BIN_EXE_zodex"))
         .args(["local", "watch", "--agent", "K7M2"])

@@ -186,6 +186,13 @@ zodex local config get history.max-age
 zodex local config get history.max-size
 zodex local config get tunnel.id
 zodex local config get tunnel.client-path
+zodex local config get context.enabled
+zodex local config get context.global-agents
+zodex local config get context.repo-agents
+zodex local config get context.skills.enabled
+zodex local config get context.skills.agents
+zodex local config get context.skills.codex
+zodex local config get context.skills.paths
 ```
 
 Readable keys:
@@ -195,6 +202,13 @@ history.max-age
 history.max-size
 tunnel.id
 tunnel.client-path
+context.enabled
+context.global-agents
+context.repo-agents
+context.skills.enabled
+context.skills.agents
+context.skills.codex
+context.skills.paths
 ```
 
 ### Change a setting
@@ -203,11 +217,20 @@ tunnel.client-path
 zodex local config set history.max-age 60d
 zodex local config set history.max-size 500mb
 zodex local config set tunnel.id tunnel_<id>
+zodex local config set context.enabled false
+zodex local config set context.global-agents false
+zodex local config set context.repo-agents false
+zodex local config set context.skills.enabled false
+zodex local config set context.skills.agents true
+zodex local config set context.skills.codex false
+zodex local config set context.skills.paths '["~/team-skills", "/opt/company/skills"]'
 ```
 
-Writable keys are `history.max-age`, `history.max-size`, and `tunnel.id`. `tunnel.client-path` is inspectable but is managed by setup rather than `config set`.
+`context.*` settings control the Codex-style global `AGENTS`/skills context and per-workdir `AGENTS` hints sent to ChatGPT. They can be changed while Local is running. Custom skill paths are additive; use a TOML array of absolute or `~/` paths.
 
-Local must be stopped before `config set`.
+`history.max-age`, `history.max-size`, and `tunnel.id` remain writable only while Local is stopped. `tunnel.client-path` is inspectable but is managed by setup rather than `config set`.
+
+See [Local configuration](/docs/local/configuration) for the default context behavior, `CODEX_HOME` fallback, skill-root precedence, and `AGENTS.override.md` handling.
 
 ## `zodex local logs`
 

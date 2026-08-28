@@ -161,6 +161,8 @@ ChatGPT supplies `_meta["openai/session"]` automatically with tool calls. Zodex 
 
 Each Agent can work in a different repository or Git worktree as long as every command/patch supplies the intended absolute workdir.
 
+By default, the first Zodex tool result for each ChatGPT conversation also includes a compact catalog of global skills plus the user's global Codex `AGENTS` instructions. When an Agent first successfully uses a workdir that contains `AGENTS.override.md` or `AGENTS.md`, Zodex adds a one-line hint so the Agent can read it. These additions are separate from the real tool output and can be independently configured or disabled. See [Local configuration](/docs/local/configuration#automatic-codex-style-context).
+
 ## One runtime-wide TTL
 
 **One runtime-wide TTL** controls access for the entire Local service.

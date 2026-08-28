@@ -4,7 +4,9 @@ use rusqlite::Connection;
 use tempfile::tempdir;
 
 use super::query::{HistoryQuery, LocalHistoryReader};
-use super::schema::{HISTORY_SCHEMA_VERSION, SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4};
+use super::schema::{
+    HISTORY_SCHEMA_VERSION, SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5,
+};
 use super::store::HistoryStore;
 
 #[test]
@@ -311,4 +313,50 @@ fn schema_v4_migrates_to_materialization_cache_without_eager_backfill() {
         materialized, 0,
         "schema migration must not build historical diffs"
     );
+}
+
+#[test]
+fn schema_v5_migrates_to_context_delivery_state() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("history.sqlite3");
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .pragma_update(None, "auto_vacuum", "INCREMENTAL")
+        .unwrap();
+    let _: String = connection
+        .query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))
+        .unwrap();
+    connection.execute_batch(SCHEMA_V1).unwrap();
+    connection.execute_batch(SCHEMA_V2).unwrap();
+    connection.execute_batch(SCHEMA_V3).unwrap();
+    connection.execute_batch(SCHEMA_V4).unwrap();
+    connection.execute_batch(SCHEMA_V5).unwrap();
+    connection.pragma_update(None, "user_version", 5).unwrap();
+    drop(connection);
+
+    let store = HistoryStore::open(path.clone(), Arc::from("migration-runtime")).unwrap();
+    drop(store);
+    let connection = Connection::open(path).unwrap();
+    let version: u32 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, HISTORY_SCHEMA_VERSION);
+    let session_table_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master
+             WHERE type = 'table' AND name = 'mcp_context_sessions'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(session_table_count, 1);
+    let workdir_table_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master
+             WHERE type = 'table' AND name = 'mcp_context_workdirs'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(workdir_table_count, 1);
 }

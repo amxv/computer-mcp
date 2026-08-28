@@ -46,6 +46,8 @@ In Sprite mode, that path is inside the remote Linux workspace.
 
 In **Local mode**, commands run as the trusted logged-in Mac user with the captured developer environment. The Local start directory is supplied to ChatGPT as guidance for the first explicit workdir, not as a filesystem boundary.
 
+Local may append a separate context text block after the real tool result. By default the first result in a ChatGPT conversation includes the user's Codex-style global `AGENTS` instructions and global skill catalog, and the first successful invocation in a workdir may include a one-line `AGENTS.md`/`AGENTS.override.md` hint. This never changes the structured command result, stdout, patch result, status, or exit code. See [Local configuration](/docs/local/configuration#automatic-codex-style-context) to change or disable each part.
+
 ## `write_stdin`
 
 Continues a process created by `exec_command`.

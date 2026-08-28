@@ -19,6 +19,7 @@ use crate::session::{
 use super::liveboard::{
     LiveboardLinkNotifier, LocalLiveboardDiscovery, LocalLiveboardHost, start_liveboard_host,
 };
+use super::mcp_context::LocalMcpContextProvider;
 #[cfg(target_os = "macos")]
 use super::observer_client::LocalObserverClient;
 use super::{
@@ -234,6 +235,11 @@ pub async fn start_local_host_runtime(
         registry,
         history: history.clone(),
     });
+    let result_context_provider = Arc::new(LocalMcpContextProvider::new(
+        options.paths.config_file(),
+        &options.environment,
+        history.clone(),
+    ));
     let policy = SessionRuntimePolicy::local(options.shell, options.environment)?
         .with_process_observer(process_observer)
         .with_output_observer(history.clone());
@@ -241,7 +247,8 @@ pub async fn start_local_host_runtime(
     let mcp_server = start_local_mcp_server(
         service.clone(),
         LocalMcpServerConfig::new(options.start_directory, options.mcp_token)
-            .with_invocation_recorder(history.clone()),
+            .with_invocation_recorder(history.clone())
+            .with_result_context_provider(result_context_provider),
     )
     .await?;
     let bearer = fs::read_to_string(options.paths.observability_bearer_file()).with_context(|| {

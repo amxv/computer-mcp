@@ -13,7 +13,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tower::{ServiceExt, service_fn};
 
-use crate::invocation::InvocationEvidenceRecorder;
+use crate::invocation::{InvocationEvidenceRecorder, McpResultContextProvider};
 use crate::service::ZodexService;
 use crate::workdir::validate_absolute_existing_workdir;
 
@@ -28,6 +28,7 @@ pub struct LocalMcpServerConfig {
     pub start_directory: PathBuf,
     pub token: Arc<str>,
     invocation_recorder: Option<Arc<dyn InvocationEvidenceRecorder>>,
+    result_context_provider: Option<Arc<dyn McpResultContextProvider>>,
 }
 
 impl LocalMcpServerConfig {
@@ -36,6 +37,7 @@ impl LocalMcpServerConfig {
             start_directory: start_directory.into(),
             token: token.into(),
             invocation_recorder: None,
+            result_context_provider: None,
         }
     }
 
@@ -44,6 +46,14 @@ impl LocalMcpServerConfig {
         recorder: Arc<dyn InvocationEvidenceRecorder>,
     ) -> Self {
         self.invocation_recorder = Some(recorder);
+        self
+    }
+
+    pub fn with_result_context_provider(
+        mut self,
+        provider: Arc<dyn McpResultContextProvider>,
+    ) -> Self {
+        self.result_context_provider = Some(provider);
         self
     }
 }
@@ -112,6 +122,7 @@ pub(super) async fn start_local_mcp_server_with_observer(
             instructions,
             provider_metadata_observer,
             invocation_recorder: config.invocation_recorder,
+            result_context_provider: config.result_context_provider,
         },
     );
     let app = local_mcp_app(mcp, token);

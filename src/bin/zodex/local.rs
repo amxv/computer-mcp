@@ -136,10 +136,10 @@ enum LocalCommand {
 #[derive(Debug, Subcommand)]
 enum LocalConfigCommand {
     /// Print all non-secret Local settings, or one named key.
-    #[command(after_help = "Examples:\n  zodex local config get\n  zodex local config get history.max-age")]
+    #[command(after_help = "Examples:\n  zodex local config get\n  zodex local config get history.max-age\n  zodex local config get context.skills.paths")]
     Get { key: Option<String> },
-    /// Persist one non-secret setting. Local must be stopped.
-    #[command(after_help = "Examples:\n  zodex local config set history.max-age 60d\n  zodex local config set history.max-size 500mb\n  zodex local config set tunnel.id <tunnel-id>")]
+    /// Persist one non-secret setting. Context settings are live; others require Local stopped.
+    #[command(after_help = "Examples:\n  zodex local config set context.enabled false\n  zodex local config set context.skills.codex false\n  zodex local config set context.skills.paths '[\"~/team-skills\"]'\n  zodex local config set history.max-age 60d\n  zodex local config set tunnel.id <tunnel-id>\n\nContext settings can be changed while Local is running. Tunnel and history settings still require Local to be stopped.")]
     Set { key: String, value: String },
 }
 
@@ -659,9 +659,11 @@ fn handle_local_config(paths: &LocalPaths, command: LocalConfigCommand) -> Resul
             Ok(())
         }
         LocalConfigCommand::Set { key, value } => {
-            ensure_offline_mutation(paths, "change Local configuration")?;
             let mut config = LocalConfig::load(&paths.config_file())?;
             config.set(&key, &value)?;
+            if !LocalConfig::can_set_while_running(&key) {
+                ensure_offline_mutation(paths, "change Local configuration")?;
+            }
             config.save(&paths.config_file())?;
             println!("updated {key} in {}", paths.config_file().display());
             Ok(())

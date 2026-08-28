@@ -7,13 +7,17 @@ use axum::http::{StatusCode, Uri};
 use axum::middleware::{self, Next};
 use axum::response::Response;
 use axum::routing::get;
-use axum::{Json, Router};
+use axum::{Json as AxumJson, Router};
+use rmcp::handler::server::tool::IntoCallToolResult;
 use rmcp::handler::server::{router::tool::ToolRouter, wrapper::Parameters};
-use rmcp::model::{RequestMetaObject, ServerCapabilities, ServerInfo};
+use rmcp::model::{
+    CallToolResponse, CallToolResult, ContentBlock, RequestMetaObject, ServerCapabilities,
+    ServerInfo,
+};
 use rmcp::transport::streamable_http_server::{
     StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
 };
-use rmcp::{Json as McpJson, ServerHandler, tool, tool_handler, tool_router};
+use rmcp::{ServerHandler, tool, tool_handler, tool_router};
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
@@ -23,7 +27,7 @@ use tracing::{error, info};
 use crate::config::Config;
 use crate::invocation::{
     InvocationContext, InvocationContinuationKind, InvocationEvidenceRecorder, InvocationOutcome,
-    InvocationStart, ProviderCallMetadata,
+    InvocationStart, McpResultContextProvider, ProviderCallMetadata,
 };
 use crate::protocol::{ApplyPatchInput, ExecCommandInput, ToolOutput, WriteStdinInput};
 use crate::service::{ServiceRequest, ZodexService};
@@ -73,6 +77,7 @@ struct McpServerPolicy {
     instructions: Arc<str>,
     provider_metadata_observer: Option<ProviderMetadataObserver>,
     invocation_recorder: Option<Arc<dyn InvocationEvidenceRecorder>>,
+    result_context_provider: Option<Arc<dyn McpResultContextProvider>>,
 }
 
 impl Default for McpServerPolicy {
@@ -85,6 +90,7 @@ impl Default for McpServerPolicy {
             instructions: Arc::from(DEFAULT_MCP_INSTRUCTIONS),
             provider_metadata_observer: None,
             invocation_recorder: None,
+            result_context_provider: None,
         }
     }
 }
@@ -96,6 +102,81 @@ struct ZodexMcpService {
     instructions: Arc<str>,
     provider_metadata_observer: Option<ProviderMetadataObserver>,
     invocation_recorder: Option<Arc<dyn InvocationEvidenceRecorder>>,
+    result_context_provider: Option<Arc<dyn McpResultContextProvider>>,
+}
+
+// Keep this wrapper named `Json`: rmcp's #[tool] macro recognizes Json<T>
+// and continues advertising T as the structured output schema.
+struct Json<T> {
+    result: Result<T, String>,
+    appended_context: Option<String>,
+}
+
+impl<T> Json<T> {
+    fn new(result: Result<T, String>, appended_context: Option<String>) -> Self {
+        Self {
+            result,
+            appended_context,
+        }
+    }
+
+    #[cfg(test)]
+    fn into_result(self) -> Result<T, String> {
+        self.result
+    }
+}
+
+impl<T: Serialize + schemars::JsonSchema + 'static> IntoCallToolResult for Json<T> {
+    fn into_call_tool_result(self) -> Result<CallToolResponse, rmcp::ErrorData> {
+        let mut result = match self.result {
+            Ok(value) => {
+                let value = serde_json::to_value(value).map_err(|error| {
+                    rmcp::ErrorData::internal_error(
+                        format!("Failed to serialize structured content: {error}"),
+                        None,
+                    )
+                })?;
+                CallToolResult::structured(value)
+            }
+            Err(error) => CallToolResult::error(vec![ContentBlock::text(error)]),
+        };
+        if let Some(context) = self.appended_context {
+            result.content.push(ContentBlock::text(context));
+        }
+        Ok(result.into())
+    }
+}
+
+struct TextResult {
+    result: Result<String, String>,
+    appended_context: Option<String>,
+}
+
+impl TextResult {
+    fn new(result: Result<String, String>, appended_context: Option<String>) -> Self {
+        Self {
+            result,
+            appended_context,
+        }
+    }
+
+    #[cfg(test)]
+    fn into_result(self) -> Result<String, String> {
+        self.result
+    }
+}
+
+impl IntoCallToolResult for TextResult {
+    fn into_call_tool_result(self) -> Result<CallToolResponse, rmcp::ErrorData> {
+        let mut result = match self.result {
+            Ok(value) => CallToolResult::success(vec![ContentBlock::text(value)]),
+            Err(error) => CallToolResult::error(vec![ContentBlock::text(error)]),
+        };
+        if let Some(context) = self.appended_context {
+            result.content.push(ContentBlock::text(context));
+        }
+        Ok(result.into())
+    }
 }
 
 impl ZodexMcpService {
@@ -106,6 +187,7 @@ impl ZodexMcpService {
             Arc::from(DEFAULT_MCP_INSTRUCTIONS),
             None,
             None,
+            None,
         )
     }
 
@@ -114,6 +196,7 @@ impl ZodexMcpService {
         instructions: Arc<str>,
         provider_metadata_observer: Option<ProviderMetadataObserver>,
         invocation_recorder: Option<Arc<dyn InvocationEvidenceRecorder>>,
+        result_context_provider: Option<Arc<dyn McpResultContextProvider>>,
     ) -> Self {
         Self {
             zodex_service,
@@ -121,6 +204,7 @@ impl ZodexMcpService {
             instructions,
             provider_metadata_observer,
             invocation_recorder,
+            result_context_provider,
         }
     }
 
@@ -193,6 +277,26 @@ impl ZodexMcpService {
         }
     }
 
+    fn appended_context(
+        &self,
+        invocation: &InvocationContext,
+        workdir: Option<&str>,
+        tool_succeeded: bool,
+    ) -> Option<String> {
+        let provider = self.result_context_provider.as_ref()?;
+        match provider.appended_context(invocation, workdir, tool_succeeded) {
+            Ok(context) => context,
+            Err(error) => {
+                error!(
+                    event = "local_mcp_result_context_failed",
+                    invocation_id = ?invocation.invocation_id,
+                    error = %error,
+                );
+                None
+            }
+        }
+    }
+
     async fn execute_tool_output(
         &self,
         request: ServiceRequest,
@@ -234,9 +338,13 @@ impl ZodexMcpService {
         &self,
         Parameters(input): Parameters<ExecCommandInput>,
         request_meta: RequestMetaObject,
-    ) -> Result<McpJson<ToolOutput>, String> {
+    ) -> Json<ToolOutput> {
+        let workdir = input.workdir.clone();
         let invocation =
-            self.begin_invocation("exec_command", &input, &request_meta, None, None)?;
+            match self.begin_invocation("exec_command", &input, &request_meta, None, None) {
+                Ok(invocation) => invocation,
+                Err(error) => return Json::new(Err(error), None),
+            };
         let result = self
             .execute_tool_output(
                 ServiceRequest::ExecCommand {
@@ -247,7 +355,8 @@ impl ZodexMcpService {
             )
             .await;
         self.complete_invocation(&invocation, &result);
-        result.map(McpJson)
+        let appended_context = self.appended_context(&invocation, Some(&workdir), result.is_ok());
+        Json::new(result, appended_context)
     }
 
     #[tool(
@@ -263,24 +372,28 @@ impl ZodexMcpService {
         &self,
         Parameters(input): Parameters<WriteStdinInput>,
         request_meta: RequestMetaObject,
-    ) -> Result<McpJson<ToolOutput>, String> {
+    ) -> Json<ToolOutput> {
         let target_creator = self
             .zodex_service
             .session_creator_context(&input.session_handle)
             .await;
         let continuation_kind = write_stdin_continuation_kind(&input);
-        let invocation = self.begin_invocation(
+        let invocation = match self.begin_invocation(
             "write_stdin",
             &input,
             &request_meta,
             target_creator,
             Some(continuation_kind),
-        )?;
+        ) {
+            Ok(invocation) => invocation,
+            Err(error) => return Json::new(Err(error), None),
+        };
         let result = self
             .execute_tool_output(ServiceRequest::WriteStdin { input }, invocation.clone())
             .await;
         self.complete_invocation(&invocation, &result);
-        result.map(McpJson)
+        let appended_context = self.appended_context(&invocation, None, result.is_ok());
+        Json::new(result, appended_context)
     }
 
     #[tool(
@@ -296,11 +409,17 @@ impl ZodexMcpService {
         &self,
         Parameters(input): Parameters<ApplyPatchInput>,
         request_meta: RequestMetaObject,
-    ) -> Result<String, String> {
-        let invocation = self.begin_invocation("apply_patch", &input, &request_meta, None, None)?;
+    ) -> TextResult {
+        let workdir = input.workdir.clone();
+        let invocation =
+            match self.begin_invocation("apply_patch", &input, &request_meta, None, None) {
+                Ok(invocation) => invocation,
+                Err(error) => return TextResult::new(Err(error), None),
+            };
         let result = self.execute_apply_patch(input, invocation.clone()).await;
         self.complete_invocation(&invocation, &result);
-        result
+        let appended_context = self.appended_context(&invocation, Some(&workdir), result.is_ok());
+        TextResult::new(result, appended_context)
     }
 }
 
@@ -341,6 +460,7 @@ fn build_mcp_service_with_policy(
     let instructions = policy.instructions.clone();
     let provider_metadata_observer = policy.provider_metadata_observer.clone();
     let invocation_recorder = policy.invocation_recorder.clone();
+    let result_context_provider = policy.result_context_provider.clone();
     let mut config = StreamableHttpServerConfig::default()
         .with_legacy_session_mode(policy.legacy_session_mode)
         .with_json_response(policy.json_response)
@@ -356,6 +476,7 @@ fn build_mcp_service_with_policy(
                 instructions.clone(),
                 provider_metadata_observer.clone(),
                 invocation_recorder.clone(),
+                result_context_provider.clone(),
             ))
         },
         LocalSessionManager::default().into(),
@@ -417,8 +538,8 @@ pub async fn run_server(config: Config) -> Result<()> {
         .context("Sprite HTTP server terminated unexpectedly")
 }
 
-async fn health() -> Json<Value> {
-    Json(json!({
+async fn health() -> AxumJson<Value> {
+    AxumJson(json!({
         "status": "ok",
         "component": "zodexd",
         "version": env!("CARGO_PKG_VERSION")

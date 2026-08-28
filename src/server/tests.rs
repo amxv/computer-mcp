@@ -68,6 +68,7 @@ fn stateless_policy(observer: Option<ProviderMetadataObserver>) -> McpServerPoli
         instructions: Arc::from("stateless MCP test server"),
         provider_metadata_observer: observer,
         invocation_recorder: None,
+        result_context_provider: None,
     }
 }
 
@@ -139,8 +140,8 @@ async fn wait_for_mcp_exit(mcp: &ZodexMcpService, mut output: ToolOutput) -> Too
                 RequestMetaObject::default(),
             )
             .await
-            .expect("mcp poll should succeed")
-            .0;
+            .into_result()
+            .expect("mcp poll should succeed");
     }
 
     panic!("mcp output did not reach exited state in time");
@@ -188,6 +189,7 @@ fn server_info_accepts_runtime_supplied_workdir_guidance() {
     let service = ZodexMcpService::with_options(
         ZodexService::new(test_config()),
         instructions.clone(),
+        None,
         None,
         None,
     );
@@ -321,8 +323,8 @@ async fn exec_command_mcp_parity_with_service() {
         &mcp,
         mcp.exec_command(Parameters(input), RequestMetaObject::default())
             .await
-            .expect("mcp exec should succeed")
-            .0,
+            .into_result()
+            .expect("mcp exec should succeed"),
     )
     .await;
 
@@ -355,8 +357,8 @@ async fn write_stdin_mcp_parity_with_service() {
     let mcp_started = mcp
         .exec_command(Parameters(shell_input), RequestMetaObject::default())
         .await
-        .expect("mcp shell should start")
-        .0;
+        .into_result()
+        .expect("mcp shell should start");
 
     let direct_session_handle = direct_started
         .session_handle
@@ -385,8 +387,8 @@ async fn write_stdin_mcp_parity_with_service() {
             RequestMetaObject::default(),
         )
         .await
-        .expect("mcp write should succeed")
-        .0;
+        .into_result()
+        .expect("mcp write should succeed");
 
     assert_eq!(mcp_write.status, direct_write.status);
     assert_eq!(
@@ -417,6 +419,7 @@ async fn write_stdin_mcp_parity_with_service() {
             RequestMetaObject::default(),
         )
         .await
+        .into_result()
         .expect("mcp shell should exit");
 }
 
@@ -439,8 +442,8 @@ async fn kill_process_mcp_parity_with_service() {
     let mcp_started = mcp
         .exec_command(Parameters(input), RequestMetaObject::default())
         .await
-        .expect("mcp sleep should start")
-        .0;
+        .into_result()
+        .expect("mcp sleep should start");
 
     let direct_killed = direct
         .write_stdin(WriteStdinInput {
@@ -464,8 +467,8 @@ async fn kill_process_mcp_parity_with_service() {
             RequestMetaObject::default(),
         )
         .await
-        .expect("mcp kill should succeed")
-        .0;
+        .into_result()
+        .expect("mcp kill should succeed");
 
     assert_eq!(mcp_killed.status, direct_killed.status);
     assert_eq!(
@@ -512,8 +515,8 @@ async fn timeout_and_cwd_mcp_parity_with_service() {
             RequestMetaObject::default(),
         )
         .await
-        .expect("mcp cwd should succeed")
-        .0;
+        .into_result()
+        .expect("mcp cwd should succeed");
 
     assert_eq!(mcp_cwd.cwd, direct_cwd.cwd);
     assert!(
@@ -547,8 +550,8 @@ async fn timeout_and_cwd_mcp_parity_with_service() {
             RequestMetaObject::default(),
         )
         .await
-        .expect("mcp timeout should complete")
-        .0;
+        .into_result()
+        .expect("mcp timeout should complete");
 
     assert_eq!(mcp_timeout.status, direct_timeout.status);
     assert_eq!(
@@ -592,8 +595,8 @@ async fn timeout_and_cwd_mcp_parity_with_service() {
             RequestMetaObject::default(),
         )
         .await
-        .expect("mcp truncation should succeed")
-        .0;
+        .into_result()
+        .expect("mcp truncation should succeed");
 
     for output in [&direct_truncated, &mcp_truncated] {
         assert_eq!(output.status, CommandStatus::Exited);
@@ -626,6 +629,7 @@ async fn apply_patch_mcp_parity_with_service() {
             RequestMetaObject::default(),
         )
         .await
+        .into_result()
         .expect("mcp apply_patch should succeed");
 
     assert!(direct_output.contains("Success. Updated the following files:"));

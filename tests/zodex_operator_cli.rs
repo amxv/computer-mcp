@@ -69,7 +69,12 @@ fn zodex_local_first_run_status_json_is_versioned_and_unconfigured() {
 #[test]
 fn zodex_local_config_set_get_persists_non_secret_values() {
     let fixture = LocalCliFixture::new();
-    for (key, value) in [("history.max-age", "2d"), ("history.max-size", "1gb")] {
+    for (key, value) in [
+        ("history.max-age", "2d"),
+        ("history.max-size", "1gb"),
+        ("context.repo-agents", "false"),
+        ("context.skills.codex", "false"),
+    ] {
         let output = fixture
             .command()
             .args(["local", "config", "set", key, value])
@@ -93,6 +98,8 @@ fn zodex_local_config_set_get_persists_non_secret_values() {
     let raw = fs::read_to_string(config_path).unwrap();
     assert!(raw.contains("max_age = \"2d\""));
     assert!(raw.contains("max_size = \"1gb\""));
+    assert!(raw.contains("repo_agents = false"));
+    assert!(raw.contains("codex = false"));
     assert!(!raw.contains("api_key"));
     assert!(!raw.contains("runtime_key"));
 }
@@ -149,6 +156,36 @@ fn zodex_local_config_set_rejects_active_runtime_state_with_stop_hint() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("zodex local stop"), "{stderr}");
+}
+
+#[test]
+fn zodex_local_context_config_can_change_while_runtime_is_active() {
+    let fixture = LocalCliFixture::new();
+    let runtime_dir = fixture.state_root.join("zodex/local/runtime");
+    fs::create_dir_all(&runtime_dir).unwrap();
+    fs::write(
+        runtime_dir.join("state.json"),
+        r#"{"schema_version":1,"runtime_id":"test","lifecycle":"ready"}"#,
+    )
+    .unwrap();
+
+    let output = fixture
+        .command()
+        .args(["local", "config", "set", "context.enabled", "false"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let output = fixture
+        .command()
+        .args(["local", "config", "get", "context.enabled"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "false");
 }
 
 #[test]

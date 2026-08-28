@@ -12,6 +12,7 @@ use tracing::{error, warn};
 
 use crate::invocation::{
     InvocationContext, InvocationEvidenceRecorder, InvocationOutcome, InvocationStart,
+    ProviderCallMetadata,
 };
 use crate::local::file_evidence::{
     CompletedFileEvidence, PendingFileEvidence, complete_file_evidence, prepare_file_evidence,
@@ -306,6 +307,22 @@ impl LocalHistoryRuntime {
 
     pub fn runtime_id(&self) -> &str {
         &self.runtime_id
+    }
+
+    pub(crate) fn claim_global_context_injection(
+        &self,
+        provider: &ProviderCallMetadata,
+    ) -> Result<bool> {
+        self.store.claim_global_context_injection(provider)
+    }
+
+    pub(crate) fn claim_repo_agents_check(
+        &self,
+        provider: &ProviderCallMetadata,
+        normalized_workdir: &str,
+    ) -> Result<bool> {
+        self.store
+            .claim_repo_agents_check(provider, normalized_workdir)
     }
 
     pub fn active_process_counts(&self) -> HashMap<String, u64> {
