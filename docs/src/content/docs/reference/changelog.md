@@ -8,6 +8,12 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.3.12 — 2026-08-28
+
+- Added configurable Codex-style Local context injection: each ChatGPT conversation can receive the machine's global skills plus `$CODEX_HOME/AGENTS.override.md` or `AGENTS.md` alongside its first Zodex result, without changing the underlying tool output.
+- Added one-time per-Agent/workdir hints when the exact requested workdir contains `AGENTS.override.md` or `AGENTS.md`, with durable delivery state across Local restarts and history retention.
+- Added Local config controls for disabling global instructions, repo instruction hints, skill injection, either built-in skill root, or all automatic context, plus additive custom skill roots.
+
 ## 0.3.11 — 2026-08-27
 
 - Added Agent-focused Liveboard links for Local so a ChatGPT conversation can resolve to its Zodex Agent and open or copy a Liveboard view focused on that Agent.
