@@ -50,6 +50,8 @@ pub struct ToolOutput {
     pub status: CommandStatus,
     pub cwd: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub zodex_context: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_handle: Option<String>,

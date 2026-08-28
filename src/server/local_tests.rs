@@ -183,7 +183,7 @@ pub(super) fn tool_call(id: u64, name: &str, arguments: Value, session: &str) ->
 }
 
 #[tokio::test]
-async fn local_mcp_appends_context_without_changing_structured_tool_output() {
+async fn local_mcp_puts_context_inside_primary_structured_tool_output() {
     let root = tempdir().unwrap();
     let history = history_runtime(root.path().join("history.sqlite3"));
     let service = local_service_with_history(Config::default(), history.clone());
@@ -220,13 +220,107 @@ async fn local_mcp_appends_context_without_changing_structured_tool_output() {
     let output = tool_output(&response);
     assert!(output.output.contains("original-output"));
     assert!(!output.output.contains("Global skills on this machine:"));
-    let content = text_content(&response);
-    assert_eq!(content.len(), 2);
-    assert!(content[0].contains("original-output"));
     assert_eq!(
-        content[1],
-        "Global skills on this machine:\n- demo — demo skill — /tmp/demo/SKILL.md"
+        output.zodex_context.as_deref(),
+        Some("Global skills on this machine:\n- demo — demo skill — /tmp/demo/SKILL.md")
     );
+    let content = text_content(&response);
+    assert_eq!(content.len(), 1);
+    assert!(content[0].contains("original-output"));
+    assert!(content[0].contains("\"zodex_context\""));
+
+    server.shutdown().await.unwrap();
+    service.shutdown_sessions().await.unwrap();
+    shutdown_history_runtime(history).await;
+}
+
+#[tokio::test]
+async fn local_mcp_keeps_context_in_primary_text_block_for_errors() {
+    let root = tempdir().unwrap();
+    let history = history_runtime(root.path().join("history.sqlite3"));
+    let service = local_service_with_history(Config::default(), history.clone());
+    let server = start_local_mcp_server(
+        service.clone(),
+        LocalMcpServerConfig::new(root.path(), TOKEN)
+            .with_invocation_recorder(history.clone())
+            .with_result_context_provider(Arc::new(FixedResultContextProvider)),
+    )
+    .await
+    .unwrap();
+    let client = test_http_client();
+    let missing_workdir = root.path().join("missing");
+    let response = json_response(
+        post_mcp(
+            &client,
+            &server.url(),
+            Some(TOKEN),
+            Some("tools/call"),
+            tool_call(
+                92,
+                "exec_command",
+                json!({
+                    "cmd":"true",
+                    "workdir":missing_workdir,
+                    "yield_time_ms":2000
+                }),
+                "context-error-session",
+            ),
+        )
+        .await,
+    )
+    .await;
+
+    assert_eq!(response["result"]["isError"], true);
+    assert!(response["result"]["structuredContent"].is_null());
+    let content = text_content(&response);
+    assert_eq!(content.len(), 1);
+    assert!(content[0].contains("workdir"));
+    assert!(content[0].contains("Global skills on this machine:"));
+
+    server.shutdown().await.unwrap();
+    service.shutdown_sessions().await.unwrap();
+    shutdown_history_runtime(history).await;
+}
+
+#[tokio::test]
+async fn local_mcp_keeps_context_in_primary_apply_patch_text_block() {
+    let root = tempdir().unwrap();
+    let history = history_runtime(root.path().join("history.sqlite3"));
+    let service = local_service_with_history(Config::default(), history.clone());
+    let server = start_local_mcp_server(
+        service.clone(),
+        LocalMcpServerConfig::new(root.path(), TOKEN)
+            .with_invocation_recorder(history.clone())
+            .with_result_context_provider(Arc::new(FixedResultContextProvider)),
+    )
+    .await
+    .unwrap();
+    let client = test_http_client();
+    let response = json_response(
+        post_mcp(
+            &client,
+            &server.url(),
+            Some(TOKEN),
+            Some("tools/call"),
+            tool_call(
+                93,
+                "apply_patch",
+                json!({
+                    "patch":"*** Begin Patch\n*** Add File: context-smoke.txt\n+ok\n*** End Patch\n",
+                    "workdir":root.path()
+                }),
+                "context-patch-session",
+            ),
+        )
+        .await,
+    )
+    .await;
+
+    assert_ne!(response["result"]["isError"], true);
+    let content = text_content(&response);
+    assert_eq!(content.len(), 1);
+    assert!(content[0].contains("Success. Updated the following files:"));
+    assert!(content[0].contains("Global skills on this machine:"));
 
     server.shutdown().await.unwrap();
     service.shutdown_sessions().await.unwrap();

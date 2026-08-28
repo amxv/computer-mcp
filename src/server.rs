@@ -112,6 +112,16 @@ struct Json<T> {
     appended_context: Option<String>,
 }
 
+trait StructuredModelContext {
+    fn set_zodex_context(&mut self, context: String);
+}
+
+impl StructuredModelContext for ToolOutput {
+    fn set_zodex_context(&mut self, context: String) {
+        self.zodex_context = Some(context);
+    }
+}
+
 impl<T> Json<T> {
     fn new(result: Result<T, String>, appended_context: Option<String>) -> Self {
         Self {
@@ -126,10 +136,15 @@ impl<T> Json<T> {
     }
 }
 
-impl<T: Serialize + schemars::JsonSchema + 'static> IntoCallToolResult for Json<T> {
+impl<T: Serialize + schemars::JsonSchema + StructuredModelContext + 'static> IntoCallToolResult
+    for Json<T>
+{
     fn into_call_tool_result(self) -> Result<CallToolResponse, rmcp::ErrorData> {
-        let mut result = match self.result {
-            Ok(value) => {
+        let result = match self.result {
+            Ok(mut value) => {
+                if let Some(context) = self.appended_context {
+                    value.set_zodex_context(context);
+                }
                 let value = serde_json::to_value(value).map_err(|error| {
                     rmcp::ErrorData::internal_error(
                         format!("Failed to serialize structured content: {error}"),
@@ -138,11 +153,11 @@ impl<T: Serialize + schemars::JsonSchema + 'static> IntoCallToolResult for Json<
                 })?;
                 CallToolResult::structured(value)
             }
-            Err(error) => CallToolResult::error(vec![ContentBlock::text(error)]),
+            Err(error) => CallToolResult::error(vec![ContentBlock::text(primary_text(
+                error,
+                self.appended_context,
+            ))]),
         };
-        if let Some(context) = self.appended_context {
-            result.content.push(ContentBlock::text(context));
-        }
         Ok(result.into())
     }
 }
@@ -168,14 +183,24 @@ impl TextResult {
 
 impl IntoCallToolResult for TextResult {
     fn into_call_tool_result(self) -> Result<CallToolResponse, rmcp::ErrorData> {
-        let mut result = match self.result {
-            Ok(value) => CallToolResult::success(vec![ContentBlock::text(value)]),
-            Err(error) => CallToolResult::error(vec![ContentBlock::text(error)]),
+        let result = match self.result {
+            Ok(value) => CallToolResult::success(vec![ContentBlock::text(primary_text(
+                value,
+                self.appended_context,
+            ))]),
+            Err(error) => CallToolResult::error(vec![ContentBlock::text(primary_text(
+                error,
+                self.appended_context,
+            ))]),
         };
-        if let Some(context) = self.appended_context {
-            result.content.push(ContentBlock::text(context));
-        }
         Ok(result.into())
+    }
+}
+
+fn primary_text(value: String, appended_context: Option<String>) -> String {
+    match appended_context {
+        Some(context) if !context.is_empty() => format!("{value}\n\n{context}"),
+        _ => value,
     }
 }
 

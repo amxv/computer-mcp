@@ -8,6 +8,11 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.3.13 — 2026-08-28
+
+- Fixed Local context delivery in ChatGPT by carrying `AGENTS`/skill/workdir context inside the primary model-visible tool result instead of a sibling MCP content block that ChatGPT did not forward to the model.
+- Added optional `zodex_context` structured output for command tools while keeping stdout, status, cwd, exit code, and stored invocation evidence unchanged; text and error results keep their original result first and append context in the same primary text block.
+
 ## 0.3.12 — 2026-08-28
 
 - Added configurable Codex-style Local context injection: each ChatGPT conversation can receive the machine's global skills plus `$CODEX_HOME/AGENTS.override.md` or `AGENTS.md` alongside its first Zodex result, without changing the underlying tool output.

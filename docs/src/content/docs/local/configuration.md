@@ -46,7 +46,7 @@ If you try to change a non-context setting while Local is active, Zodex tells yo
 
 ## Automatic Codex-style context
 
-By default, Zodex Local gives each ChatGPT conversation a small amount of host context alongside tool results. The command result, patch result, structured output, stdout, and status fields are left unchanged; Zodex adds context as a separate MCP text block after the real result has been produced.
+By default, Zodex Local gives each ChatGPT conversation a small amount of host context alongside tool results. Command stdout, status, cwd, exit code, and the stored/audited tool result stay unchanged. For command tools, model-visible context is carried in an optional `zodex_context` field in the primary structured MCP result so ChatGPT reliably receives it. For text/error results, Zodex appends the context to the same primary text block after the original result.
 
 The defaults are:
 
