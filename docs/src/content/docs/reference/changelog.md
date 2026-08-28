@@ -8,6 +8,12 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.3.14 — 2026-08-28
+
+- Made Local history and audit capture fail open so a locked, saturated, unavailable, or degraded evidence pipeline can never reject a model tool call or poison the shared bridge for other Agents.
+- Isolated oversized command-output capture to the individual invocation, with bounded raw history and nonblocking completion handling instead of global history backpressure.
+- Added large-output spooling for command results: oversized output is saved to a private bounded temporary file while the model receives a compact tail preview plus the file path, character count, line count, and truncation state for follow-up inspection.
+
 ## 0.3.13 — 2026-08-28
 
 - Fixed Local context delivery in ChatGPT by carrying `AGENTS`/skill/workdir context inside the primary model-visible tool result instead of a sibling MCP content block that ChatGPT did not forward to the model.
