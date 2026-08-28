@@ -193,6 +193,10 @@ zodex local config set history.max-size 2gb
 Retention removes old complete invocation history. It does not intentionally keep half an invocation just to hit a byte limit.
 Zodex prunes old complete history before a new Local runtime accepts commands, then reclaims physical database pages in bounded increments while it runs. Shutdown flushes queued evidence but does not wait for physical database compaction.
 
+History is observability, not an execution dependency. A locked, unavailable, or saturated history writer never rejects an MCP tool call and never blocks delivery of the tool result. Zodex continues the command/patch and marks evidence incomplete when it cannot be retained safely.
+
+Raw PTY history is also bounded per invocation. Local currently keeps at most 2 MiB of raw command output for one invocation; output beyond that point is explicitly marked incomplete in history rather than backpressuring the command or monopolizing the history database. This limit is independent of the model-facing command result, which uses the large-output spill behavior described in [Tools](/docs/reference/tools#exec_command).
+
 ## Tunnel ID
 
 `zodex local setup` normally writes the tunnel ID for you. You can inspect it with:

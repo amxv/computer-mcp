@@ -392,7 +392,16 @@ async fn output_observer_receives_full_stream_with_invocation_context_while_tool
         .await
         .unwrap();
 
-    assert!(output.output.contains("bytes truncated"));
+    assert!(output.output.contains("full output saved to"));
+    let output_file = output
+        .output_file
+        .as_deref()
+        .expect("oversized model output should be spooled to a file");
+    assert!(output.output_chars.is_some_and(|chars| chars >= 500));
+    assert_eq!(output.output_lines, Some(1));
+    let spooled = std::fs::read_to_string(output_file).unwrap();
+    assert!(spooled.matches('x').count() >= 500);
+    let _ = std::fs::remove_file(output_file);
     let chunks = observer.chunks.lock().unwrap();
     let full = chunks
         .iter()

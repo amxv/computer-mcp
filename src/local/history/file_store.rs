@@ -14,8 +14,9 @@ impl HistoryStore {
         if evidence.is_empty() {
             return Ok(());
         }
-        let mut connection = self.lock_connection();
-        persist_start(&mut connection, invocation_id, evidence)
+        self.with_foreground_connection(|connection| {
+            persist_start(connection, invocation_id, evidence)
+        })
     }
 
     pub(super) fn persist_file_evidence_completion(

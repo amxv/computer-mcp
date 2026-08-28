@@ -217,16 +217,16 @@ fn concurrent_first_seen_provider_mapping_resolves_to_one_agent_atomically() {
                     provider_context("simultaneous-provider", &format!("parallel-{index}")),
                     patch_start(&workdir, &format!("patch-{index}")),
                 )
-                .unwrap()
-                .agent_id
-                .unwrap()
-                .to_string()
+                .ok()
+                .and_then(|context| context.agent_id)
+                .map(|agent_id| agent_id.to_string())
         }));
     }
     let agent_ids = joins
         .into_iter()
-        .map(|join| join.join().unwrap())
+        .filter_map(|join| join.join().unwrap())
         .collect::<HashSet<_>>();
+    assert!(!agent_ids.is_empty());
     assert_eq!(agent_ids.len(), 1);
     assert_eq!(allocations.load(Ordering::SeqCst), 1);
 
@@ -543,7 +543,7 @@ fn exact_result_error_and_full_output_survive_restart_with_interrupted_capture_m
 }
 
 #[test]
-fn locked_database_rejects_new_invocation_envelope_and_degrades_admission() {
+fn locked_database_degrades_history_without_poisoning_later_envelopes() {
     let dir = tempdir().unwrap();
     let path = history_path(dir.path());
     let runtime = LocalHistoryRuntime::open(LocalHistoryRuntimeConfig::new(
@@ -562,17 +562,28 @@ fn locked_database_rejects_new_invocation_envelope_and_degrades_admission() {
     );
     assert!(
         result.is_err(),
-        "locked mandatory envelope must fail closed"
+        "locked history envelope should fail to persist"
     );
-    assert!(!runtime.accepting_new_invocations());
+    assert!(runtime.history_degraded());
 
     locker.execute_batch("ROLLBACK").unwrap();
+    let recovered = runtime
+        .begin(
+            provider_context("provider", "recovered-envelope"),
+            patch_start(dir.path(), "history can recover"),
+        )
+        .expect("a prior history failure must not gate future envelopes");
+    runtime
+        .complete(&recovered, InvocationOutcome::Success(json!({"ok":true})))
+        .unwrap();
+    runtime.flush_for_test().unwrap();
     runtime.shutdown_blocking().unwrap();
 
-    assert!(
+    assert_eq!(
         LocalHistoryReader::query(&path, &HistoryQuery::recent(20))
             .unwrap()
-            .is_empty()
+            .len(),
+        1
     );
     let status = LocalHistoryReader::status(&path).unwrap();
     assert_eq!(status.health_state, "degraded");
@@ -585,7 +596,33 @@ fn locked_database_rejects_new_invocation_envelope_and_degrades_admission() {
 }
 
 #[test]
-fn unavailable_worker_falls_back_to_direct_exact_completion_without_losing_result() {
+fn foreground_history_never_waits_for_the_background_connection_mutex() {
+    let dir = tempdir().unwrap();
+    let path = history_path(dir.path());
+    let store = Arc::new(HistoryStore::open(path, Arc::from("runtime")).unwrap());
+    let barrier = Arc::new(Barrier::new(2));
+    let holder_store = store.clone();
+    let holder_barrier = barrier.clone();
+    let holder = std::thread::spawn(move || {
+        let _connection = holder_store.lock_connection();
+        holder_barrier.wait();
+        std::thread::sleep(Duration::from_millis(200));
+    });
+    barrier.wait();
+
+    let result = store.begin(
+        provider_context("provider", "mutex-busy-envelope"),
+        patch_start(dir.path(), "best effort only"),
+    );
+    assert!(
+        result.is_ok(),
+        "foreground history should use an independent SQLite connection"
+    );
+    holder.join().unwrap();
+}
+
+#[test]
+fn unavailable_worker_never_blocks_tool_completion_for_history_recovery() {
     let dir = tempdir().unwrap();
     let path = history_path(dir.path());
     let runtime = LocalHistoryRuntime::open(LocalHistoryRuntimeConfig::new(
@@ -604,9 +641,16 @@ fn unavailable_worker_falls_back_to_direct_exact_completion_without_losing_resul
     runtime.shutdown_blocking().unwrap();
 
     let exact = json!({"output":"exact result survives unavailable worker"});
+    let started = Instant::now();
     runtime
         .complete(&context, InvocationOutcome::Success(exact.clone()))
         .unwrap();
+    assert!(
+        started.elapsed() < Duration::from_millis(50),
+        "history recovery blocked tool completion: {:?}",
+        started.elapsed()
+    );
+    assert!(runtime.history_degraded());
 
     let record = LocalHistoryReader::query(
         &path,
@@ -619,20 +663,12 @@ fn unavailable_worker_falls_back_to_direct_exact_completion_without_losing_resul
     .unwrap()
     .pop()
     .unwrap();
-    assert_eq!(record.result, Some(exact));
-    assert_eq!(record.evidence_state, "complete");
-    let status = LocalHistoryReader::status(&path).unwrap();
-    assert_eq!(status.health_state, "degraded");
-    assert!(
-        status
-            .health_reason
-            .unwrap_or_default()
-            .contains("completion writer is unavailable")
-    );
+    assert_eq!(record.result, None);
+    assert_eq!(record.evidence_state, "pending");
 }
 
 #[test]
-fn busy_sqlite_never_backpressures_pty_observer_and_degrades_future_admission() {
+fn busy_sqlite_load_sheds_only_the_noisy_capture_and_keeps_future_history_open() {
     let dir = tempdir().unwrap();
     let path = history_path(dir.path());
     let runtime = LocalHistoryRuntime::open(
@@ -675,9 +711,17 @@ fn busy_sqlite_never_backpressures_pty_observer_and_degrades_future_admission() 
         "PTY observer backpressured on SQLite: {:?}",
         started.elapsed()
     );
-    assert!(!runtime.accepting_new_invocations());
+    assert!(
+        !runtime.history_degraded(),
+        "per-invocation output load shedding should not degrade the whole history store"
+    );
 
     locker.execute_batch("ROLLBACK").unwrap();
+    runtime.observe_output_complete(SessionOutputCompletion {
+        internal_session_id: 1,
+        session_handle: Arc::from("historybusyhandle0000"),
+        invocation: context.clone(),
+    });
     std::thread::sleep(Duration::from_millis(700));
     runtime
         .complete(
@@ -686,14 +730,15 @@ fn busy_sqlite_never_backpressures_pty_observer_and_degrades_future_admission() 
         )
         .expect("current invocation completion may still be queued after writer recovers");
     std::thread::sleep(Duration::from_millis(100));
-    let next = runtime.begin(
-        provider_context("provider", "must-reject"),
-        patch_start(dir.path(), "must not run"),
-    );
-    assert!(
-        next.is_err(),
-        "degraded evidence must reject future invocations"
-    );
+    let next = runtime
+        .begin(
+            provider_context("provider", "still-open"),
+            patch_start(dir.path(), "history continues"),
+        )
+        .expect("one noisy capture must not poison later history envelopes");
+    runtime
+        .complete(&next, InvocationOutcome::Success(json!({"ok":true})))
+        .unwrap();
     runtime.shutdown_blocking().unwrap();
 
     let record = LocalHistoryReader::query(
@@ -710,10 +755,10 @@ fn busy_sqlite_never_backpressures_pty_observer_and_degrades_future_admission() 
     .unwrap();
     assert_eq!(record.evidence_state, "complete");
     assert_eq!(record.capture_state, "incomplete");
-    assert!(record.capture_reason.unwrap().contains("queue is full"));
+    assert!(record.capture_reason.unwrap().contains("queue"));
     assert_eq!(record.result.unwrap()["output"], "truthful");
     let status = LocalHistoryReader::status(&path).unwrap();
-    assert_eq!(status.health_state, "degraded");
+    assert_eq!(status.health_state, "healthy");
 }
 
 #[test]

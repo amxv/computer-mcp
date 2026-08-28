@@ -47,6 +47,14 @@ pub enum TerminationReason {
 pub struct ToolOutput {
     pub summary: String,
     pub output: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_chars: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_lines: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_file_truncated: Option<bool>,
     pub status: CommandStatus,
     pub cwd: String,
     #[serde(skip_serializing_if = "Option::is_none")]

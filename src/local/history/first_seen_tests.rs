@@ -179,16 +179,16 @@ fn concurrent_first_calls_emit_one_first_seen_observer_notification() {
                     provider_context("conversation-concurrent", &format!("call-{index}")),
                     patch_start(&workdir, &format!("patch-{index}")),
                 )
-                .unwrap()
-                .agent_id
-                .unwrap()
+                .ok()
+                .and_then(|context| context.agent_id)
         }));
     }
     let agent_ids = joins
         .into_iter()
-        .map(|join| join.join().unwrap())
+        .filter_map(|join| join.join().unwrap())
         .collect::<HashSet<_>>();
 
+    assert!(!agent_ids.is_empty());
     assert_eq!(agent_ids.len(), 1);
     assert_eq!(notifications.load(Ordering::SeqCst), 1);
     runtime.shutdown_blocking().unwrap();

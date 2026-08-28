@@ -770,12 +770,23 @@ async fn local_mcp_history_keeps_exact_bounded_result_and_full_quick_pty_output(
     assert_eq!(returned.status, CommandStatus::Exited);
     assert!(returned.session_handle.is_none());
     assert!(
-        returned.output.contains("bytes truncated"),
+        returned.output.contains("full output saved to"),
         "{}",
         returned.output
     );
     assert!(returned.output.contains("END-OF-FULL-OUTPUT"));
     assert!(returned.output.len() < 1024);
+    let returned_output_file = returned
+        .output_file
+        .clone()
+        .expect("oversized MCP output should expose a spool file");
+    assert!(returned.output_chars.is_some_and(|chars| chars > 8_000));
+    assert_eq!(returned.output_lines, Some(2));
+    assert!(
+        std::fs::read_to_string(&returned_output_file)
+            .unwrap()
+            .contains("END-OF-FULL-OUTPUT")
+    );
 
     server.shutdown().await.unwrap();
     service.shutdown_sessions().await.unwrap();
@@ -827,6 +838,7 @@ async fn local_mcp_history_keeps_exact_bounded_result_and_full_quick_pty_output(
     .unwrap();
     assert!(compact_detail.full_output.is_none());
     assert_eq!(compact_detail.output_preview.as_deref(), Some(preview));
+    let _ = std::fs::remove_file(returned_output_file);
 }
 
 #[tokio::test]
@@ -1009,12 +1021,12 @@ impl InvocationEvidenceRecorder for RejectingInvocationRecorder {
     }
 
     fn complete(&self, _context: &InvocationContext, _outcome: InvocationOutcome) -> Result<()> {
-        unreachable!("a rejected invocation must never reach completion")
+        unreachable!("failed-open invocation recording has no durable ID and skips completion")
     }
 }
 
 #[tokio::test]
-async fn local_mcp_rejects_command_patch_and_stdin_before_side_effect_when_envelope_fails() {
+async fn local_mcp_executes_command_patch_and_stdin_when_history_envelope_fails() {
     let root = tempdir().unwrap();
     let service = local_service(Config::default());
     let direct_shell = service
@@ -1036,7 +1048,7 @@ async fn local_mcp_rejects_command_patch_and_stdin_before_side_effect_when_envel
     .unwrap();
     let client = test_http_client();
 
-    let command_marker = root.path().join("command-must-not-run");
+    let command_marker = root.path().join("command-ran-without-history");
     let command_response = json_response(
         post_mcp(
             &client,
@@ -1058,11 +1070,11 @@ async fn local_mcp_rejects_command_patch_and_stdin_before_side_effect_when_envel
     )
     .await;
     assert!(
-        command_response["result"]["isError"]
+        !command_response["result"]["isError"]
             .as_bool()
             .unwrap_or(false)
     );
-    assert!(!command_marker.exists());
+    assert!(command_marker.exists());
 
     let patch_response = json_response(
         post_mcp(
@@ -1074,7 +1086,7 @@ async fn local_mcp_rejects_command_patch_and_stdin_before_side_effect_when_envel
                 81,
                 "apply_patch",
                 json!({
-                    "patch":"*** Begin Patch\n*** Add File: patch-must-not-run\n+nope\n*** End Patch\n",
+                    "patch":"*** Begin Patch\n*** Add File: patch-ran-without-history\n+ok\n*** End Patch\n",
                     "workdir":root.path()
                 }),
                 "reject-session",
@@ -1084,13 +1096,13 @@ async fn local_mcp_rejects_command_patch_and_stdin_before_side_effect_when_envel
     )
     .await;
     assert!(
-        patch_response["result"]["isError"]
+        !patch_response["result"]["isError"]
             .as_bool()
             .unwrap_or(false)
     );
-    assert!(!root.path().join("patch-must-not-run").exists());
+    assert!(root.path().join("patch-ran-without-history").exists());
 
-    let stdin_marker = root.path().join("stdin-must-not-run");
+    let stdin_marker = root.path().join("stdin-ran-without-history");
     let stdin_response = json_response(
         post_mcp(
             &client,
@@ -1102,7 +1114,7 @@ async fn local_mcp_rejects_command_patch_and_stdin_before_side_effect_when_envel
                 "write_stdin",
                 json!({
                     "session_handle":direct_handle,
-                    "chars":format!("touch {}\\n", stdin_marker.display()),
+                    "chars":format!("touch {}\n", stdin_marker.display()),
                     "yield_time_ms":500
                 }),
                 "reject-session",
@@ -1112,11 +1124,11 @@ async fn local_mcp_rejects_command_patch_and_stdin_before_side_effect_when_envel
     )
     .await;
     assert!(
-        stdin_response["result"]["isError"]
+        !stdin_response["result"]["isError"]
             .as_bool()
             .unwrap_or(false)
     );
-    assert!(!stdin_marker.exists());
+    assert!(stdin_marker.exists());
 
     server.shutdown().await.unwrap();
     let _ = service

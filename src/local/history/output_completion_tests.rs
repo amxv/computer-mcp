@@ -1,5 +1,5 @@
-use std::sync::{Arc, mpsc};
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use rusqlite::Connection;
 use serde_json::json;
@@ -15,7 +15,89 @@ use super::query::{HistoryQuery, LocalHistoryReader};
 use super::worker::{LocalHistoryRuntime, LocalHistoryRuntimeConfig};
 
 #[test]
-fn terminal_output_completion_waits_for_capacity_without_losing_capture() {
+fn oversized_raw_output_is_bounded_to_one_invocation_without_degrading_history() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("history/history.sqlite3");
+    let runtime = LocalHistoryRuntime::open(LocalHistoryRuntimeConfig::new(
+        path.clone(),
+        "runtime",
+        365 * 86_400,
+        1024 * 1024 * 1024,
+    ))
+    .unwrap();
+    let context = runtime
+        .begin(
+            InvocationContext::default()
+                .with_correlation_id("oversized-output")
+                .with_provider(ProviderCallMetadata::new("openai/session", "provider")),
+            InvocationStart::new(
+                "exec_command",
+                json!({"cmd":"huge-output","workdir":dir.path()}),
+            ),
+        )
+        .unwrap();
+    let invocation_id = context.invocation_id.unwrap();
+
+    let started = Instant::now();
+    for sequence in 0..320 {
+        runtime.observe_output(SessionOutputChunk {
+            internal_session_id: 1,
+            session_handle: Arc::from("oversizedoutput000000"),
+            invocation: context.clone(),
+            sequence,
+            text: "x".repeat(8192),
+        });
+    }
+    assert!(
+        started.elapsed() < Duration::from_millis(500),
+        "oversized audit capture backpressured its producer: {:?}",
+        started.elapsed()
+    );
+    runtime.observe_output_complete(SessionOutputCompletion {
+        internal_session_id: 1,
+        session_handle: Arc::from("oversizedoutput000000"),
+        invocation: context.clone(),
+    });
+    runtime.flush_for_test().unwrap();
+    runtime
+        .complete(
+            &context,
+            InvocationOutcome::Success(json!({"status":"exited","output":"model-result"})),
+        )
+        .unwrap();
+    runtime.flush_for_test().unwrap();
+
+    let record = LocalHistoryReader::query(
+        &path,
+        &HistoryQuery {
+            last: 1,
+            invocation_id: Some(invocation_id),
+            include_raw: true,
+            ..HistoryQuery::default()
+        },
+    )
+    .unwrap()
+    .pop()
+    .unwrap();
+    assert_eq!(record.evidence_state, "complete");
+    assert_eq!(record.capture_state, "incomplete");
+    assert!(
+        record
+            .capture_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("2097152 bytes"))
+    );
+    assert!(record.full_output.unwrap_or_default().len() <= 2 * 1024 * 1024);
+    assert!(!runtime.history_degraded());
+    assert_eq!(
+        LocalHistoryReader::status(&path).unwrap().health_state,
+        "healthy"
+    );
+    runtime.shutdown_blocking().unwrap();
+}
+
+#[test]
+fn terminal_output_completion_never_waits_for_history_capacity() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("history/history.sqlite3");
     let runtime = LocalHistoryRuntime::open(
@@ -70,33 +152,24 @@ fn terminal_output_completion_waits_for_capacity_without_losing_capture() {
         text: "third".to_string(),
     });
     assert!(
-        runtime.accepting_new_invocations(),
+        !runtime.history_degraded(),
         "fixture unexpectedly overflowed an ordinary output chunk"
     );
 
-    let runtime_for_completion = runtime.clone();
-    let context_for_completion = context.clone();
-    let (completed, completion_received) = mpsc::channel();
-    let completion_thread = std::thread::spawn(move || {
-        runtime_for_completion.observe_output_complete(SessionOutputCompletion {
-            internal_session_id: 1,
-            session_handle: Arc::from("terminalcapacity00000"),
-            invocation: context_for_completion,
-        });
-        completed.send(()).unwrap();
+    let started = Instant::now();
+    runtime.observe_output_complete(SessionOutputCompletion {
+        internal_session_id: 1,
+        session_handle: Arc::from("terminalcapacity00000"),
+        invocation: context.clone(),
     });
     assert!(
-        completion_received
-            .recv_timeout(Duration::from_millis(50))
-            .is_err(),
-        "terminal completion should wait instead of dropping when the queue is full"
+        started.elapsed() < Duration::from_millis(50),
+        "history completion backpressured the PTY reader: {:?}",
+        started.elapsed()
     );
 
     locker.execute_batch("ROLLBACK").unwrap();
-    completion_received
-        .recv_timeout(Duration::from_secs(2))
-        .expect("terminal completion should enqueue after writer capacity returns");
-    completion_thread.join().unwrap();
+    std::thread::sleep(Duration::from_millis(100));
     runtime.flush_for_test().unwrap();
     runtime
         .complete(
@@ -120,8 +193,16 @@ fn terminal_output_completion_waits_for_capacity_without_losing_capture() {
     .pop()
     .unwrap();
     assert_eq!(record.evidence_state, "complete");
-    assert_eq!(record.capture_state, "complete");
-    assert_eq!(record.full_output.as_deref(), Some("firstsecondthird"));
+    assert_eq!(record.capture_state, "incomplete");
+    let captured = record.full_output.as_deref().unwrap_or_default();
+    assert!(captured.starts_with("first"));
+    assert!(!captured.contains("third"));
+    assert!(
+        record
+            .capture_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("queue"))
+    );
     assert_eq!(
         LocalHistoryReader::status(&path).unwrap().health_state,
         "healthy"

@@ -1,7 +1,9 @@
-use std::io::Read as _;
-use std::sync::Arc;
+use std::fs::{File, OpenOptions};
+use std::io::{Read as _, Write as _};
+use std::path::PathBuf;
 use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Once};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -10,6 +12,10 @@ use tokio::sync::Notify;
 use crate::invocation::InvocationContext;
 
 use super::{SessionOutputChunk, SessionOutputCompletion, SessionOutputObserver};
+
+const SPILLED_OUTPUT_PREVIEW_MAX_BYTES: usize = 20 * 1024;
+const OUTPUT_SPILL_MAX_BYTES: usize = 16 * 1024 * 1024;
+const OUTPUT_SPILL_STALE_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 
 #[derive(Debug, Default)]
 struct StreamingUtf8Decoder {
@@ -68,24 +74,53 @@ impl StreamingUtf8Decoder {
 struct OutputState {
     text: String,
     dropped_bytes: usize,
+    total_chars: usize,
+    newline_count: usize,
+    ends_with_newline: bool,
+    spill: Option<OutputSpill>,
+    spill_failed: bool,
+}
+
+#[derive(Debug)]
+struct OutputSpill {
+    path: PathBuf,
+    file: File,
+    bytes_written: usize,
+    truncated: bool,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct OutputSnapshot {
+    pub text: String,
+    pub output_file: Option<String>,
+    pub output_chars: Option<usize>,
+    pub output_lines: Option<usize>,
+    pub output_file_truncated: Option<bool>,
 }
 
 #[derive(Debug)]
 pub(super) struct OutputBuffer {
     inner: StdMutex<OutputState>,
     max_chars: usize,
+    spill_path: PathBuf,
     reader_done: AtomicBool,
     reader_done_notify: Notify,
 }
 
 impl OutputBuffer {
-    pub(super) fn new(max_chars: usize) -> Self {
+    pub(super) fn new(max_chars: usize, spill_path: PathBuf) -> Self {
         Self {
             inner: StdMutex::new(OutputState {
                 text: String::new(),
                 dropped_bytes: 0,
+                total_chars: 0,
+                newline_count: 0,
+                ends_with_newline: false,
+                spill: None,
+                spill_failed: false,
             }),
             max_chars,
+            spill_path,
             reader_done: AtomicBool::new(false),
             reader_done_notify: Notify::new(),
         }
@@ -96,6 +131,28 @@ impl OutputBuffer {
             .inner
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.total_chars = state.total_chars.saturating_add(chunk.chars().count());
+        state.newline_count = state
+            .newline_count
+            .saturating_add(chunk.bytes().filter(|byte| *byte == b'\n').count());
+        if !chunk.is_empty() {
+            state.ends_with_newline = chunk.ends_with('\n');
+        }
+
+        let would_overflow = state.text.len().saturating_add(chunk.len()) > self.max_chars;
+        if would_overflow && state.spill.is_none() && !state.spill_failed {
+            match start_output_spill(&self.spill_path, &state.text, chunk) {
+                Ok(spill) => state.spill = Some(spill),
+                Err(_) => state.spill_failed = true,
+            }
+        } else if let Some(spill) = state.spill.as_mut()
+            && append_to_spill(spill, chunk).is_err()
+        {
+            let failed = state.spill.take().expect("spill existed");
+            let _ = std::fs::remove_file(failed.path);
+            state.spill_failed = true;
+        }
+
         state.text.push_str(chunk);
 
         if state.text.len() <= self.max_chars {
@@ -108,19 +165,60 @@ impl OutputBuffer {
         state.dropped_bytes += cut;
     }
 
-    pub(super) fn snapshot(&self) -> String {
+    pub(super) fn snapshot(&self) -> OutputSnapshot {
         let state = self
             .inner
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if state.dropped_bytes == 0 {
-            return state.text.clone();
+        let output_lines = if state.total_chars == 0 {
+            0
+        } else {
+            state
+                .newline_count
+                .saturating_add(usize::from(!state.ends_with_newline))
+        };
+        let output_file = state
+            .spill
+            .as_ref()
+            .map(|spill| spill.path.display().to_string());
+        let output_file_truncated = state.spill.as_ref().map(|spill| spill.truncated);
+        let text = match output_file.as_deref() {
+            Some(path) => {
+                let requested_start = state
+                    .text
+                    .len()
+                    .saturating_sub(SPILLED_OUTPUT_PREVIEW_MAX_BYTES);
+                let preview_start = next_char_boundary(&state.text, requested_start);
+                if output_file_truncated == Some(true) {
+                    format!(
+                        "[output was very large; first {cap} bytes saved to {path} ({chars} characters, {lines} lines total); saved file is capped, showing tail preview]\n{}",
+                        &state.text[preview_start..],
+                        cap = OUTPUT_SPILL_MAX_BYTES,
+                        chars = state.total_chars,
+                        lines = output_lines,
+                    )
+                } else {
+                    format!(
+                        "[full output saved to {path} ({chars} characters, {lines} lines); showing tail preview]\n{}",
+                        &state.text[preview_start..],
+                        chars = state.total_chars,
+                        lines = output_lines,
+                    )
+                }
+            }
+            None if state.dropped_bytes == 0 => state.text.clone(),
+            None => format!(
+                "[... {} bytes truncated ...]\n{}",
+                state.dropped_bytes, state.text
+            ),
+        };
+        OutputSnapshot {
+            text,
+            output_chars: output_file.as_ref().map(|_| state.total_chars),
+            output_lines: output_file.as_ref().map(|_| output_lines),
+            output_file_truncated,
+            output_file,
         }
-
-        format!(
-            "[... {} bytes truncated ...]\n{}",
-            state.dropped_bytes, state.text
-        )
     }
 
     pub(super) fn mark_reader_done(&self) {
@@ -139,6 +237,92 @@ impl OutputBuffer {
         }
 
         let _ = tokio::time::timeout(timeout, notified).await;
+    }
+}
+
+fn start_output_spill(path: &PathBuf, prefix: &str, chunk: &str) -> std::io::Result<OutputSpill> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let file = options.open(path)?;
+    let mut spill = OutputSpill {
+        path: path.clone(),
+        file,
+        bytes_written: 0,
+        truncated: false,
+    };
+    if let Err(error) =
+        append_to_spill(&mut spill, prefix).and_then(|()| append_to_spill(&mut spill, chunk))
+    {
+        drop(spill.file);
+        let _ = std::fs::remove_file(path);
+        return Err(error);
+    }
+    Ok(spill)
+}
+
+fn append_to_spill(spill: &mut OutputSpill, text: &str) -> std::io::Result<()> {
+    if spill.truncated || text.is_empty() {
+        return Ok(());
+    }
+    let remaining = OUTPUT_SPILL_MAX_BYTES.saturating_sub(spill.bytes_written);
+    if remaining == 0 {
+        spill.truncated = true;
+        return Ok(());
+    }
+    let mut write_len = text.len().min(remaining);
+    while write_len > 0 && !text.is_char_boundary(write_len) {
+        write_len -= 1;
+    }
+    if write_len > 0 {
+        spill.file.write_all(&text.as_bytes()[..write_len])?;
+        spill.bytes_written = spill.bytes_written.saturating_add(write_len);
+    }
+    if write_len < text.len() {
+        spill.truncated = true;
+    }
+    Ok(())
+}
+
+pub(super) fn spill_path_for_session(session_handle: &str) -> PathBuf {
+    static CLEANUP: Once = Once::new();
+    let dir = std::env::temp_dir().join("zodex-output");
+    let _ = std::fs::create_dir_all(&dir);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+    }
+    CLEANUP.call_once(|| cleanup_stale_spills(&dir));
+    dir.join(format!("zodex-output-{session_handle}.log"))
+}
+
+fn cleanup_stale_spills(dir: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("zodex-output-") && name.ends_with(".log"))
+        {
+            continue;
+        }
+        let stale = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| modified.elapsed().ok())
+            .is_some_and(|age| age >= OUTPUT_SPILL_STALE_AGE);
+        if stale {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }
 
@@ -210,7 +394,9 @@ pub(super) fn next_char_boundary(s: &str, idx: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::StreamingUtf8Decoder;
+    use tempfile::tempdir;
+
+    use super::{OUTPUT_SPILL_MAX_BYTES, OutputBuffer, StreamingUtf8Decoder};
 
     #[test]
     fn streaming_utf8_decoder_preserves_valid_scalars_across_every_byte_boundary() {
@@ -245,5 +431,28 @@ mod tests {
         let mut incomplete = StreamingUtf8Decoder::default();
         assert_eq!(incomplete.push(b"a\xf0\x9f"), "a");
         assert_eq!(incomplete.finish(), "\u{fffd}");
+    }
+
+    #[test]
+    fn oversized_spill_file_is_bounded_and_reports_total_output_separately() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("oversized.log");
+        let output = OutputBuffer::new(64, path.clone());
+        let total_chars = OUTPUT_SPILL_MAX_BYTES + 1024;
+        output.append(&"x".repeat(total_chars));
+
+        let snapshot = output.snapshot();
+        assert_eq!(
+            snapshot.output_file.as_deref(),
+            Some(path.to_str().unwrap())
+        );
+        assert_eq!(snapshot.output_chars, Some(total_chars));
+        assert_eq!(snapshot.output_lines, Some(1));
+        assert_eq!(snapshot.output_file_truncated, Some(true));
+        assert!(snapshot.text.contains("saved file is capped"));
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().len(),
+            OUTPUT_SPILL_MAX_BYTES as u64
+        );
     }
 }

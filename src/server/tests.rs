@@ -600,8 +600,16 @@ async fn timeout_and_cwd_mcp_parity_with_service() {
 
     for output in [&direct_truncated, &mcp_truncated] {
         assert_eq!(output.status, CommandStatus::Exited);
-        assert!(output.output.contains("bytes truncated"));
+        assert!(output.output.contains("full output saved to"));
         assert!(output.output.contains(&"x".repeat(20)));
+        assert!(output.output_file.is_some());
+        assert!(output.output_chars.is_some_and(|chars| chars >= 200));
+        assert_eq!(output.output_lines, Some(1));
+    }
+    for output in [&direct_truncated, &mcp_truncated] {
+        if let Some(path) = output.output_file.as_deref() {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }
 

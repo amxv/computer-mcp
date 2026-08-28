@@ -2,12 +2,10 @@ use std::sync::atomic::Ordering;
 
 use anyhow::{Context, Result};
 use serde_json::json;
-use tracing::warn;
 
 use crate::local::presentation::PRESENTATION_SCHEMA_VERSION;
 use crate::session::{OwnedProcess, OwnedProcessEnd, OwnedProcessObserver};
 
-use super::super::materialized::refresh_live_presentation;
 use super::LocalHistoryRuntime;
 
 impl OwnedProcessObserver for LocalHistoryRuntime {
@@ -17,18 +15,15 @@ impl OwnedProcessObserver for LocalHistoryRuntime {
             .invocation_id
             .context("active Local process is missing durable creator invocation ID")?;
         if let Err(error) = self.store.process_started(invocation_id) {
-            self.health.degrade_persisting(
-                &self.store,
-                format!("process lifecycle start persistence failed: {error}"),
-            );
+            self.health.degrade_nonblocking(format!(
+                "process lifecycle start persistence failed: {error}"
+            ));
             return Err(error);
         }
         if let Err(error) = self.store.protect_active_process_invocation(invocation_id) {
-            self.health.degrade_persisting(
-                &self.store,
-                format!("active process retention protection failed: {error}"),
-            );
-            return Err(error);
+            self.health.degrade_nonblocking(format!(
+                "active process retention protection failed: {error}"
+            ));
         }
         self.active_process_invocation_ids
             .lock()
@@ -73,10 +68,8 @@ impl OwnedProcessObserver for LocalHistoryRuntime {
         };
         let lifecycle_result = self.store.process_ended(invocation_id, end);
         if let Err(error) = &lifecycle_result {
-            self.health.degrade_persisting(
-                &self.store,
-                format!("process lifecycle end persistence failed: {error}"),
-            );
+            self.health
+                .degrade_nonblocking(format!("process lifecycle end persistence failed: {error}"));
         }
         let retention_result = self
             .store
@@ -114,15 +107,7 @@ impl OwnedProcessObserver for LocalHistoryRuntime {
         });
         if lifecycle_result.is_ok() {
             self.events.clear_presentation(invocation_id);
-            if let Err(error) = refresh_live_presentation(&self.store, &self.events, invocation_id)
-            {
-                warn!(
-                    event = "local_presentation_materialization_failed",
-                    root_invocation_id = invocation_id,
-                    error = %error,
-                );
-            }
-            self.events.emit_with(
+            let emit_live = self.events.emit_with(
                 "process_ended",
                 agent_id,
                 Some(invocation_id),
@@ -135,16 +120,20 @@ impl OwnedProcessObserver for LocalHistoryRuntime {
                     })
                 },
             );
-            self.events.emit_with(
-                "presentation_updated",
-                agent_id,
+            // Presentation materialization is observability work. Queue it on
+            // the history worker instead of touching SQLite synchronously on
+            // the command-result path.
+            self.queue_presentation_refresh(
                 Some(invocation_id),
                 Some(invocation_id),
-                Some(PRESENTATION_SCHEMA_VERSION),
-                || json!({"source": "process_ended"}),
+                "process_ended",
+                emit_live,
             );
         }
-        lifecycle_result?;
-        retention_result
+        if let Err(error) = retention_result {
+            self.health
+                .degrade_nonblocking(format!("active process retention release failed: {error}"));
+        }
+        lifecycle_result
     }
 }

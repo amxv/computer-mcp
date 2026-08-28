@@ -5,7 +5,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-#[cfg(target_os = "macos")]
 use tracing::warn;
 
 use crate::config::Config;
@@ -55,8 +54,18 @@ struct LocalProcessObservers {
 
 impl OwnedProcessObserver for LocalProcessObservers {
     fn process_started(&self, process: &OwnedProcess) -> Result<()> {
-        self.history.process_started(process)?;
-        self.registry.process_started(process)
+        // The process registry is operational state used for safe lifecycle
+        // cleanup, so keep that admission-critical. History is audit data and
+        // must never kill or reject a model command if persistence is degraded.
+        self.registry.process_started(process)?;
+        if let Err(error) = self.history.process_started(process) {
+            warn!(
+                event = "local_history_process_start_failed_open",
+                internal_session_id = process.internal_session_id,
+                error = %error,
+            );
+        }
+        Ok(())
     }
 
     fn process_group_members_updated(
@@ -69,9 +78,14 @@ impl OwnedProcessObserver for LocalProcessObservers {
     }
 
     fn process_ended(&self, process: &OwnedProcess, end: &OwnedProcessEnd) -> Result<()> {
-        let history_result = self.history.process_ended(process, end);
         let registry_result = self.registry.process_ended(process, end);
-        history_result?;
+        if let Err(error) = self.history.process_ended(process, end) {
+            warn!(
+                event = "local_history_process_end_failed_open",
+                internal_session_id = process.internal_session_id,
+                error = %error,
+            );
+        }
         registry_result
     }
 }

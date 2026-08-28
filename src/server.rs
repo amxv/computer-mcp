@@ -246,15 +246,23 @@ impl ZodexMcpService {
         request_meta: &RequestMetaObject,
         target_creator: Option<SessionCreatorContext>,
         continuation_kind: Option<InvocationContinuationKind>,
-    ) -> Result<InvocationContext, String> {
+    ) -> InvocationContext {
         self.observe_provider_metadata(request_meta);
         let context = invocation_context(request_meta);
         let Some(recorder) = &self.invocation_recorder else {
-            return Ok(context);
+            return context;
         };
-        let arguments = serde_json::to_value(input).map_err(|error| {
-            format!("failed to serialize {tool_name} invocation input: {error}")
-        })?;
+        let arguments = match serde_json::to_value(input) {
+            Ok(arguments) => arguments,
+            Err(error) => {
+                error!(
+                    event = "local_invocation_input_evidence_serialization_failed",
+                    tool_name,
+                    error = %error,
+                );
+                return context;
+            }
+        };
         let mut start = InvocationStart::new(tool_name, arguments);
         if let Some(target_creator) = target_creator {
             start = start
@@ -264,9 +272,20 @@ impl ZodexMcpService {
         if let Some(continuation_kind) = continuation_kind {
             start = start.with_continuation_kind(continuation_kind);
         }
-        recorder
-            .begin(context, start)
-            .map_err(|error| format!("Local invocation evidence unavailable: {error}"))
+        match recorder.begin(context.clone(), start) {
+            Ok(recorded) => recorded,
+            Err(error) => {
+                // Invocation evidence is an observability surface, never an
+                // execution dependency. A broken or saturated history store
+                // must not reject a model tool call or poison the MCP bridge.
+                error!(
+                    event = "local_invocation_evidence_begin_failed_open",
+                    tool_name,
+                    error = %error,
+                );
+                context
+            }
+        }
     }
 
     fn complete_invocation<T: Serialize>(
@@ -277,6 +296,12 @@ impl ZodexMcpService {
         let Some(recorder) = &self.invocation_recorder else {
             return;
         };
+        // A missing durable ID means the begin-recording path failed open.
+        // Do not turn that observability failure into another request-path
+        // failure at completion time.
+        if context.invocation_id.is_none() {
+            return;
+        }
         let outcome = match result {
             Ok(value) => match serde_json::to_value(value) {
                 Ok(value) => InvocationOutcome::Success(value),
@@ -365,11 +390,7 @@ impl ZodexMcpService {
         request_meta: RequestMetaObject,
     ) -> Json<ToolOutput> {
         let workdir = input.workdir.clone();
-        let invocation =
-            match self.begin_invocation("exec_command", &input, &request_meta, None, None) {
-                Ok(invocation) => invocation,
-                Err(error) => return Json::new(Err(error), None),
-            };
+        let invocation = self.begin_invocation("exec_command", &input, &request_meta, None, None);
         let result = self
             .execute_tool_output(
                 ServiceRequest::ExecCommand {
@@ -403,16 +424,13 @@ impl ZodexMcpService {
             .session_creator_context(&input.session_handle)
             .await;
         let continuation_kind = write_stdin_continuation_kind(&input);
-        let invocation = match self.begin_invocation(
+        let invocation = self.begin_invocation(
             "write_stdin",
             &input,
             &request_meta,
             target_creator,
             Some(continuation_kind),
-        ) {
-            Ok(invocation) => invocation,
-            Err(error) => return Json::new(Err(error), None),
-        };
+        );
         let result = self
             .execute_tool_output(ServiceRequest::WriteStdin { input }, invocation.clone())
             .await;
@@ -436,11 +454,7 @@ impl ZodexMcpService {
         request_meta: RequestMetaObject,
     ) -> TextResult {
         let workdir = input.workdir.clone();
-        let invocation =
-            match self.begin_invocation("apply_patch", &input, &request_meta, None, None) {
-                Ok(invocation) => invocation,
-                Err(error) => return TextResult::new(Err(error), None),
-            };
+        let invocation = self.begin_invocation("apply_patch", &input, &request_meta, None, None);
         let result = self.execute_apply_patch(input, invocation.clone()).await;
         self.complete_invocation(&invocation, &result);
         let appended_context = self.appended_context(&invocation, Some(&workdir), result.is_ok());

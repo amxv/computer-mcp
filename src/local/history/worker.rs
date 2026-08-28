@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
@@ -33,6 +33,7 @@ mod process_observer;
 
 const DEFAULT_OUTPUT_QUEUE_CAPACITY: usize = 4096;
 const OUTPUT_BATCH_LIMIT: usize = 128;
+const COMPLETION_OVERFLOW_MAX_ITEMS: usize = 256;
 const OUTPUT_BATCH_WAIT: Duration = Duration::from_millis(25);
 const RETENTION_MIN_INTERVAL: Duration = Duration::from_secs(30);
 const MATERIALIZATION_BACKFILL_INTERVAL: Duration = Duration::from_millis(250);
@@ -78,40 +79,27 @@ impl LocalHistoryRuntimeConfig {
 }
 
 struct HistoryHealth {
-    accepting_new: AtomicBool,
+    degraded: AtomicBool,
     reason: Mutex<Option<String>>,
     incomplete_evidence_invocations: Mutex<HashSet<i64>>,
-    incomplete_capture_invocations: Mutex<HashSet<i64>>,
+    incomplete_capture_invocations: Mutex<HashMap<i64, String>>,
     maintenance_requested: AtomicBool,
 }
 
 impl HistoryHealth {
     fn new() -> Self {
         Self {
-            accepting_new: AtomicBool::new(true),
+            degraded: AtomicBool::new(false),
             reason: Mutex::new(None),
             incomplete_evidence_invocations: Mutex::new(HashSet::new()),
-            incomplete_capture_invocations: Mutex::new(HashSet::new()),
+            incomplete_capture_invocations: Mutex::new(HashMap::new()),
             maintenance_requested: AtomicBool::new(false),
         }
     }
 
-    fn ensure_accepting(&self) -> Result<()> {
-        if self.accepting_new.load(Ordering::Acquire) {
-            return Ok(());
-        }
-        let reason = self
-            .reason
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
-            .unwrap_or_else(|| "unknown evidence-pipeline failure".to_string());
-        bail!("Local history evidence pipeline is degraded: {reason}")
-    }
-
     fn degrade_nonblocking(&self, reason: impl Into<String>) {
         let reason = reason.into();
-        self.accepting_new.store(false, Ordering::Release);
+        self.degraded.store(true, Ordering::Release);
         let mut guard = self
             .reason
             .lock()
@@ -129,7 +117,7 @@ impl HistoryHealth {
     }
 
     fn persist_degraded_state(&self, store: &HistoryStore) {
-        if self.accepting_new.load(Ordering::Acquire) {
+        if !self.degraded.load(Ordering::Acquire) {
             return;
         }
         let reason = self
@@ -159,18 +147,27 @@ impl HistoryHealth {
                 );
             }
         }
+        self.persist_capture_failures(store);
+    }
+
+    fn persist_capture_failures(&self, store: &HistoryStore) {
         let incomplete_capture = self
             .incomplete_capture_invocations
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
-        for invocation_id in incomplete_capture {
+        for (invocation_id, reason) in incomplete_capture {
             if let Err(error) = store.mark_capture_incomplete(invocation_id, &reason) {
                 error!(
                     event = "local_history_capture_incomplete_persistence_failed",
                     invocation_id,
                     error = %error,
                 );
+            } else {
+                self.incomplete_capture_invocations
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .remove(&invocation_id);
             }
         }
     }
@@ -182,11 +179,12 @@ impl HistoryHealth {
             .insert(invocation_id);
     }
 
-    fn note_capture_incomplete(&self, invocation_id: i64) {
+    fn note_capture_incomplete(&self, invocation_id: i64, reason: String) {
         self.incomplete_capture_invocations
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(invocation_id);
+            .entry(invocation_id)
+            .or_insert(reason);
     }
 }
 
@@ -213,6 +211,7 @@ pub struct LocalHistoryRuntime {
     runtime_id: Arc<str>,
     events: Arc<HistoryEventHub>,
     sender: SyncSender<WorkerMessage>,
+    completion_overflow: Arc<Mutex<VecDeque<WorkerMessage>>>,
     output_overflow: Mutex<output_queue::OutputOverflow>,
     worker: Mutex<Option<JoinHandle<()>>>,
     health: Arc<HistoryHealth>,
@@ -251,6 +250,7 @@ impl LocalHistoryRuntime {
             mark_retention_error_best_effort(&store, &error.to_string());
         }
         let (sender, receiver) = std::sync::mpsc::sync_channel(config.output_queue_capacity.max(1));
+        let completion_overflow = Arc::new(Mutex::new(VecDeque::new()));
         let health = Arc::new(HistoryHealth::new());
         health.maintenance_requested.store(
             store
@@ -261,6 +261,7 @@ impl LocalHistoryRuntime {
         let worker_store = store.clone();
         let worker_health = health.clone();
         let worker_events = events.clone();
+        let worker_completion_overflow = completion_overflow.clone();
         let worker = std::thread::Builder::new()
             .name("zodex-local-history".to_string())
             .spawn(move || {
@@ -269,6 +270,7 @@ impl LocalHistoryRuntime {
                     worker_store,
                     worker_health,
                     worker_events,
+                    worker_completion_overflow,
                     max_age_seconds,
                     max_size_bytes,
                 )
@@ -278,6 +280,7 @@ impl LocalHistoryRuntime {
             runtime_id,
             events,
             sender,
+            completion_overflow,
             output_overflow: Mutex::new(output_queue::OutputOverflow::default()),
             worker: Mutex::new(Some(worker)),
             health,
@@ -392,8 +395,9 @@ impl LocalHistoryRuntime {
         self.store.path()
     }
 
-    pub fn accepting_new_invocations(&self) -> bool {
-        self.health.accepting_new.load(Ordering::Acquire)
+    #[cfg(test)]
+    pub(crate) fn history_degraded(&self) -> bool {
+        self.health.degraded.load(Ordering::Acquire)
     }
 
     pub fn physical_size_bytes(&self) -> Result<u64> {
@@ -512,7 +516,6 @@ impl InvocationEvidenceRecorder for LocalHistoryRuntime {
         context: InvocationContext,
         start: InvocationStart,
     ) -> Result<InvocationContext> {
-        self.health.ensure_accepting()?;
         let pending_file_evidence = prepare_file_evidence(&start);
         let tool_name = start.tool_name.clone();
         let normalized_workdir = start
@@ -600,10 +603,9 @@ impl InvocationEvidenceRecorder for LocalHistoryRuntime {
                 Ok(context)
             }
             Err(error) => {
-                self.health.degrade_persisting(
-                    &self.store,
-                    format!("invocation envelope persistence failed: {error}"),
-                );
+                self.health.degrade_nonblocking(format!(
+                    "invocation envelope persistence failed: {error}"
+                ));
                 Err(error)
             }
         }
@@ -627,53 +629,40 @@ impl InvocationEvidenceRecorder for LocalHistoryRuntime {
         };
         let reason = match self.sender.try_send(queued) {
             Ok(()) => return Ok(()),
-            Err(TrySendError::Full(_)) => "Local history completion queue is full".to_string(),
+            Err(TrySendError::Full(message)) => {
+                // Exact command results are tiny compared with PTY output and
+                // must never be dropped just because the bounded output lane
+                // is saturated. Keep a separate in-memory control fallback;
+                // the history worker drains it without blocking the model.
+                let mut overflow = self
+                    .completion_overflow
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if overflow.len() >= COMPLETION_OVERFLOW_MAX_ITEMS {
+                    drop(overflow);
+                    let reason = format!(
+                        "Local history completion fallback exceeded {COMPLETION_OVERFLOW_MAX_ITEMS} pending results"
+                    );
+                    self.health.note_evidence_incomplete(invocation_id);
+                    self.health.degrade_nonblocking(reason);
+                    return Ok(());
+                }
+                overflow.push_back(message);
+                return Ok(());
+            }
             Err(TrySendError::Disconnected(_)) => {
                 "Local history completion writer is unavailable".to_string()
             }
         };
 
-        // A saturated output queue must never make us discard the exact
-        // handler result. Degrade future admission immediately, then make one
-        // bounded direct SQLite attempt for this already-admitted invocation.
-        // This exceptional fallback may wait for SQLite's short busy timeout;
-        // normal completions remain asynchronous and never block the response
-        // path on the history writer.
+        // History completion is best-effort on the model request path. Never
+        // fall back to a synchronous SQLite write here: a saturated history
+        // queue must not delay or block delivery of the actual tool result.
+        // The worker will persist the degraded state and mark this invocation
+        // incomplete once it regains capacity.
+        self.health.note_evidence_incomplete(invocation_id);
         self.health.degrade_nonblocking(&reason);
-        match self.store.complete(context, outcome.clone()) {
-            Ok(completion) => {
-                persist_completed_file_evidence(&self.store, invocation_id, &file_evidence);
-                let emit_live = self.events.emit_invocation_completion(
-                    context,
-                    &outcome,
-                    completion.presentation_root_invocation_id,
-                );
-                if let Some(root_invocation_id) = completion.presentation_root_invocation_id {
-                    self.events.clear_presentation(root_invocation_id);
-                    refresh_and_emit_presentation(
-                        &self.store,
-                        &self.events,
-                        root_invocation_id,
-                        Some(invocation_id),
-                        context.agent_id.as_deref(),
-                        "invocation_completed",
-                        emit_live,
-                    );
-                }
-                self.health
-                    .maintenance_requested
-                    .store(true, Ordering::Release);
-                self.health.persist_degraded_state(&self.store);
-                Ok(())
-            }
-            Err(error) => {
-                self.health.note_evidence_incomplete(invocation_id);
-                self.health.persist_degraded_state(&self.store);
-                Err(anyhow::anyhow!(
-                    "{reason}; direct exact-completion persistence also failed: {error}"
-                ))
-            }
-        }
+        Ok(())
     }
 }
 
@@ -686,7 +675,8 @@ impl SessionOutputObserver for LocalHistoryRuntime {
             Ok(value) => value,
             Err(error) => {
                 let reason = format!("failed to timestamp Local PTY output: {error}");
-                self.health.note_capture_incomplete(invocation_id);
+                self.health
+                    .note_capture_incomplete(invocation_id, reason.clone());
                 self.health.degrade_nonblocking(reason);
                 return;
             }
@@ -708,11 +698,8 @@ impl SessionOutputObserver for LocalHistoryRuntime {
             return;
         };
         self.enqueue_output_completion(
-            WorkerMessage::Output(OutputEvent::Complete {
-                invocation_id,
-                agent_id: completion.invocation.agent_id.as_deref().map(str::to_owned),
-            }),
             invocation_id,
+            completion.invocation.agent_id.as_deref().map(str::to_owned),
         );
     }
 }
@@ -722,6 +709,7 @@ fn run_worker(
     store: Arc<HistoryStore>,
     health: Arc<HistoryHealth>,
     events: Arc<HistoryEventHub>,
+    completion_overflow: Arc<Mutex<VecDeque<WorkerMessage>>>,
     max_age_seconds: u64,
     max_size_bytes: u64,
 ) {
@@ -735,17 +723,29 @@ fn run_worker(
     let mut live_display = LiveDisplayStreams::new();
     while !shutdown {
         let mut messages = Vec::with_capacity(OUTPUT_BATCH_LIMIT);
-        match receiver.recv_timeout(OUTPUT_BATCH_WAIT) {
-            Ok(
-                message @ (WorkerMessage::Output(_)
-                | WorkerMessage::Complete { .. }
-                | WorkerMessage::RefreshPresentation { .. }),
-            ) => messages.push(message),
-            #[cfg(test)]
-            Ok(message @ WorkerMessage::Barrier(_)) => messages.push(message),
-            Ok(WorkerMessage::Shutdown) => shutdown = true,
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        while messages.len() < OUTPUT_BATCH_LIMIT {
+            let message = completion_overflow
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .pop_front();
+            let Some(message) = message else {
+                break;
+            };
+            messages.push(message);
+        }
+        if messages.is_empty() {
+            match receiver.recv_timeout(OUTPUT_BATCH_WAIT) {
+                Ok(
+                    message @ (WorkerMessage::Output(_)
+                    | WorkerMessage::Complete { .. }
+                    | WorkerMessage::RefreshPresentation { .. }),
+                ) => messages.push(message),
+                #[cfg(test)]
+                Ok(message @ WorkerMessage::Barrier(_)) => messages.push(message),
+                Ok(WorkerMessage::Shutdown) => shutdown = true,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            }
         }
         while messages.len() < OUTPUT_BATCH_LIMIT {
             match receiver.try_recv() {
@@ -797,7 +797,11 @@ fn run_worker(
             }
         }
 
-        let maintenance_due = health.maintenance_requested.load(Ordering::Acquire)
+        // Retention can touch a large history database. Only run it while the
+        // writer is idle so maintenance can never starve live output capture
+        // and manufacture queue pressure for active model commands.
+        let maintenance_due = idle
+            && health.maintenance_requested.load(Ordering::Acquire)
             && last_maintenance
                 .map(|last| last.elapsed() >= RETENTION_MIN_INTERVAL)
                 .unwrap_or(true);
@@ -914,7 +918,8 @@ fn process_messages(
     for acknowledge in barriers {
         let _ = acknowledge.send(());
     }
-    if !health.accepting_new.load(Ordering::Acquire) {
+    health.persist_capture_failures(store);
+    if health.degraded.load(Ordering::Acquire) {
         health.persist_degraded_state(store);
     }
 }
@@ -957,7 +962,7 @@ fn flush_output_events(
     if let Err(error) = store.persist_output_batch(events) {
         let reason = format!("output evidence batch persistence failed: {error}");
         for invocation_id in distinct_invocation_ids(events) {
-            health.note_capture_incomplete(invocation_id);
+            health.note_capture_incomplete(invocation_id, reason.clone());
         }
         health.degrade_persisting(store, reason);
     } else {
@@ -1007,6 +1012,28 @@ fn flush_output_events(
                             json!({
                                 "display_state": display.state,
                                 "display_reason": display.reason,
+                            })
+                        },
+                    );
+                }
+                OutputEvent::Incomplete {
+                    invocation_id,
+                    agent_id,
+                    reason,
+                } => {
+                    let display = live_display.complete(*invocation_id);
+                    live_events.emit_with(
+                        "output_complete",
+                        agent_id.as_deref(),
+                        Some(*invocation_id),
+                        Some(*invocation_id),
+                        Some(PRESENTATION_SCHEMA_VERSION),
+                        || {
+                            json!({
+                                "display_state": display.state,
+                                "display_reason": display.reason,
+                                "capture_incomplete": true,
+                                "capture_reason": reason,
                             })
                         },
                     );

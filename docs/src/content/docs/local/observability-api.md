@@ -136,7 +136,7 @@ GET /v1/invocations/{id}/output
 GET /v1/events
 ```
 
-Use **timeline** routes for normal UI. Use **invocation** routes and raw output for audit/exact evidence.
+Use **timeline** routes for normal UI. Use **invocation** routes and raw output for audit evidence. A raw capture with `capture_state: "complete"` is exact; oversized or interrupted captures are marked `incomplete` and may contain only the retained prefix. History capture is deliberately fail-open with respect to MCP execution.
 
 ## Errors
 

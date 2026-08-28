@@ -256,9 +256,11 @@ CREATE TABLE mcp_context_workdirs (
 ) WITHOUT ROWID;
 "#;
 
+pub(super) const WRITER_BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
+
 pub(super) fn configure_writer(connection: &Connection) -> Result<()> {
     connection
-        .busy_timeout(std::time::Duration::from_millis(500))
+        .busy_timeout(WRITER_BUSY_TIMEOUT)
         .context("failed to configure Local history SQLite busy timeout")?;
     connection
         .pragma_update(None, "foreign_keys", "ON")

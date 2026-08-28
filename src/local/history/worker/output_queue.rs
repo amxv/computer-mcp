@@ -1,23 +1,59 @@
 use std::collections::{HashMap, VecDeque};
+use std::sync::mpsc::TrySendError;
 
 use anyhow::{Result, bail};
-use std::sync::mpsc::TrySendError;
 
 use super::{LocalHistoryRuntime, WorkerMessage};
 use crate::local::history::store::OutputEvent;
 
-// This is intentionally much smaller than the main bounded queue's worst-case
-// byte footprint. It absorbs only short scheduler/SQLite stalls without making
-// sustained evidence backlogs unbounded or silently lossy.
+// Raw PTY evidence is useful for audit/debugging, but it is auxiliary. Bound
+// each invocation so a pathological command cannot monopolize the history
+// writer or grow the audit database without limit. The model-facing session
+// output has its own independent delivery path.
+const OUTPUT_CAPTURE_MAX_BYTES_PER_INVOCATION: usize = 2 * 1024 * 1024;
+
+// This absorbs only short scheduler/SQLite stalls. If it fills, history capture
+// for the affected invocation is explicitly marked incomplete and load-shed;
+// model execution and result delivery continue normally.
 const OUTPUT_TRANSIENT_OVERFLOW_MAX_BYTES: usize = 64 * 1024;
 
 #[derive(Default)]
 pub(super) struct OutputOverflow {
     by_invocation: HashMap<i64, VecDeque<OutputEvent>>,
     bytes: usize,
+    captured_bytes: HashMap<i64, usize>,
+    incomplete_reasons: HashMap<i64, String>,
 }
 
 impl OutputOverflow {
+    fn admit_chunk(&mut self, invocation_id: i64, event_bytes: usize) -> bool {
+        if self.incomplete_reasons.contains_key(&invocation_id) {
+            return false;
+        }
+        let captured = self.captured_bytes.entry(invocation_id).or_default();
+        if captured.saturating_add(event_bytes) > OUTPUT_CAPTURE_MAX_BYTES_PER_INVOCATION {
+            self.mark_incomplete(
+                invocation_id,
+                format!(
+                    "Local history output capture exceeded {OUTPUT_CAPTURE_MAX_BYTES_PER_INVOCATION} bytes; remaining output was omitted from history"
+                ),
+            );
+            return false;
+        }
+        *captured = captured.saturating_add(event_bytes);
+        true
+    }
+
+    fn mark_incomplete(&mut self, invocation_id: i64, reason: String) {
+        self.incomplete_reasons
+            .entry(invocation_id)
+            .or_insert(reason);
+    }
+
+    fn incomplete_reason(&self, invocation_id: i64) -> Option<String> {
+        self.incomplete_reasons.get(&invocation_id).cloned()
+    }
+
     fn has_pending(&self, invocation_id: i64) -> bool {
         self.by_invocation
             .get(&invocation_id)
@@ -61,19 +97,41 @@ impl OutputOverflow {
         Some(event)
     }
 
-    fn take(&mut self, invocation_id: i64) -> VecDeque<OutputEvent> {
+    fn discard_pending(&mut self, invocation_id: i64) {
         let events = self
             .by_invocation
             .remove(&invocation_id)
             .unwrap_or_default();
         let bytes = events.iter().map(output_event_bytes).sum::<usize>();
         self.bytes = self.bytes.saturating_sub(bytes);
-        events
+    }
+
+    fn finish(&mut self, invocation_id: i64) -> Option<String> {
+        self.captured_bytes.remove(&invocation_id);
+        self.incomplete_reasons.remove(&invocation_id)
     }
 }
 
 impl LocalHistoryRuntime {
     pub(super) fn try_enqueue_output_chunk(&self, event: OutputEvent, invocation_id: i64) {
+        let event_bytes = output_event_bytes(&event);
+        let admitted = self
+            .output_overflow
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .admit_chunk(invocation_id, event_bytes);
+        if !admitted {
+            if let Some(reason) = self
+                .output_overflow
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .incomplete_reason(invocation_id)
+            {
+                self.mark_output_capture_incomplete(invocation_id, reason);
+            }
+            return;
+        }
+
         if self
             .flush_output_overflow_nonblocking(invocation_id)
             .is_err()
@@ -105,18 +163,17 @@ impl LocalHistoryRuntime {
     }
 
     fn buffer_output_overflow(&self, event: OutputEvent, invocation_id: i64) {
-        let buffered = self
+        let mut overflow = self
             .output_overflow
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push_back(invocation_id, event);
-        if !buffered {
-            self.degrade_output_capture(
-                invocation_id,
-                format!(
-                    "Local history output queue is full; transient overflow exceeded {OUTPUT_TRANSIENT_OVERFLOW_MAX_BYTES} bytes"
-                ),
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !overflow.push_back(invocation_id, event) {
+            let reason = format!(
+                "Local history output queue remained saturated after {OUTPUT_TRANSIENT_OVERFLOW_MAX_BYTES} bytes of transient overflow; remaining output was omitted from history"
             );
+            overflow.mark_incomplete(invocation_id, reason.clone());
+            drop(overflow);
+            self.mark_output_capture_incomplete(invocation_id, reason);
         }
     }
 
@@ -152,43 +209,79 @@ impl LocalHistoryRuntime {
         }
     }
 
-    fn flush_output_overflow_blocking(&self, invocation_id: i64) -> Result<()> {
-        let pending = self
+    pub(super) fn enqueue_output_completion(&self, invocation_id: i64, agent_id: Option<String>) {
+        // EOF handling is deliberately nonblocking too. If transient backlog
+        // still cannot drain, discard only that invocation's history overflow
+        // and mark its capture incomplete instead of parking the PTY reader.
+        if self
+            .flush_output_overflow_nonblocking(invocation_id)
+            .is_err()
+        {
+            return;
+        }
+
+        {
+            let mut overflow = self
+                .output_overflow
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if overflow.has_pending(invocation_id) {
+                overflow.discard_pending(invocation_id);
+                overflow.mark_incomplete(
+                    invocation_id,
+                    "Local history output queue was still saturated at command completion; queued tail output was omitted from history".to_string(),
+                );
+            }
+        }
+
+        let reason = self
             .output_overflow
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take(invocation_id);
-        for event in pending {
-            self.sender
-                .send(WorkerMessage::Output(event))
-                .map_err(|_| anyhow::anyhow!("Local history output writer is unavailable"))?;
-        }
-        Ok(())
-    }
+            .finish(invocation_id);
+        let event = match reason {
+            Some(reason) => OutputEvent::Incomplete {
+                invocation_id,
+                agent_id,
+                reason,
+            },
+            None => OutputEvent::Complete {
+                invocation_id,
+                agent_id,
+            },
+        };
 
-    pub(super) fn enqueue_output_completion(&self, message: WorkerMessage, invocation_id: i64) {
-        // Output chunks stay nonblocking while the command runs. At EOF the
-        // detached reader may wait for bounded backlog to drain, ensuring all
-        // accepted chunks are queued before the terminal completion marker.
-        if self.flush_output_overflow_blocking(invocation_id).is_err()
-            || self.sender.send(message).is_err()
-        {
-            self.degrade_output_capture(
+        match self.sender.try_send(WorkerMessage::Output(event)) {
+            Ok(()) => {}
+            Err(TrySendError::Full(_)) => self.mark_output_capture_incomplete(
+                invocation_id,
+                "Local history output completion queue is full".to_string(),
+            ),
+            Err(TrySendError::Disconnected(_)) => self.degrade_output_capture(
                 invocation_id,
                 "Local history output writer is unavailable".to_string(),
-            );
+            ),
         }
     }
 
     fn degrade_output_capture(&self, invocation_id: i64, reason: String) {
-        self.health.note_capture_incomplete(invocation_id);
+        self.output_overflow
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .mark_incomplete(invocation_id, reason.clone());
+        self.health
+            .note_capture_incomplete(invocation_id, reason.clone());
         self.health.degrade_nonblocking(reason);
+    }
+
+    fn mark_output_capture_incomplete(&self, invocation_id: i64, reason: String) {
+        self.health.note_capture_incomplete(invocation_id, reason);
     }
 }
 
 fn output_event_bytes(event: &OutputEvent) -> usize {
     match event {
         OutputEvent::Chunk { text, .. } => text.len(),
-        OutputEvent::Complete { .. } => 0,
+        OutputEvent::Complete { .. } | OutputEvent::Incomplete { .. } => 0,
     }
 }

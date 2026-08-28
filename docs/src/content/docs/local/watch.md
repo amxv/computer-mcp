@@ -68,7 +68,7 @@ Collapsed command cards do not maintain an unbounded hidden terminal buffer. Whe
 
 If output was missed, the viewer reconnects, or a final command is expanded later, Liveboard can lazily restore a bounded recent tail from the durable `view=display` output endpoint. It does not replay an entire long PTY stream into the normal card.
 
-The display view is deliberately sanitized for presentation. Exact/raw output remains an explicit evidence surface through the observability API and audit drill-down.
+The display view is deliberately sanitized for presentation. Raw output remains an explicit evidence surface through the observability API and audit drill-down. When an invocation's capture state is `complete`, that raw evidence is exact; oversized or otherwise interrupted captures are explicitly marked `incomplete` rather than being allowed to backpressure the model-facing tool call.
 
 ## File diffs and highlighting
 

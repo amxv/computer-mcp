@@ -27,7 +27,9 @@ mod query;
 mod shutdown;
 
 use lifecycle::{owned_process_end, process_termination_reason};
-use output::{OutputBuffer, next_char_boundary, spawn_reader};
+use output::{
+    OutputBuffer, OutputSnapshot, next_char_boundary, spawn_reader, spill_path_for_session,
+};
 use shutdown::{
     maybe_force_kill, reap_exit_code, request_termination, signal_owned_group_members,
     snapshot_descendants_before_termination, wait_for_session_exits_until,
@@ -306,7 +308,8 @@ impl SessionRuntime {
             }
 
             if let Some((exit_code, cwd, termination_reason)) = finished {
-                let text = strip_ansi_codes(snapshot_output_after_exit(&self.output).await);
+                let snapshot = snapshot_output_after_exit(&self.output).await;
+                let text = strip_ansi_codes(snapshot.text);
                 let elapsed = self.started_at.elapsed();
                 return Ok(ToolOutput {
                     summary: command_result_summary(
@@ -317,6 +320,10 @@ impl SessionRuntime {
                         Some(termination_reason),
                     ),
                     output: text,
+                    output_file: snapshot.output_file,
+                    output_chars: snapshot.output_chars,
+                    output_lines: snapshot.output_lines,
+                    output_file_truncated: snapshot.output_file_truncated,
                     status: CommandStatus::Exited,
                     cwd,
                     zodex_context: None,
@@ -328,7 +335,8 @@ impl SessionRuntime {
             }
 
             if let Some(cwd) = running_cwd {
-                let text = strip_ansi_codes(self.output.snapshot());
+                let snapshot = self.output.snapshot();
+                let text = strip_ansi_codes(snapshot.text);
                 let elapsed = self.started_at.elapsed();
                 return Ok(ToolOutput {
                     summary: command_result_summary(
@@ -339,6 +347,10 @@ impl SessionRuntime {
                         None,
                     ),
                     output: text,
+                    output_file: snapshot.output_file,
+                    output_chars: snapshot.output_chars,
+                    output_lines: snapshot.output_lines,
+                    output_file_truncated: snapshot.output_file_truncated,
                     status: CommandStatus::Running,
                     cwd,
                     zodex_context: None,
@@ -467,11 +479,12 @@ impl SessionManager {
 
         command.current_dir(&command_cwd);
 
-        let output = Arc::new(OutputBuffer::new(self.max_output_chars));
         let internal_session_id = self
             .next_internal_session_id
             .fetch_add(1, Ordering::Relaxed);
         let session_handle = generate_session_handle();
+        let spill_path = spill_path_for_session(&session_handle);
+        let output = Arc::new(OutputBuffer::new(self.max_output_chars, spill_path));
         let session_handle_arc: Arc<str> = Arc::from(session_handle.as_str());
 
         #[cfg(unix)]
@@ -952,7 +965,7 @@ fn system_time_epoch_ms(t: SystemTime) -> u128 {
         .as_millis()
 }
 
-async fn snapshot_output_after_exit(output: &Arc<OutputBuffer>) -> String {
+async fn snapshot_output_after_exit(output: &Arc<OutputBuffer>) -> OutputSnapshot {
     // Child exit can race the asynchronous PTY reader. Wait for the reader's
     // terminal EOF/EIO signal before taking the final snapshot so trailing
     // command output is not lost merely because one short sample was quiet.

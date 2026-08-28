@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
@@ -19,12 +19,15 @@ use crate::invocation::{
 
 const AGENT_ID_ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
 const AGENT_ID_ATTEMPTS: usize = 128;
+const FOREGROUND_GATE_TIMEOUT: Duration = Duration::from_millis(10);
+const FOREGROUND_SQLITE_BUSY_TIMEOUT: Duration = Duration::from_millis(5);
 
 pub(super) type AgentIdSource = Arc<dyn Fn() -> String + Send + Sync>;
 
 pub(super) struct HistoryStore {
     path: PathBuf,
     connection: Mutex<Connection>,
+    foreground_gate: Mutex<()>,
     runtime_id: Arc<str>,
     agent_id_source: AgentIdSource,
 }
@@ -48,6 +51,11 @@ pub(super) enum OutputEvent {
     Complete {
         invocation_id: i64,
         agent_id: Option<String>,
+    },
+    Incomplete {
+        invocation_id: i64,
+        agent_id: Option<String>,
+        reason: String,
     },
 }
 
@@ -77,6 +85,7 @@ impl HistoryStore {
         let store = Self {
             path,
             connection: Mutex::new(connection),
+            foreground_gate: Mutex::new(()),
             runtime_id,
             agent_id_source,
         };
@@ -97,15 +106,15 @@ impl HistoryStore {
     ) -> Result<bool> {
         let now = now_ms()?;
         let provider_fingerprint = provider_fingerprint(provider);
-        let connection = self.lock_connection();
-        let changed = connection
-            .execute(
+        self.with_foreground_connection(|connection| {
+            let changed = connection.execute(
                 "UPDATE mcp_context_sessions SET global_context_injected_at_ms = ?2
                  WHERE provider_fingerprint = ?1 AND global_context_injected_at_ms IS NULL",
                 params![provider_fingerprint, now],
-            )
-            .context("failed to claim one-time Local Agent context injection")?;
-        Ok(changed == 1)
+            )?;
+            Ok(changed == 1)
+        })
+        .context("failed to claim one-time Local Agent context injection")
     }
 
     pub(super) fn claim_repo_agents_check(
@@ -116,16 +125,16 @@ impl HistoryStore {
         let now = now_ms()?;
         let provider_fingerprint = provider_fingerprint(provider);
         let workdir_fingerprint = value_fingerprint(normalized_workdir.as_bytes());
-        let connection = self.lock_connection();
-        let changed = connection
-            .execute(
+        self.with_foreground_connection(|connection| {
+            let changed = connection.execute(
                 "INSERT OR IGNORE INTO mcp_context_workdirs(
                     provider_fingerprint, workdir_fingerprint, repo_agents_checked_at_ms
                  ) VALUES (?1, ?2, ?3)",
                 params![provider_fingerprint, workdir_fingerprint, now],
-            )
-            .context("failed to claim one-time Local Agent workdir context check")?;
-        Ok(changed == 1)
+            )?;
+            Ok(changed == 1)
+        })
+        .context("failed to claim one-time Local Agent workdir context check")
     }
 
     #[cfg(test)]
@@ -149,10 +158,10 @@ impl HistoryStore {
             .unwrap_or_else(|| Arc::from(format!("{:032x}", rand::random::<u128>())));
         context.correlation_id = Some(correlation_id.clone());
         let now = now_ms()?;
-        let mut connection = self.lock_connection();
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .context("failed to start mandatory Local invocation-envelope transaction")?;
+        self.with_foreground_connection(|connection| {
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .context("failed to start mandatory Local invocation-envelope transaction")?;
 
         let (agent_id, agent_first_seen_in_runtime) = resolve_agent(
             &transaction,
@@ -264,18 +273,20 @@ impl HistoryStore {
                 .context("failed to record new-workdir invocation evidence")?;
         }
 
-        transaction
-            .commit()
-            .context("failed to commit mandatory Local invocation envelope")?;
-        Ok(HistoryBeginResult {
-            context: context.with_invocation_id(invocation_id),
-            agent_first_seen_in_runtime,
-            new_workdir: is_new_workdir.then(|| {
-                declared_workdir_normalized
-                    .expect("new Local Agent workdir requires normalized workdir")
-            }),
-            presentation_root_invocation_id,
+            transaction
+                .commit()
+                .context("failed to commit mandatory Local invocation envelope")?;
+            Ok(HistoryBeginResult {
+                context: context.with_invocation_id(invocation_id),
+                agent_first_seen_in_runtime,
+                new_workdir: is_new_workdir.then(|| {
+                    declared_workdir_normalized
+                        .expect("new Local Agent workdir requires normalized workdir")
+                }),
+                presentation_root_invocation_id,
+            })
         })
+        .context("Local history invocation envelope is busy or unavailable")
     }
 
     pub(super) fn complete(
@@ -406,6 +417,24 @@ impl HistoryStore {
                             )
                         })?;
                 }
+                OutputEvent::Incomplete {
+                    invocation_id,
+                    agent_id: _,
+                    reason,
+                } => {
+                    transaction
+                        .execute(
+                            "UPDATE invocations
+                             SET capture_state = 'incomplete', capture_reason = ?2
+                             WHERE id = ?1 AND capture_state IN ('pending', 'complete')",
+                            params![invocation_id, reason],
+                        )
+                        .with_context(|| {
+                            format!(
+                                "failed to mark truncated output capture for invocation {invocation_id}"
+                            )
+                        })?;
+                }
             }
         }
         transaction
@@ -478,7 +507,8 @@ impl HistoryStore {
     }
 
     pub(super) fn protect_active_process_invocation(&self, invocation_id: i64) -> Result<()> {
-        self.lock_connection()
+        self.try_lock_connection()
+            .context("Local history retention guard is busy")?
             .execute(
                 "INSERT OR IGNORE INTO active_process_invocations(invocation_id) VALUES (?1)",
                 [invocation_id],
@@ -488,7 +518,8 @@ impl HistoryStore {
     }
 
     pub(super) fn unprotect_active_process_invocation(&self, invocation_id: i64) -> Result<()> {
-        self.lock_connection()
+        self.try_lock_connection()
+            .context("Local history retention guard is busy")?
             .execute(
                 "DELETE FROM active_process_invocations WHERE invocation_id = ?1",
                 [invocation_id],
@@ -540,6 +571,56 @@ impl HistoryStore {
         self.connection
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn try_lock_connection(&self) -> Result<MutexGuard<'_, Connection>> {
+        match self.connection.try_lock() {
+            Ok(connection) => Ok(connection),
+            Err(TryLockError::Poisoned(poisoned)) => Ok(poisoned.into_inner()),
+            Err(TryLockError::WouldBlock) => bail!("Local history background writer is busy"),
+        }
+    }
+
+    fn lock_foreground_gate(&self) -> Result<MutexGuard<'_, ()>> {
+        let deadline = Instant::now() + FOREGROUND_GATE_TIMEOUT;
+        loop {
+            match self.foreground_gate.try_lock() {
+                Ok(guard) => return Ok(guard),
+                Err(TryLockError::Poisoned(poisoned)) => return Ok(poisoned.into_inner()),
+                Err(TryLockError::WouldBlock) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(TryLockError::WouldBlock) => {
+                    bail!("Local history foreground writer stayed busy past its bounded wait")
+                }
+            }
+        }
+    }
+
+    pub(super) fn with_foreground_connection<T>(
+        &self,
+        operation: impl FnOnce(&mut Connection) -> Result<T>,
+    ) -> Result<T> {
+        // Foreground evidence uses an independent SQLite connection so the
+        // background writer's mutex, batching, presentation work, or retention
+        // can never serialize a model tool call behind it. Concurrent foreground
+        // evidence writes are briefly serialized so normal multi-Agent bursts
+        // retain evidence atomically, but both this gate and SQLite writer-lock
+        // waiting are hard-bounded. After either bound, the caller fails open.
+        let _foreground = self.lock_foreground_gate()?;
+        let mut connection = Connection::open(&self.path).with_context(|| {
+            format!(
+                "failed to open foreground Local history connection {}",
+                self.path.display()
+            )
+        })?;
+        connection
+            .busy_timeout(FOREGROUND_SQLITE_BUSY_TIMEOUT)
+            .context("failed to configure foreground Local history SQLite wait bound")?;
+        connection
+            .pragma_update(None, "foreign_keys", "ON")
+            .context("failed to enable foreground Local history foreign keys")?;
+        operation(&mut connection)
     }
 }
 
@@ -992,7 +1073,8 @@ pub(super) fn distinct_invocation_ids(events: &[OutputEvent]) -> HashSet<i64> {
         .iter()
         .map(|event| match event {
             OutputEvent::Chunk { invocation_id, .. }
-            | OutputEvent::Complete { invocation_id, .. } => *invocation_id,
+            | OutputEvent::Complete { invocation_id, .. }
+            | OutputEvent::Incomplete { invocation_id, .. } => *invocation_id,
         })
         .collect()
 }

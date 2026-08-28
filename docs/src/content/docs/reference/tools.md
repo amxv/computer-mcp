@@ -40,6 +40,8 @@ If the command finishes during the initial yield window, Zodex returns its final
 
 If it is still running, Zodex returns a random `session_handle`. The Agent then uses `write_stdin` to continue it.
 
+Command output is bounded for model delivery. When a command exceeds the inline output limit, Zodex keeps the tool call responsive, writes the decoded PTY stream to a private temporary file, and returns a short tail preview plus `output_file`, `output_chars`, `output_lines`, and `output_file_truncated`. The Agent can inspect that file with later tool calls instead of forcing a multi-megabyte MCP result through the model context. Spill files are capped at 16 MiB each and stale files are cleaned up after 24 hours; if a command exceeds the file cap, the saved file contains the first 16 MiB while the returned tail preview still reflects the latest output and the counts describe the full stream.
+
 There is no backend cwd/default-workdir substitution when the field is missing. The model is expected to send the intended workdir every time.
 
 In Sprite mode, that path is inside the remote Linux workspace.
