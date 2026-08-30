@@ -8,8 +8,6 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
-## Unreleased
-
 ## 0.3.15 — 2026-08-30
 
 - Added default-on, independently configurable repo-local skill discovery for Zodex Local. On the first successful invocation in an exact workdir, Local can advertise parsed skills found under `<workdir>/.agents/skills` once per ChatGPT conversation/workdir without traversing parent directories or changing the underlying tool result.
