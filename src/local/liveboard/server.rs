@@ -17,6 +17,7 @@ use futures_util::TryStreamExt as _;
 use serde::{Deserialize, Serialize};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+use tracing::warn;
 
 use super::super::LocalPaths;
 use super::super::observer_client::LocalObserverClient;
@@ -352,9 +353,16 @@ async fn proxy_output_metadata(
 }
 
 async fn proxy_observer(state: &LiveboardState, path: &str, query: Option<&str>) -> Response {
+    let started = std::time::Instant::now();
     let upstream = match state.observer.get(path, query).await {
         Ok(response) => response,
         Err(error) => {
+            warn!(
+                event = "local_liveboard_observer_proxy_failed",
+                path,
+                elapsed_ms = started.elapsed().as_millis(),
+                error = %error,
+            );
             return error_response(
                 StatusCode::SERVICE_UNAVAILABLE,
                 format!("Local observer unavailable: {error:#}"),

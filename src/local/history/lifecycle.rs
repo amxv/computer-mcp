@@ -10,10 +10,9 @@ impl HistoryStore {
     pub(super) fn process_started(&self, invocation_id: i64) -> Result<()> {
         let now = now_ms()?;
         let changed = self
-            .with_foreground_connection(|connection| {
-                connection
-                    .execute(
-                        "UPDATE invocations SET
+            .lock_connection()
+            .execute(
+                "UPDATE invocations SET
                     process_state = 'running',
                     process_started_at_ms = COALESCE(process_started_at_ms, ?2),
                     process_ended_at_ms = NULL,
@@ -22,10 +21,8 @@ impl HistoryStore {
                     process_termination_reason = NULL,
                     process_incomplete_reason = NULL
                  WHERE id = ?1",
-                        params![invocation_id, now],
-                    )
-                    .map_err(Into::into)
-            })
+                params![invocation_id, now],
+            )
             .with_context(|| {
                 format!("failed to persist Local process start for invocation {invocation_id}")
             })?;
@@ -37,13 +34,11 @@ impl HistoryStore {
 
     pub(super) fn process_ended(&self, invocation_id: i64, end: &OwnedProcessEnd) -> Result<()> {
         let now = now_ms()?;
-        let changed = self
-            .with_foreground_connection(|connection| {
-                if end.is_complete() {
-                    let termination_reason = end.termination_reason.map(termination_reason_name);
-                    connection
-                        .execute(
-                            "UPDATE invocations SET
+        let connection = self.lock_connection();
+        let changed = if end.is_complete() {
+            let termination_reason = end.termination_reason.map(termination_reason_name);
+            connection.execute(
+                "UPDATE invocations SET
                                 process_state = 'exited',
                                 process_ended_at_ms = ?2,
                                 process_updated_at_ms = ?2,
@@ -52,19 +47,17 @@ impl HistoryStore {
                                 process_cwd = COALESCE(?5, process_cwd),
                                 process_incomplete_reason = NULL
                              WHERE id = ?1",
-                            params![
-                                invocation_id,
-                                now,
-                                end.exit_code,
-                                termination_reason,
-                                end.final_cwd,
-                            ],
-                        )
-                        .map_err(Into::into)
-                } else {
-                    connection
-                        .execute(
-                            "UPDATE invocations SET
+                params![
+                    invocation_id,
+                    now,
+                    end.exit_code,
+                    termination_reason,
+                    end.final_cwd,
+                ],
+            )
+        } else {
+            connection.execute(
+                "UPDATE invocations SET
                                 process_state = 'incomplete',
                                 process_ended_at_ms = NULL,
                                 process_updated_at_ms = ?2,
@@ -73,14 +66,12 @@ impl HistoryStore {
                                 process_cwd = COALESCE(?3, process_cwd),
                                 process_incomplete_reason = ?4
                              WHERE id = ?1",
-                            params![invocation_id, now, end.final_cwd, end.incomplete_reason],
-                        )
-                        .map_err(Into::into)
-                }
-            })
-            .with_context(|| {
-                format!("failed to persist Local process end for invocation {invocation_id}")
-            })?;
+                params![invocation_id, now, end.final_cwd, end.incomplete_reason],
+            )
+        }
+        .with_context(|| {
+            format!("failed to persist Local process end for invocation {invocation_id}")
+        })?;
         if changed != 1 {
             bail!("missing Local invocation {invocation_id} while persisting process end");
         }

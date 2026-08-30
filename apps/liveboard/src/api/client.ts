@@ -319,14 +319,44 @@ export async function openFileInEditor(path: string): Promise<void> {
 }
 
 export async function fetchJson<T>(path: string): Promise<T> {
-  const response = await fetch(path, {
-    credentials: 'same-origin',
-    headers: { Accept: 'application/json' },
-  })
-  if (!response.ok) {
-    throw new Error(`Liveboard request failed (${response.status})`)
+  const retryDelaysMs = [25, 100]
+  let lastNetworkError: unknown
+  for (let attempt = 0; attempt <= retryDelaysMs.length; attempt += 1) {
+    let response: Response
+    try {
+      response = await fetch(path, {
+        credentials: 'same-origin',
+        headers: { Accept: 'application/json' },
+      })
+    } catch (error) {
+      lastNetworkError = error
+      if (attempt < retryDelaysMs.length) {
+        await new Promise((resolve) => setTimeout(resolve, retryDelaysMs[attempt]))
+        continue
+      }
+      throw error
+    }
+
+    if (response.ok) return (await response.json()) as T
+
+    if ([502, 503, 504].includes(response.status) && attempt < retryDelaysMs.length) {
+      await response.body?.cancel().catch(() => undefined)
+      await new Promise((resolve) => setTimeout(resolve, retryDelaysMs[attempt]))
+      continue
+    }
+
+    let message = `Liveboard request failed (${response.status})`
+    try {
+      const body = (await response.json()) as { error?: string }
+      if (body.error) message = body.error
+    } catch {
+      // Keep the status-only fallback when the response is not JSON.
+    }
+    throw new Error(message)
   }
-  return (await response.json()) as T
+  throw lastNetworkError instanceof Error
+    ? lastNetworkError
+    : new Error('Liveboard request failed')
 }
 
 export async function patchPreferences(
@@ -349,7 +379,7 @@ export async function patchPreferences(
 
 export const OBSERVER_API_VERSION = 1
 export const PRESENTATION_VERSION = 3
-export const LIVE_EVENT_VERSION = 2
+export const LIVE_EVENT_VERSION = 4
 
 export function validateStatus(status: ApiStatus): void {
   if (

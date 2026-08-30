@@ -812,7 +812,9 @@ fn retention_removes_whole_old_units_recomputes_summaries_and_keeps_newest_over_
     // record independent of host scheduling delays. A one-second wall-clock
     // window made this retention correctness test fail when the parallel test
     // runner was descheduled for more than a second.
-    store.run_retention(365 * 24 * 60 * 60, u64::MAX).unwrap();
+    store
+        .run_retention(365 * 24 * 60 * 60, u64::MAX, &[])
+        .unwrap();
     let after_age = store.physical_size().unwrap();
     assert!(
         LocalHistoryReader::query(
@@ -843,7 +845,7 @@ fn retention_removes_whole_old_units_recomputes_summaries_and_keeps_newest_over_
     assert_eq!(agent_count, 1, "unsupported old Agent should be pruned");
     drop(connection);
 
-    store.run_retention(u64::MAX, 1).unwrap();
+    store.run_retention(u64::MAX, 1, &[]).unwrap();
     let records = LocalHistoryReader::query(&path, &HistoryQuery::recent(20)).unwrap();
     assert_eq!(
         records.len(),
@@ -932,6 +934,7 @@ fn active_process_creator_invocation_survives_retention_even_when_capture_is_inc
             &OwnedProcessEnd::exited(0, TerminationReason::Exit, dir.path().display().to_string()),
         )
         .unwrap();
+    runtime.flush_for_test().unwrap();
     runtime.run_retention_now(1, u64::MAX).unwrap();
     assert!(
         LocalHistoryReader::query(
@@ -990,7 +993,7 @@ fn size_retention_after_restart_deletes_oldest_complete_unit_and_reclaims_physic
 
     let reopened = HistoryStore::open(path.clone(), Arc::from("runtime-b")).unwrap();
     let budget = before.saturating_mul(3) / 4;
-    reopened.run_retention(u64::MAX, budget).unwrap();
+    reopened.run_retention(u64::MAX, budget, &[]).unwrap();
     let after = reopened.physical_size().unwrap();
     assert!(
         after < before,

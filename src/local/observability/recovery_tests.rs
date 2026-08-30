@@ -94,6 +94,10 @@ async fn recovery_list_includes_preexisting_active_process_creator_only_while_ac
             &OwnedProcessEnd::exited(0, TerminationReason::Exit, workdir.display().to_string()),
         )
         .unwrap();
+    // Process end is intentionally committed on the priority history worker.
+    // Recovery keeps the creator protected until that durable terminal write
+    // lands, so synchronize at the same boundary before asserting it vanished.
+    history.flush_for_test().unwrap();
     let ended = request_json(&app, cutoff).await;
     assert!(
         ended["invocations"].as_array().unwrap().is_empty(),

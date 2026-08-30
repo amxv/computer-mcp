@@ -68,6 +68,13 @@ export interface AgentStreamController {
     displayState?: string
     displayReason?: string
   }) => void
+  appendLiveOutputBatch: (input: {
+    presentationId: string
+    invocationId: number
+    chunks: ReadonlyArray<{ sequence: number; text: string }>
+    displayState?: string
+    displayReason?: string
+  }) => void
   completeLiveOutput: (
     presentationId: string,
     displayState?: string,
@@ -267,6 +274,42 @@ export function createAgentStreamController(
     }
   }
 
+  const appendLiveOutputBatch = ({
+    presentationId,
+    invocationId,
+    chunks,
+    displayState,
+    displayReason,
+  }: {
+    presentationId: string
+    invocationId: number
+    chunks: ReadonlyArray<{ sequence: number; text: string }>
+    displayState?: string
+    displayReason?: string
+  }) => {
+    if (disposed) return
+    if (chunks.some((chunk) => chunk.text.length > 0) || displayState === 'unavailable') {
+      markOutputAvailability(presentationId, true)
+    }
+    const record = cards.get(presentationId)?.record()
+    const existingOutputState = outputStates.get(presentationId)
+    if (
+      record?.kind === 'command' &&
+      record.status !== 'running' &&
+      existingOutputState === undefined
+    ) {
+      // Process lifecycle can become final before the PTY reader drains its
+      // last chunks. Do not recreate a released buffer for a collapsed final
+      // card, but keep feeding an already-mounted/expanded buffer so those
+      // trailing bytes remain visible until the subscriber detaches.
+      markActivity(presentationId)
+      return
+    }
+    const state = existingOutputState ?? outputState(presentationId, invocationId)
+    state.appendLiveBatch(chunks, displayState, displayReason)
+    markActivity(presentationId)
+  }
+
   return {
     agentId: options.agentId,
     attachWatermarkMs: options.attachWatermarkMs,
@@ -281,41 +324,15 @@ export function createAgentStreamController(
     upsert,
     recoveryCheckpoint: () => nextMutationVersion - 1,
     mergeRecovery,
-    appendLiveOutput: ({
-      presentationId,
-      invocationId,
-      sequence,
-      text,
-      displayState,
-      displayReason,
-    }) => {
-      if (disposed) return
-      if (text.length > 0 || displayState === 'unavailable') {
-        markOutputAvailability(presentationId, true)
-      }
-      const record = cards.get(presentationId)?.record()
-      const existingOutputState = outputStates.get(presentationId)
-      if (
-        record?.kind === 'command' &&
-        record.status !== 'running' &&
-        existingOutputState === undefined
-      ) {
-        // Process lifecycle can become final before the PTY reader drains its
-        // last chunks. Do not recreate a released buffer for a collapsed final
-        // card, but keep feeding an already-mounted/expanded buffer so those
-        // trailing bytes remain visible until the subscriber detaches.
-        markActivity(presentationId)
-        return
-      }
-      const state = existingOutputState ?? outputState(presentationId, invocationId)
-      state.appendLive(
-        sequence,
-        text,
+    appendLiveOutput: ({ presentationId, invocationId, sequence, text, displayState, displayReason }) =>
+      appendLiveOutputBatch({
+        presentationId,
+        invocationId,
+        chunks: [{ sequence, text }],
         displayState,
         displayReason,
-      )
-      markActivity(presentationId)
-    },
+      }),
+    appendLiveOutputBatch,
     completeLiveOutput: (presentationId, displayState, displayReason) => {
       const state = outputStates.get(presentationId)
       if (displayState === 'unavailable') {

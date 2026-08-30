@@ -101,6 +101,57 @@ describe('CommandOutputState', () => {
     expect(state.displayUnavailableReason()).toBe('sequence hole')
   })
 
+  it('reconciles the durable tail at EOF when the final live chunk was missed', async () => {
+    let lastCursor = 2
+    const page = vi.fn(async () =>
+      outputPage(
+        lastCursor === 2
+          ? [
+              { sequence: 1, text: 'a' },
+              { sequence: 2, text: 'b' },
+            ]
+          : [
+              { sequence: 1, text: 'a' },
+              { sequence: 2, text: 'b' },
+              { sequence: 3, text: 'c' },
+            ],
+      ),
+    )
+    const state = new CommandOutputState(
+      'inv-10',
+      10,
+      {
+        loadMetadata: async () => ({
+          schema_version: 1,
+          runtime_id: 'runtime-one',
+          invocation_id: 10,
+          output: {
+            available: true,
+            chunk_count: lastCursor,
+            size_bytes: lastCursor,
+            capture_state: 'complete',
+            capture_reason: null,
+            first_cursor: 1,
+            last_cursor: lastCursor,
+          },
+        }),
+        loadDisplayPage: page,
+      },
+      () => undefined,
+    )
+    await state.ensureRecentTail()
+    expect(state.materialize()).toBe('ab')
+    expect(state.needsRecovery()).toBe(false)
+
+    const unsubscribe = state.subscribe(() => undefined)
+    lastCursor = 3
+    state.markComplete('available')
+    await vi.waitFor(() => expect(state.materialize()).toBe('abc'))
+    expect(page).toHaveBeenCalledTimes(2)
+    expect(state.needsRecovery()).toBe(false)
+    unsubscribe()
+  })
+
   it('releases a final buffer only after the last expanded subscriber detaches', () => {
     const released = vi.fn()
     const state = new CommandOutputState(

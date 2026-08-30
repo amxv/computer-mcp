@@ -554,7 +554,10 @@ export function createRuntimeConnection(
         handleRuntimeMismatch(event)
         return
       }
-      if (!rememberSequence(event.sequence)) return
+      // PTY output is intentionally outside the durable control-event replay
+      // sequence. OutputBuffer deduplicates and detects loss using each
+      // invocation's exact chunk sequence instead.
+      if (event.event_type !== 'output' && !rememberSequence(event.sequence)) return
       if (event.event_type === 'gap') {
         recoverAfterGap(event)
         return
@@ -566,16 +569,28 @@ export function createRuntimeConnection(
         if (event.agent_id && event.presentation_id && visibleAgentIds().includes(event.agent_id)) {
           const controller = ensureController(event.agent_id)
           if (event.event_type === 'output' && event.invocation_id !== null) {
-            const sequence = event.payload.output_sequence
-            const text = event.payload.text
             const displayState = event.payload.display_state
             const displayReason = event.payload.display_reason
-            if (typeof sequence === 'number' && typeof text === 'string') {
-              controller.appendLiveOutput({
+            const chunks = Array.isArray(event.payload.chunks)
+              ? event.payload.chunks.flatMap((chunk) => {
+                  if (
+                    typeof chunk !== 'object' ||
+                    chunk === null ||
+                    !('sequence' in chunk) ||
+                    !('text' in chunk) ||
+                    typeof chunk.sequence !== 'number' ||
+                    typeof chunk.text !== 'string'
+                  ) {
+                    return []
+                  }
+                  return [{ sequence: chunk.sequence, text: chunk.text }]
+                })
+              : []
+            if (chunks.length > 0 || displayState === 'unavailable') {
+              controller.appendLiveOutputBatch({
                 presentationId: event.presentation_id,
                 invocationId: event.invocation_id,
-                sequence,
-                text,
+                chunks,
                 displayState:
                   typeof displayState === 'string' ? displayState : undefined,
                 displayReason:

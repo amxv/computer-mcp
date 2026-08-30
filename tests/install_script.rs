@@ -542,6 +542,8 @@ install_operator_binaries_from_dir "${SOURCE_DIR}"
         .env("SOURCE_DIR", &source_dir)
         .env("HOME", &home_dir)
         .env("ZODEX_INSTALL_DIR", "/usr/local/bin")
+        .env_remove("ZODEX_UPGRADE_MODE")
+        .env_remove("ZODEX_BINARY_SOURCE_DIR")
         .output()
         .expect("run operator install");
 
@@ -760,6 +762,8 @@ fn operator_release_dir_install_proves_local_needs_only_zodex_binary() {
         .arg(install_script_path())
         .env("ZODEX_ASSET_URL", &asset_url)
         .env("ZODEX_INSTALL_DIR", &install_dir)
+        .env_remove("ZODEX_UPGRADE_MODE")
+        .env_remove("ZODEX_BINARY_SOURCE_DIR")
         .output()
         .expect("run operator release-dir install");
     if !output.status.success() {

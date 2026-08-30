@@ -208,8 +208,18 @@ async fn apply_live_update(
                 ));
             }
         } else if live.event_type == "output" {
-            if let Some(text) = live.payload.get("text").and_then(serde_json::Value::as_str) {
-                app.append_live_output(invocation_id, text);
+            if let Some(chunks) = live
+                .payload
+                .get("chunks")
+                .and_then(serde_json::Value::as_array)
+            {
+                let text = chunks
+                    .iter()
+                    .filter_map(|chunk| chunk.get("text").and_then(serde_json::Value::as_str))
+                    .collect::<String>();
+                if !text.is_empty() {
+                    app.append_live_output(invocation_id, &text);
+                }
             }
         } else if matches!(
             live.event_type.as_str(),

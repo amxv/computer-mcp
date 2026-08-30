@@ -119,6 +119,14 @@ async fn assert_no_output_event_within(stream: &mut BodyDataStream, duration: Du
     }
 }
 
+fn output_chunk(event: &Value, sequence: u64) -> Option<&Value> {
+    (event["event_type"] == "output")
+        .then(|| event["payload"]["chunks"].as_array())
+        .flatten()?
+        .iter()
+        .find(|chunk| chunk["sequence"] == sequence)
+}
+
 #[tokio::test]
 async fn canonical_event_identity_maps_polls_to_parent_and_process_end_refreshes_command() {
     let dir = tempdir().unwrap();
@@ -204,6 +212,25 @@ async fn canonical_event_identity_maps_polls_to_parent_and_process_end_refreshes
         Some(command_presentation_id.as_str()),
         "no-input polls must name their owning command card"
     );
+    let poll_started_update = receive_event(&mut events, "presentation_updated").await;
+    assert_eq!(
+        poll_started_update.presentation_id.as_deref(),
+        Some(command_presentation_id.as_str())
+    );
+    assert_eq!(poll_started_update.payload["source"], "invocation_started");
+    let poll_started_record = LocalHistoryReader::timeline_detail(&database, command_id)
+        .unwrap()
+        .unwrap();
+    match poll_started_record.kind {
+        crate::local::PresentationKind::Command { polls, .. } => {
+            assert_eq!(
+                polls.unwrap().count,
+                1,
+                "poll count must advance on poll start"
+            );
+        }
+        other => panic!("expected command timeline record, got {other:?}"),
+    }
     complete(&history, &poll, json!({"status":"running"}));
     history.flush_for_test().unwrap();
     let poll_completed = receive_event(&mut events, "invocation_completed").await;
@@ -277,6 +304,101 @@ async fn canonical_event_identity_maps_polls_to_parent_and_process_end_refreshes
     history.observe_output_complete(SessionOutputCompletion {
         internal_session_id: 501,
         session_handle: Arc::from("identity-handle"),
+        invocation: command,
+    });
+    history.flush_for_test().unwrap();
+    history.shutdown_blocking().unwrap();
+}
+
+#[tokio::test]
+async fn output_bursts_are_batched_so_terminal_control_events_do_not_overrun_the_sse_ring() {
+    let dir = tempdir().unwrap();
+    let database = dir.path().join("history.sqlite3");
+    let history = LocalHistoryRuntime::open(
+        LocalHistoryRuntimeConfig::new(
+            database,
+            "runtime-output-batch-ring",
+            60 * 60,
+            64 * 1024 * 1024,
+        )
+        .with_event_capacity(3),
+    )
+    .unwrap();
+    let command = history
+        .begin(
+            provider_context("output-batch-ring"),
+            InvocationStart::new("exec_command", json!({"cmd":"noisy"})),
+        )
+        .unwrap();
+    let invocation_id = command.invocation_id.unwrap();
+    let process = OwnedProcess {
+        internal_session_id: 777,
+        session_handle: Arc::from("output-batch-ring"),
+        identity: ProcessIdentity {
+            pid: 77_777,
+            birth: ProcessBirthIdentity::LinuxProcStartTicks { ticks: 777 },
+        },
+        created_by: command.clone(),
+    };
+    history.process_started(&process).unwrap();
+    complete(
+        &history,
+        &command,
+        json!({"status":"running","session_handle":"output-batch-ring"}),
+    );
+    history.flush_for_test().unwrap();
+
+    let (_sequence, mut events) = history.subscribe_live_events();
+    let mut output_events = history.subscribe_live_output_events();
+    for sequence in 0..64 {
+        history.observe_output(SessionOutputChunk {
+            internal_session_id: 777,
+            session_handle: Arc::from("output-batch-ring"),
+            invocation: command.clone(),
+            sequence,
+            text: format!("chunk-{sequence}\n"),
+        });
+    }
+    history
+        .process_ended(
+            &process,
+            &OwnedProcessEnd::exited(0, TerminationReason::Exit, "/tmp".to_string()),
+        )
+        .unwrap();
+    history.flush_for_test().unwrap();
+
+    let mut seen = Vec::new();
+    for _ in 0..2 {
+        seen.push(
+            tokio::time::timeout(Duration::from_secs(2), events.recv())
+                .await
+                .expect("timed out waiting for batched live event")
+                .expect("PTY output must not lag the three-slot control-event ring"),
+        );
+    }
+    assert!(seen.iter().any(|event| event.event_type == "process_ended"));
+    assert!(
+        seen.iter()
+            .any(|event| event.event_type == "presentation_updated")
+    );
+    let mut observed_chunks = 0;
+    while observed_chunks < 64 {
+        let output = tokio::time::timeout(Duration::from_secs(2), output_events.recv())
+            .await
+            .expect("timed out waiting for output event")
+            .expect("output burst should remain recoverable on its independent channel");
+        assert_eq!(output.event_type, "output");
+        assert_eq!(output.sequence, 0);
+        assert_eq!(output.invocation_id, Some(invocation_id));
+        observed_chunks += output.payload["chunks"].as_array().unwrap().len();
+    }
+    assert_eq!(observed_chunks, 64);
+
+    drop(events);
+    drop(output_events);
+    history.observe_output_complete(SessionOutputCompletion {
+        internal_session_id: 777,
+        session_handle: Arc::from("output-batch-ring"),
         invocation: command,
     });
     history.flush_for_test().unwrap();
@@ -363,9 +485,9 @@ async fn public_sse_keeps_global_metadata_but_selects_output_and_preserves_strea
         }) && frames.iter().any(|event: &Value| {
             event["event_type"] == "invocation_started"
                 && event["invocation_id"] == metadata_b.invocation_id.unwrap()
-        }) && frames.iter().any(|event: &Value| {
-            event["event_type"] == "output" && event["payload"]["output_sequence"] == 1
-        }))
+        }) && frames
+            .iter()
+            .any(|event: &Value| output_chunk(event, 1).is_some()))
     {
         frames.push(next_sse_json(&mut selected).await);
     }
@@ -388,13 +510,14 @@ async fn public_sse_keeps_global_metadata_but_selects_output_and_preserves_strea
     );
     let output = frames
         .iter()
-        .find(|event| event["event_type"] == "output" && event["payload"]["output_sequence"] == 1)
+        .find(|event| output_chunk(event, 1).is_some())
         .unwrap();
+    let selected_chunk = output_chunk(output, 1).unwrap();
     assert_eq!(output["agent_id"], agent_a);
     assert_eq!(output["invocation_id"], command_a_id);
     assert_eq!(output["presentation_id"], format!("inv-{command_a_id}"));
-    assert_eq!(output["payload"]["output_sequence"], 1);
-    assert_eq!(output["payload"]["text"], "red after");
+    assert_eq!(selected_chunk["sequence"], 1);
+    assert_eq!(selected_chunk["text"], "red after");
     assert_eq!(output["payload"]["display_state"], "available");
     assert!(!output.to_string().contains("\\u001b"));
 
@@ -410,14 +533,15 @@ async fn public_sse_keeps_global_metadata_but_selects_output_and_preserves_strea
         let event = next_sse_json(&mut selected).await;
         if event["event_type"] == "output" {
             assert_eq!(event["agent_id"], agent_a);
-            if event["payload"]["output_sequence"] == 3 {
+            if output_chunk(&event, 3).is_some() {
                 break event;
             }
         }
     };
+    let degraded_chunk = output_chunk(&degraded, 3).unwrap();
     assert_eq!(degraded["event_type"], "output");
-    assert_eq!(degraded["payload"]["output_sequence"], 3);
-    assert_eq!(degraded["payload"]["text"], "");
+    assert_eq!(degraded_chunk["sequence"], 3);
+    assert_eq!(degraded_chunk["text"], "");
     assert_eq!(degraded["payload"]["display_state"], "unavailable");
     assert!(
         degraded["payload"]["display_reason"]
@@ -437,7 +561,12 @@ async fn public_sse_keeps_global_metadata_but_selects_output_and_preserves_strea
         invocation: command_b.clone(),
     });
     history.flush_for_test().unwrap();
-    let completed = next_sse_json(&mut selected).await;
+    let completed = loop {
+        let event = next_sse_json(&mut selected).await;
+        if event["event_type"] == "output_complete" {
+            break event;
+        }
+    };
     assert_eq!(completed["event_type"], "output_complete");
     assert_eq!(completed["invocation_id"], command_a_id);
     assert_eq!(completed["payload"]["display_state"], "unavailable");

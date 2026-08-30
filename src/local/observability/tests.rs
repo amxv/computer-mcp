@@ -653,12 +653,28 @@ async fn sse_starts_now_filters_live_events_and_surfaces_recoverable_lag() {
             InvocationOutcome::Success(json!({"status":"exited"})),
         )
         .unwrap();
-    let output_complete = next_sse_frame_containing(&mut stream, "event: output_complete").await;
+    // Invocation completion is a priority control event and may intentionally
+    // beat PTY EOF. Capture both in either order so this test enforces delivery
+    // without requiring terminal card state to wait for output draining.
+    let mut output_complete = None;
+    let mut completed = None;
+    for _ in 0..8 {
+        let frame = next_sse_frame(&mut stream).await;
+        if frame.contains("event: output_complete") {
+            output_complete = Some(frame);
+        } else if frame.contains("event: invocation_completed") {
+            completed = Some(frame);
+        }
+        if output_complete.is_some() && completed.is_some() {
+            break;
+        }
+    }
+    let output_complete = output_complete.expect("SSE stream omitted output_complete");
     assert!(
         output_complete.contains(&format!("\"invocation_id\":{invocation_id}")),
         "{output_complete}"
     );
-    let completed = next_sse_frame_containing(&mut stream, "event: invocation_completed").await;
+    let completed = completed.expect("SSE stream omitted invocation_completed");
     assert!(
         completed.contains(&format!("\"invocation_id\":{invocation_id}")),
         "{completed}"

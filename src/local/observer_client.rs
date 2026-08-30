@@ -13,7 +13,8 @@ use super::{
     PRESENTATION_SCHEMA_VERSION, load_runtime_discovery,
 };
 
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(1);
+const RESPONSE_HEADER_TIMEOUT: Duration = Duration::from_secs(30);
 const MIN_BEARER_LEN: usize = 32;
 
 #[derive(Debug, Clone)]
@@ -84,7 +85,7 @@ impl LocalObserverClient {
         let base_url = validate_base_url(base_url)?;
         let http = Client::builder()
             .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(REQUEST_TIMEOUT)
+            .connect_timeout(CONNECT_TIMEOUT)
             .build()
             .context("failed to construct Local observer HTTP client")?;
         Ok(Self {
@@ -197,7 +198,7 @@ impl LocalObserverClient {
             .with_context(|| format!("invalid Local observability path `{path}`"))?;
         url.set_query(raw_query.filter(|query| !query.is_empty()));
         let send = self.http.get(url).bearer_auth(&self.bearer).send();
-        tokio::time::timeout(REQUEST_TIMEOUT, send)
+        tokio::time::timeout(RESPONSE_HEADER_TIMEOUT, send)
             .await
             .context("Local observability request timed out")?
             .context("failed to connect to Local observability API")
@@ -225,7 +226,7 @@ impl LocalObserverClient {
             .bearer_auth(&self.bearer)
             .query(query)
             .send();
-        tokio::time::timeout(REQUEST_TIMEOUT, send)
+        tokio::time::timeout(RESPONSE_HEADER_TIMEOUT, send)
             .await
             .context("Local observability request timed out")?
             .context("failed to connect to Local observability API")

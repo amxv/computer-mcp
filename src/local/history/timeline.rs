@@ -413,16 +413,14 @@ fn query_history_roots(
     {
         bail!("timeline cursor does not belong to this history query");
     }
+    let (roots_cte, mut parameters) = roots_cte_for_query(query);
     let mut sql = format!(
-        "{ROOTS_CTE}
+        "{roots_cte}
          SELECT roots.root_id, roots.representative_id, roots.root_started_at_ms,
                 roots.orphan_kind, roots.orphan_handle
          FROM roots
-         JOIN invocations representative ON representative.id = roots.representative_id
          WHERE 1 = 1"
     );
-    let mut parameters = Vec::<SqlValue>::new();
-    push_root_filters(&mut sql, &mut parameters, query);
     if let Some(before_ms) = before_ms {
         sql.push_str(" AND roots.root_started_at_ms < ?");
         parameters.push(SqlValue::Integer(before_ms));
@@ -478,8 +476,9 @@ fn query_recovery_roots(
                 .join(", ")
         )
     };
+    let (roots_cte, mut parameters) = roots_cte_for_query(query);
     let sql = format!(
-        "{ROOTS_CTE},
+        "{roots_cte},
          root_changes AS (
             SELECT roots.*,
                    representative.completed_at_ms AS representative_completed_at_ms,
@@ -532,14 +531,11 @@ fn query_recovery_roots(
                 recoverable.root_started_at_ms, recoverable.orphan_kind,
                 recoverable.orphan_handle, recoverable.effective_changed_at_ms
          FROM recoverable
-         JOIN invocations representative ON representative.id = recoverable.representative_id
          WHERE recoverable.effective_changed_at_ms >= ?"
     );
     let mut sql = sql;
-    let mut parameters = Vec::<SqlValue>::new();
     parameters.push(SqlValue::Integer(since_ms));
     parameters.push(SqlValue::Integer(since_ms));
-    push_root_filters(&mut sql, &mut parameters, query);
     if let Some(HistoryTimelineCursor::Recovery {
         changed_at_ms,
         root_id,
@@ -573,17 +569,111 @@ fn query_recovery_roots(
         .context("failed to decode canonical Local recovery timeline roots")
 }
 
-fn push_root_filters(
+fn roots_cte_for_query(query: &HistoryTimelineQuery) -> (String, Vec<SqlValue>) {
+    if query.agent_id.is_none() && query.normalized_workdir.is_none() {
+        return (ROOTS_CTE.to_string(), Vec::new());
+    }
+
+    // The public Liveboard requests history/recovery per Agent. Filtering only
+    // after ROOTS_CTE forces SQLite to reconstruct every Agent's canonical
+    // roots first, including the legacy orphan-poll grouping pass. On a large
+    // history database that turns a 20-row focused page into a multi-second
+    // global scan. Build the same three canonical root classes from rows that
+    // can satisfy the representative filter instead. The orphan branch still
+    // checks for a globally newer representative, so cross-Agent legacy groups
+    // keep exactly the same ownership semantics as ROOTS_CTE.
+    let mut parameters = Vec::<SqlValue>::new();
+    let mut sql = r#"
+WITH roots(root_id, representative_id, root_started_at_ms, orphan_kind, orphan_handle) AS (
+    SELECT i.id, i.id, i.started_at_ms, 0, NULL
+    FROM invocations i
+    WHERE NOT (
+        i.tool_name = 'write_stdin'
+        AND i.continuation_kind = 'poll'
+    )
+"#
+    .to_string();
+    push_invocation_filters(&mut sql, &mut parameters, "i", query);
+    sql.push_str(
+        r#"
+
+    UNION ALL
+
+    SELECT
+        (
+            SELECT MIN(first.id)
+            FROM invocations first
+            WHERE first.tool_name = 'write_stdin'
+              AND first.continuation_kind = 'poll'
+              AND first.target_created_by_invocation_id IS NULL
+              AND first.target_session_handle = p.target_session_handle
+        ),
+        p.id,
+        (
+            SELECT MIN(first.started_at_ms)
+            FROM invocations first
+            WHERE first.tool_name = 'write_stdin'
+              AND first.continuation_kind = 'poll'
+              AND first.target_created_by_invocation_id IS NULL
+              AND first.target_session_handle = p.target_session_handle
+        ),
+        1,
+        p.target_session_handle
+    FROM invocations p
+    WHERE p.tool_name = 'write_stdin'
+      AND p.continuation_kind = 'poll'
+      AND p.target_created_by_invocation_id IS NULL
+      AND p.target_session_handle IS NOT NULL
+"#,
+    );
+    push_invocation_filters(&mut sql, &mut parameters, "p", query);
+    sql.push_str(
+        r#"
+      AND NOT EXISTS (
+          SELECT 1
+          FROM invocations newer
+          WHERE newer.tool_name = 'write_stdin'
+            AND newer.continuation_kind = 'poll'
+            AND newer.target_created_by_invocation_id IS NULL
+            AND newer.target_session_handle = p.target_session_handle
+            AND (
+                newer.started_at_ms > p.started_at_ms
+                OR (
+                    newer.started_at_ms = p.started_at_ms
+                    AND newer.id > p.id
+                )
+            )
+      )
+
+    UNION ALL
+
+    SELECT p.id, p.id, p.started_at_ms, 2, NULL
+    FROM invocations p
+    WHERE p.tool_name = 'write_stdin'
+      AND p.continuation_kind = 'poll'
+      AND p.target_created_by_invocation_id IS NULL
+      AND p.target_session_handle IS NULL
+"#,
+    );
+    push_invocation_filters(&mut sql, &mut parameters, "p", query);
+    sql.push_str("\n)\n");
+    (sql, parameters)
+}
+
+fn push_invocation_filters(
     sql: &mut String,
     parameters: &mut Vec<SqlValue>,
+    alias: &str,
     query: &HistoryTimelineQuery,
 ) {
     if let Some(agent_id) = &query.agent_id {
-        sql.push_str(" AND representative.agent_id = ?");
+        sql.push_str(&format!("      AND {alias}.agent_id = ?\n"));
         parameters.push(SqlValue::Text(agent_id.clone()));
     }
     if let Some(workdir) = &query.normalized_workdir {
-        sql.push_str(" AND representative.declared_workdir_normalized = ?");
+        sql.push_str(&format!(
+            "      AND {alias}.declared_workdir_normalized = ?\n"
+        ));
         parameters.push(SqlValue::Text(workdir.clone()));
     }
 }

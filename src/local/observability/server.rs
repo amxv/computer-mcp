@@ -616,6 +616,11 @@ struct EventFilter {
     diff_projection: HistoryDiffProjection,
 }
 
+enum LiveEventReceive {
+    Control(Result<HistoryLiveEvent, BroadcastStreamRecvError>),
+    Output(Result<HistoryLiveEvent, BroadcastStreamRecvError>),
+}
+
 async fn events(
     State(state): State<Arc<ApiState>>,
     Query(query): Query<EventQuery>,
@@ -623,50 +628,65 @@ async fn events(
     let filter = event_filter(query)?;
     let runtime_id = state.history.runtime_id().to_string();
     let history = state.history.clone();
-    let (sequence, receiver) = state.history.subscribe_live_events();
+    let (sequence, control_receiver, output_receiver) =
+        state.history.subscribe_live_event_channels();
     let mut last_global_sequence = sequence;
     let gap_agent_id = filter.agent_id.clone();
-    let stream = BroadcastStream::new(receiver).filter_map(move |result| match result {
-        Ok(event) => {
-            last_global_sequence = event.sequence;
-            if !filter.allows(&event) {
-                return None;
-            }
-            let record = if event.event_type == "presentation_updated" {
-                event
-                    .presentation_id
-                    .as_deref()
-                    .and_then(presentation_root_id)
-                    .and_then(|root_id| history.live_presentation(root_id, filter.diff_projection))
-            } else {
-                None
-            };
-            Some(Ok(sse_event(&event, record.as_deref())))
-        }
-        Err(BroadcastStreamRecvError::Lagged(skipped)) => {
-            last_global_sequence = last_global_sequence.saturating_add(skipped);
-            let through_sequence = last_global_sequence;
-            let gap = json!({
-                "schema_version": HISTORY_LIVE_EVENT_SCHEMA_VERSION,
-                "runtime_id": runtime_id,
-                "sequence": through_sequence,
-                "emitted_at_ms": current_time_ms(),
-                "event_type": "gap",
-                "agent_id": gap_agent_id,
-                "invocation_id": null,
-                "presentation_id": null,
-                "presentation_revision": null,
-                "payload": {
-                    "skipped_events": skipped,
-                    "recovery": "durable_history_or_invocation_detail"
+    let control = BroadcastStream::new(control_receiver).map(LiveEventReceive::Control);
+    let output = BroadcastStream::new(output_receiver).map(LiveEventReceive::Output);
+    let stream = control
+        .merge(output)
+        .filter_map(move |received| match received {
+            LiveEventReceive::Control(Ok(event)) => {
+                last_global_sequence = event.sequence;
+                if !filter.allows(&event) {
+                    return None;
                 }
-            });
-            Some(Ok(Event::default()
-                .id(through_sequence.to_string())
-                .event("gap")
-                .data(gap.to_string())))
-        }
-    });
+                let record = if event.event_type == "presentation_updated" {
+                    event
+                        .presentation_id
+                        .as_deref()
+                        .and_then(presentation_root_id)
+                        .and_then(|root_id| {
+                            history.live_presentation(root_id, filter.diff_projection)
+                        })
+                } else {
+                    None
+                };
+                Some(Ok(sse_event(&event, record.as_deref())))
+            }
+            LiveEventReceive::Control(Err(BroadcastStreamRecvError::Lagged(skipped))) => {
+                last_global_sequence = last_global_sequence.saturating_add(skipped);
+                let through_sequence = last_global_sequence;
+                let gap = json!({
+                    "schema_version": HISTORY_LIVE_EVENT_SCHEMA_VERSION,
+                    "runtime_id": runtime_id,
+                    "sequence": through_sequence,
+                    "emitted_at_ms": current_time_ms(),
+                    "event_type": "gap",
+                    "agent_id": gap_agent_id,
+                    "invocation_id": null,
+                    "presentation_id": null,
+                    "presentation_revision": null,
+                    "payload": {
+                        "skipped_events": skipped,
+                        "recovery": "durable_history_or_invocation_detail"
+                    }
+                });
+                Some(Ok(Event::default()
+                    .id(through_sequence.to_string())
+                    .event("gap")
+                    .data(gap.to_string())))
+            }
+            LiveEventReceive::Output(Ok(event)) => {
+                filter.allows(&event).then(|| Ok(sse_event(&event, None)))
+            }
+            // PTY output has its own exact per-invocation chunk sequence. If its
+            // ephemeral channel overruns, the next observed chunk creates a local
+            // output-sequence gap and the client hydrates the recent durable tail;
+            // do not manufacture a control/history recovery gap.
+            LiveEventReceive::Output(Err(BroadcastStreamRecvError::Lagged(_))) => None,
+        });
     Ok(Sse::new(stream).keep_alive(
         KeepAlive::new()
             .interval(Duration::from_secs(15))
@@ -753,10 +773,14 @@ fn sse_event(
             serde_json::to_value(presentation).expect("Local presentation must serialize"),
         );
     }
-    Event::default()
-        .id(event.sequence.to_string())
-        .event(event.event_type.clone())
-        .data(serde_json::to_string(&event).expect("Local live event must serialize"))
+    let event_type = event.event_type.clone();
+    let data = serde_json::to_string(&event).expect("Local live event must serialize");
+    let response = Event::default().event(event_type.clone()).data(data);
+    if event_type == "output" {
+        response
+    } else {
+        response.id(event.sequence.to_string())
+    }
 }
 
 fn parse_diff_projection(

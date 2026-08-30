@@ -178,7 +178,8 @@ impl WatchApp {
     }
 
     pub(super) fn should_process_live_event(&mut self, event: &HistoryLiveEvent) -> bool {
-        if event.sequence <= self.last_live_sequence {
+        let control_event = event.event_type != "output";
+        if control_event && event.sequence <= self.last_live_sequence {
             return false;
         }
         let in_scope = event.event_type == "gap"
@@ -189,7 +190,7 @@ impl WatchApp {
                 | WatchScope::All
                 | WatchScope::Unattributed => true,
             };
-        if in_scope {
+        if in_scope && control_event {
             self.last_live_sequence = event.sequence;
         }
         in_scope

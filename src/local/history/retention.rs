@@ -6,7 +6,12 @@ pub(super) const SIZE_RETENTION_BATCH_LIMIT: i64 = 256;
 const RETENTION_VACUUM_PAGE_LIMIT: i64 = 256;
 
 impl HistoryStore {
-    pub(super) fn run_retention(&self, max_age_seconds: u64, max_size_bytes: u64) -> Result<()> {
+    pub(super) fn run_retention(
+        &self,
+        max_age_seconds: u64,
+        max_size_bytes: u64,
+        active_process_invocation_ids: &[i64],
+    ) -> Result<()> {
         let cutoff = now_ms()?.saturating_sub(
             i64::try_from(max_age_seconds)
                 .unwrap_or(i64::MAX)
@@ -17,6 +22,23 @@ impl HistoryStore {
             let transaction = connection
                 .transaction()
                 .context("failed to start age-retention transaction")?;
+            transaction
+                .execute("DELETE FROM active_process_invocations", [])
+                .context("failed to reset Local active-process retention guards")?;
+            {
+                let mut insert = transaction
+                    .prepare("INSERT INTO active_process_invocations(invocation_id) VALUES (?1)")
+                    .context("failed to prepare Local active-process retention guards")?;
+                for invocation_id in active_process_invocation_ids {
+                    insert
+                        .execute([invocation_id])
+                        .with_context(|| {
+                            format!(
+                                "failed to protect active Local process invocation {invocation_id} from retention"
+                            )
+                        })?;
+                }
+            }
             transaction
                 .execute(
                     "DELETE FROM invocations

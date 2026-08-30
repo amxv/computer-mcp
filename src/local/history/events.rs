@@ -12,8 +12,9 @@ use crate::local::presentation::{PRESENTATION_SCHEMA_VERSION, presentation_id_fo
 
 use super::materialized::{HistoryDiffProjection, MaterializedPresentation};
 
-pub(crate) const HISTORY_LIVE_EVENT_SCHEMA_VERSION: u32 = 2;
+pub(crate) const HISTORY_LIVE_EVENT_SCHEMA_VERSION: u32 = 4;
 const DEFAULT_EVENT_CAPACITY: usize = 256;
+const DEFAULT_OUTPUT_EVENT_CAPACITY: usize = 256;
 const LIVE_PRESENTATION_CACHE_MAX_ENTRIES: usize = 128;
 const LIVE_PRESENTATION_CACHE_MAX_BYTES: usize = 32 * 1024 * 1024;
 
@@ -41,17 +42,20 @@ pub(crate) struct HistoryLiveEvent {
 pub(crate) struct HistoryEventHub {
     runtime_id: Arc<str>,
     sequence: AtomicU64,
-    sender: broadcast::Sender<HistoryLiveEvent>,
+    control_sender: broadcast::Sender<HistoryLiveEvent>,
+    output_sender: broadcast::Sender<HistoryLiveEvent>,
     presentations: RwLock<LivePresentationCache>,
 }
 
 impl HistoryEventHub {
     pub(crate) fn new(runtime_id: Arc<str>, capacity: usize) -> Arc<Self> {
-        let (sender, _) = broadcast::channel(capacity.max(1));
+        let (control_sender, _) = broadcast::channel(capacity.max(1));
+        let (output_sender, _) = broadcast::channel(DEFAULT_OUTPUT_EVENT_CAPACITY);
         Arc::new(Self {
             runtime_id,
             sequence: AtomicU64::new(0),
-            sender,
+            control_sender,
+            output_sender,
             presentations: RwLock::new(LivePresentationCache::default()),
         })
     }
@@ -61,20 +65,24 @@ impl HistoryEventHub {
     }
 
     pub(crate) fn subscribe(&self) -> broadcast::Receiver<HistoryLiveEvent> {
-        self.sender.subscribe()
+        self.control_sender.subscribe()
+    }
+
+    pub(crate) fn subscribe_output(&self) -> broadcast::Receiver<HistoryLiveEvent> {
+        self.output_sender.subscribe()
     }
 
     #[cfg(test)]
     pub(crate) fn receiver_count(&self) -> usize {
-        self.sender.receiver_count()
+        self.control_sender.receiver_count()
     }
 
     pub(crate) fn current_sequence(&self) -> u64 {
         self.sequence.load(Ordering::Acquire)
     }
 
-    pub(crate) fn has_subscribers(&self) -> bool {
-        self.sender.receiver_count() > 0
+    pub(crate) fn has_output_subscribers(&self) -> bool {
+        self.output_sender.receiver_count() > 0
     }
 
     pub(crate) fn set_presentation(
@@ -149,10 +157,24 @@ impl HistoryEventHub {
         presentation_revision: Option<u32>,
         payload: impl FnOnce() -> Value,
     ) -> bool {
-        if self.sender.receiver_count() == 0 {
+        let output_event = event_type == "output";
+        let sender = if output_event {
+            &self.output_sender
+        } else {
+            &self.control_sender
+        };
+        if sender.receiver_count() == 0 {
             return false;
         }
-        let sequence = self.sequence.fetch_add(1, Ordering::AcqRel) + 1;
+        // PTY output is intentionally outside the durable control replay
+        // sequence. Its per-invocation chunk sequence provides independent
+        // loss detection/recovery, while lifecycle/presentation events retain
+        // a contiguous sequence that noisy output can never evict or gap.
+        let sequence = if output_event {
+            0
+        } else {
+            self.sequence.fetch_add(1, Ordering::AcqRel) + 1
+        };
         let event = HistoryLiveEvent {
             schema_version: HISTORY_LIVE_EVENT_SCHEMA_VERSION,
             runtime_id: self.runtime_id.to_string(),
@@ -165,7 +187,7 @@ impl HistoryEventHub {
             presentation_revision,
             payload: payload(),
         };
-        self.sender.send(event).is_ok()
+        sender.send(event).is_ok()
     }
 
     pub(crate) fn emit_invocation_completion(

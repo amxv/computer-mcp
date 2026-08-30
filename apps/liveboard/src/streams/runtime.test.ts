@@ -106,7 +106,7 @@ function page(runtimeId: string, records: PresentationRecord[]): ApiTimelinePage
 
 function liveEvent(input: Partial<HistoryLiveEvent> & Pick<HistoryLiveEvent, 'sequence' | 'event_type'>) {
   return {
-    schema_version: input.schema_version ?? 2,
+    schema_version: input.schema_version ?? 4,
     runtime_id: input.runtime_id ?? 'runtime-one',
     sequence: input.sequence,
     emitted_at_ms: input.emitted_at_ms ?? 1_100 + input.sequence,
@@ -434,7 +434,7 @@ describe('runtime connection', () => {
     currentAgents = [agent('c333')]
     sources[0]!.emit(
       liveEvent({
-        schema_version: 2,
+        schema_version: 4,
         runtime_id: 'runtime-two',
         sequence: 1,
         event_type: 'agent_first_seen',

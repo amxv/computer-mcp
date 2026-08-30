@@ -61,7 +61,7 @@ mod tests {
 
     #[test]
     fn sse_decoder_handles_split_chunks_and_crlf() {
-        let json = r#"{"schema_version":2,"runtime_id":"runtime","sequence":7,"emitted_at_ms":1,"event_type":"output","agent_id":"k7m2","invocation_id":3,"presentation_id":"inv-3","presentation_revision":3,"payload":{"text":"ok"}}"#;
+        let json = r#"{"schema_version":4,"runtime_id":"runtime","sequence":0,"emitted_at_ms":1,"event_type":"output","agent_id":"k7m2","invocation_id":3,"presentation_id":"inv-3","presentation_revision":3,"payload":{"chunks":[{"sequence":1,"text":"ok"}]}}"#;
         let payload = format!("id: 7\r\nevent: output\r\ndata: {json}\r\n\r\n");
         let split = payload.len() / 2;
         let mut decoder = SseDecoder::default();
@@ -73,7 +73,7 @@ mod tests {
         );
         let decoded = decoder.push(&payload.as_bytes()[split..]).unwrap();
         assert_eq!(decoded.len(), 1);
-        assert_eq!(decoded[0].sequence, 7);
+        assert_eq!(decoded[0].sequence, 0);
         assert_eq!(decoded[0].agent_id.as_deref(), Some("k7m2"));
         assert_eq!(decoded[0].presentation_id.as_deref(), Some("inv-3"));
     }

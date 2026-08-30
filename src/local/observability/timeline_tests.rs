@@ -551,6 +551,7 @@ async fn recovery_timeline_keeps_old_active_creator_then_drops_it_after_process_
             &OwnedProcessEnd::exited(0, TerminationReason::Exit, workdir.display().to_string()),
         )
         .unwrap();
+    history.flush_for_test().unwrap();
     let ended_response = request(
         &app,
         &format!("/v1/timeline?limit=20&recovery_since_ms={cutoff}"),

@@ -535,28 +535,6 @@ impl HistoryStore {
         Ok(())
     }
 
-    pub(super) fn protect_active_process_invocation(&self, invocation_id: i64) -> Result<()> {
-        self.try_lock_connection()
-            .context("Local history retention guard is busy")?
-            .execute(
-                "INSERT OR IGNORE INTO active_process_invocations(invocation_id) VALUES (?1)",
-                [invocation_id],
-            )
-            .context("failed to protect active Local process invocation from retention")?;
-        Ok(())
-    }
-
-    pub(super) fn unprotect_active_process_invocation(&self, invocation_id: i64) -> Result<()> {
-        self.try_lock_connection()
-            .context("Local history retention guard is busy")?
-            .execute(
-                "DELETE FROM active_process_invocations WHERE invocation_id = ?1",
-                [invocation_id],
-            )
-            .context("failed to release active Local process invocation retention guard")?;
-        Ok(())
-    }
-
     pub(super) fn pending_capture_ids(&self) -> Result<Vec<i64>> {
         let connection = self.lock_connection();
         let mut statement = connection
@@ -600,14 +578,6 @@ impl HistoryStore {
         self.connection
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-
-    fn try_lock_connection(&self) -> Result<MutexGuard<'_, Connection>> {
-        match self.connection.try_lock() {
-            Ok(connection) => Ok(connection),
-            Err(TryLockError::Poisoned(poisoned)) => Ok(poisoned.into_inner()),
-            Err(TryLockError::WouldBlock) => bail!("Local history background writer is busy"),
-        }
     }
 
     fn lock_foreground_gate(&self) -> Result<MutexGuard<'_, ()>> {

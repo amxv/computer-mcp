@@ -622,6 +622,95 @@ fn legacy_orphan_polls_remain_one_conservative_stable_aggregate() {
 }
 
 #[test]
+fn focused_timeline_filters_roots_before_hydration_without_changing_cross_agent_ownership() {
+    let dir = tempdir().unwrap();
+    let database = dir.path().join("history.sqlite3");
+    let history = open_history(&database, "runtime-focused-roots");
+
+    let command = history
+        .begin(
+            provider_context("focused-agent-a"),
+            InvocationStart::new("exec_command", json!({"cmd":"long-running"})),
+        )
+        .unwrap();
+    let command_id = command.invocation_id.unwrap();
+    let agent_a = command.agent_id.clone().unwrap().to_string();
+    complete(
+        &history,
+        &command,
+        json!({"status":"running","session_handle":"focused-command"}),
+    );
+
+    let attached_from_b = begin_poll(
+        &history,
+        provider_context("focused-agent-b"),
+        &command,
+        "focused-command",
+    );
+    let agent_b = attached_from_b.agent_id.clone().unwrap().to_string();
+    complete(&history, &attached_from_b, json!({"status":"running"}));
+
+    let orphan_a = history
+        .begin(
+            provider_context("focused-agent-a"),
+            InvocationStart::new(
+                "write_stdin",
+                json!({"session_handle":"shared-orphan","chars":"","kill_process":false}),
+            )
+            .with_continuation_kind(InvocationContinuationKind::Poll),
+        )
+        .unwrap();
+    complete(&history, &orphan_a, json!({"status":"running"}));
+    let orphan_b = history
+        .begin(
+            provider_context("focused-agent-b"),
+            InvocationStart::new(
+                "write_stdin",
+                json!({"session_handle":"shared-orphan","chars":"","kill_process":false}),
+            )
+            .with_continuation_kind(InvocationContinuationKind::Poll),
+        )
+        .unwrap();
+    complete(&history, &orphan_b, json!({"status":"exited"}));
+    history.flush_for_test().unwrap();
+
+    let focused = |agent_id: String| HistoryTimelineQuery {
+        limit: 20,
+        cursor: None,
+        agent_id: Some(agent_id),
+        normalized_workdir: None,
+        diff_projection: HistoryDiffProjection::Full,
+        mode: HistoryTimelineMode::History { before_ms: None },
+    };
+    let page_a = LocalHistoryReader::timeline(&database, &focused(agent_a)).unwrap();
+    assert_eq!(page_a.records.len(), 1);
+    assert_eq!(page_a.records[0].primary_invocation_id, command_id);
+    match &page_a.records[0].kind {
+        PresentationKind::Command { polls, .. } => {
+            assert_eq!(polls.as_ref().unwrap().count, 1);
+        }
+        other => panic!("expected focused command root, got {other:?}"),
+    }
+
+    let page_b = LocalHistoryReader::timeline(&database, &focused(agent_b)).unwrap();
+    assert_eq!(
+        page_b.records.len(),
+        1,
+        "Agent B owns the shared legacy orphan aggregate, but not Agent A's attached command root"
+    );
+    assert_eq!(
+        page_b.records[0].primary_invocation_id,
+        orphan_a.invocation_id.unwrap()
+    );
+    match &page_b.records[0].kind {
+        PresentationKind::PollAggregate { count, .. } => assert_eq!(*count, 2),
+        other => panic!("expected focused orphan aggregate, got {other:?}"),
+    }
+
+    history.shutdown_blocking().unwrap();
+}
+
+#[test]
 fn display_output_replays_split_terminal_state_and_fails_closed_on_missing_sequence() {
     let dir = tempdir().unwrap();
     let database = dir.path().join("history.sqlite3");

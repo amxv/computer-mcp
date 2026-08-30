@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde_json::Value;
 
-pub const HISTORY_SCHEMA_VERSION: u32 = 7;
+pub const HISTORY_SCHEMA_VERSION: u32 = 8;
 
 pub(super) const SCHEMA_V1: &str = r#"
 CREATE TABLE agents (
@@ -265,6 +265,15 @@ CREATE TABLE mcp_context_workdir_skills (
 ) WITHOUT ROWID;
 "#;
 
+pub(super) const SCHEMA_V8: &str = r#"
+CREATE INDEX invocations_orphan_poll_handle_started_idx
+ON invocations(target_session_handle, started_at_ms DESC, id DESC)
+WHERE tool_name = 'write_stdin'
+  AND continuation_kind = 'poll'
+  AND target_created_by_invocation_id IS NULL
+  AND target_session_handle IS NOT NULL;
+"#;
+
 pub(super) const WRITER_BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
 
 pub(super) fn configure_writer(connection: &Connection) -> Result<()> {
@@ -440,6 +449,22 @@ pub(super) fn initialize_or_migrate(connection: &mut Connection) -> Result<()> {
         transaction
             .commit()
             .context("failed to commit Local history schema v7")?;
+        version = 7;
+    }
+
+    if version == 7 {
+        let transaction = connection
+            .transaction()
+            .context("failed to start Local history schema-v8 transaction")?;
+        transaction
+            .execute_batch(SCHEMA_V8)
+            .context("failed to create Local history schema v8")?;
+        transaction
+            .pragma_update(None, "user_version", 8)
+            .context("failed to publish Local history schema version 8")?;
+        transaction
+            .commit()
+            .context("failed to commit Local history schema v8")?;
     }
 
     let version = user_version(connection)?;

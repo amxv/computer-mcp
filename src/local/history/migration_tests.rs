@@ -55,6 +55,15 @@ fn schema_v1_migrates_forward_to_current_file_evidence_schema() {
         )
         .unwrap();
     assert_eq!(materialization_table_count, 1);
+    let orphan_poll_index_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master
+             WHERE type = 'index' AND name = 'invocations_orphan_poll_handle_started_idx'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(orphan_poll_index_count, 1);
 }
 
 #[test]

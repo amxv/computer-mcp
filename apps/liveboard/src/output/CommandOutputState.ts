@@ -51,20 +51,41 @@ export class CommandOutputState {
     displayState?: string,
     displayReason?: string,
   ) {
-    const result = this.buffer.append(sequence, text)
-    if (result.sequenceGap) this.recoveryNeeded = true
+    return this.appendLiveBatch([{ sequence, text }], displayState, displayReason)
+  }
+
+  appendLiveBatch(
+    chunks: ReadonlyArray<{ sequence: number; text: string }>,
+    displayState?: string,
+    displayReason?: string,
+  ) {
+    let added = false
+    let duplicate = chunks.length > 0
+    let sequenceGap = false
+    for (const chunk of chunks) {
+      const result = this.buffer.append(chunk.sequence, chunk.text)
+      added ||= result.added
+      duplicate &&= result.duplicate
+      sequenceGap ||= result.sequenceGap
+    }
+    if (sequenceGap) this.recoveryNeeded = true
     this.updateDisplayState(displayState, displayReason)
-    if (result.added || displayState === 'unavailable') this.notify()
+    if (added || displayState === 'unavailable') this.notify()
     if (this.recoveryNeeded && this.subscribers.size > 0) {
       this.requestRecentTail()
     }
-    return result
+    return { added, duplicate, sequenceGap }
   }
 
   markComplete(displayState?: string, displayReason?: string) {
     this.complete = true
+    // EOF is the authoritative point at which the durable output tail is
+    // complete. Reconcile once even when no later live chunk exists to expose
+    // a dropped tail on the independent ephemeral output channel.
+    this.recoveryNeeded = true
     this.updateDisplayState(displayState, displayReason)
     this.notify()
+    if (this.subscribers.size > 0) this.requestRecentTail()
   }
 
   markRecoveryNeeded() {
