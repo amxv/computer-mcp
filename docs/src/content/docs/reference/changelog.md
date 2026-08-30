@@ -10,7 +10,13 @@ This changelog tracks code and product changes in zodex. It intentionally skips 
 
 ## Unreleased
 
+## 0.3.15 — 2026-08-30
+
 - Added default-on, independently configurable repo-local skill discovery for Zodex Local. On the first successful invocation in an exact workdir, Local can advertise parsed skills found under `<workdir>/.agents/skills` once per ChatGPT conversation/workdir without traversing parent directories or changing the underlying tool result.
+- Made focused Liveboard history loading dramatically faster by filtering canonical history roots before hydration and adding an index for legacy orphan-poll grouping, eliminating multi-second timeline queries that could hit the observer proxy timeout.
+- Hardened live command lifecycle delivery so process completion, poll-count refreshes, and presentation updates use a priority/coalesced control path instead of lossy queue writes; terminal state now converges promptly even under heavy output.
+- Split ephemeral PTY output from durable Liveboard control events, batch live output updates, and reconcile the final durable output tail at EOF so noisy commands cannot evict lifecycle events or leave the UI missing the last output chunk.
+- Removed the active-process retention lock race by deriving retention protection from the worker's in-memory lifecycle state, and made Liveboard GETs retry transient observer failures while surfacing the backend error message when recovery still fails.
 
 ## 0.3.14 — 2026-08-28
 
