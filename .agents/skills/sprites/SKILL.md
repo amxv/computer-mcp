@@ -1,6 +1,6 @@
 ---
 name: sprites
-description: Operate Zodex Sprite workspaces safely: identify the right user and service boundary, inspect current Sprite state, checkpoint before risky changes, and use the mode-first Zodex operator commands.
+description: "Operate Zodex Sprite workspaces safely: identify the right user and service boundary, inspect current Sprite state, checkpoint before risky changes, and use the mode-first Zodex operator commands."
 ---
 
 # Sprites
