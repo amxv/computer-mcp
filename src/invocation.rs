@@ -10,7 +10,8 @@ pub struct InvocationContext {
     pub provider: Option<ProviderCallMetadata>,
     pub agent_id: Option<Arc<str>>,
     pub global_context_pending: bool,
-    pub repo_context_pending: bool,
+    pub repo_agents_context_pending: bool,
+    pub repo_skills_context_pending: bool,
 }
 
 impl InvocationContext {

@@ -73,6 +73,7 @@ fn zodex_local_config_set_get_persists_non_secret_values() {
         ("history.max-age", "2d"),
         ("history.max-size", "1gb"),
         ("context.repo-agents", "false"),
+        ("context.repo-skills", "false"),
         ("context.skills.codex", "false"),
     ] {
         let output = fixture

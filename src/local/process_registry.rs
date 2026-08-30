@@ -493,7 +493,8 @@ mod tests {
                 provider: None,
                 agent_id: Some("k7m2".into()),
                 global_context_pending: false,
-                repo_context_pending: false,
+                repo_agents_context_pending: false,
+                repo_skills_context_pending: false,
             },
         }
     }

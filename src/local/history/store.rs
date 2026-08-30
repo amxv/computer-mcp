@@ -137,6 +137,26 @@ impl HistoryStore {
         .context("failed to claim one-time Local Agent workdir context check")
     }
 
+    pub(super) fn claim_repo_skills_check(
+        &self,
+        provider: &ProviderCallMetadata,
+        normalized_workdir: &str,
+    ) -> Result<bool> {
+        let now = now_ms()?;
+        let provider_fingerprint = provider_fingerprint(provider);
+        let workdir_fingerprint = value_fingerprint(normalized_workdir.as_bytes());
+        self.with_foreground_connection(|connection| {
+            let changed = connection.execute(
+                "INSERT OR IGNORE INTO mcp_context_workdir_skills(
+                    provider_fingerprint, workdir_fingerprint, repo_skills_checked_at_ms
+                 ) VALUES (?1, ?2, ?3)",
+                params![provider_fingerprint, workdir_fingerprint, now],
+            )?;
+            Ok(changed == 1)
+        })
+        .context("failed to claim one-time Local Agent repo-skill context check")
+    }
+
     #[cfg(test)]
     pub(super) fn begin(
         &self,
@@ -187,12 +207,21 @@ impl HistoryStore {
         let declared_workdir_normalized = declared_workdir_exact
             .as_deref()
             .and_then(normalize_declared_workdir);
-        context.repo_context_pending = match (
+        context.repo_agents_context_pending = match (
             context.provider.as_ref(),
             declared_workdir_normalized.as_deref(),
         ) {
             (Some(provider), Some(workdir)) => {
-                agent_repo_context_pending(&transaction, provider, workdir)?
+                agent_repo_agents_context_pending(&transaction, provider, workdir)?
+            }
+            _ => false,
+        };
+        context.repo_skills_context_pending = match (
+            context.provider.as_ref(),
+            declared_workdir_normalized.as_deref(),
+        ) {
+            (Some(provider), Some(workdir)) => {
+                agent_repo_skills_context_pending(&transaction, provider, workdir)?
             }
             _ => false,
         };
@@ -753,7 +782,7 @@ fn agent_global_context_pending(
         .context("failed to inspect Local Agent global-context delivery state")
 }
 
-fn agent_repo_context_pending(
+fn agent_repo_agents_context_pending(
     transaction: &Transaction<'_>,
     provider: &ProviderCallMetadata,
     normalized_workdir: &str,
@@ -769,6 +798,25 @@ fn agent_repo_context_pending(
         )
         .optional()
         .context("failed to inspect Local Agent workdir-context delivery state")?;
+    Ok(existing.is_none())
+}
+
+fn agent_repo_skills_context_pending(
+    transaction: &Transaction<'_>,
+    provider: &ProviderCallMetadata,
+    normalized_workdir: &str,
+) -> Result<bool> {
+    let provider_fingerprint = provider_fingerprint(provider);
+    let workdir_fingerprint = value_fingerprint(normalized_workdir.as_bytes());
+    let existing: Option<i64> = transaction
+        .query_row(
+            "SELECT repo_skills_checked_at_ms FROM mcp_context_workdir_skills
+             WHERE provider_fingerprint = ?1 AND workdir_fingerprint = ?2",
+            params![provider_fingerprint, workdir_fingerprint],
+            |row| row.get(0),
+        )
+        .optional()
+        .context("failed to inspect Local Agent repo-skill delivery state")?;
     Ok(existing.is_none())
 }
 

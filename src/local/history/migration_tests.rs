@@ -5,7 +5,7 @@ use tempfile::tempdir;
 
 use super::query::{HistoryQuery, LocalHistoryReader};
 use super::schema::{
-    HISTORY_SCHEMA_VERSION, SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5,
+    HISTORY_SCHEMA_VERSION, SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6,
 };
 use super::store::HistoryStore;
 
@@ -359,4 +359,51 @@ fn schema_v5_migrates_to_context_delivery_state() {
         )
         .unwrap();
     assert_eq!(workdir_table_count, 1);
+    let repo_skills_table_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master
+             WHERE type = 'table' AND name = 'mcp_context_workdir_skills'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(repo_skills_table_count, 1);
+}
+
+#[test]
+fn schema_v6_migrates_to_repo_skill_delivery_state() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("history.sqlite3");
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .pragma_update(None, "auto_vacuum", "INCREMENTAL")
+        .unwrap();
+    let _: String = connection
+        .query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))
+        .unwrap();
+    connection.execute_batch(SCHEMA_V1).unwrap();
+    connection.execute_batch(SCHEMA_V2).unwrap();
+    connection.execute_batch(SCHEMA_V3).unwrap();
+    connection.execute_batch(SCHEMA_V4).unwrap();
+    connection.execute_batch(SCHEMA_V5).unwrap();
+    connection.execute_batch(SCHEMA_V6).unwrap();
+    connection.pragma_update(None, "user_version", 6).unwrap();
+    drop(connection);
+
+    let store = HistoryStore::open(path.clone(), Arc::from("migration-runtime")).unwrap();
+    drop(store);
+    let connection = Connection::open(path).unwrap();
+    let version: u32 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, HISTORY_SCHEMA_VERSION);
+    let repo_skills_table_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master
+             WHERE type = 'table' AND name = 'mcp_context_workdir_skills'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(repo_skills_table_count, 1);
 }

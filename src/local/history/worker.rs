@@ -328,6 +328,15 @@ impl LocalHistoryRuntime {
             .claim_repo_agents_check(provider, normalized_workdir)
     }
 
+    pub(crate) fn claim_repo_skills_check(
+        &self,
+        provider: &ProviderCallMetadata,
+        normalized_workdir: &str,
+    ) -> Result<bool> {
+        self.store
+            .claim_repo_skills_check(provider, normalized_workdir)
+    }
+
     pub fn active_process_counts(&self) -> HashMap<String, u64> {
         self.active_process_counts
             .lock()

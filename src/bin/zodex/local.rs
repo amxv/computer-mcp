@@ -139,7 +139,7 @@ enum LocalConfigCommand {
     #[command(after_help = "Examples:\n  zodex local config get\n  zodex local config get history.max-age\n  zodex local config get context.skills.paths")]
     Get { key: Option<String> },
     /// Persist one non-secret setting. Context settings are live; others require Local stopped.
-    #[command(after_help = "Examples:\n  zodex local config set context.enabled false\n  zodex local config set context.skills.codex false\n  zodex local config set context.skills.paths '[\"~/team-skills\"]'\n  zodex local config set history.max-age 60d\n  zodex local config set tunnel.id <tunnel-id>\n\nContext settings can be changed while Local is running. Tunnel and history settings still require Local to be stopped.")]
+    #[command(after_help = "Examples:\n  zodex local config set context.enabled false\n  zodex local config set context.repo-skills false\n  zodex local config set context.skills.codex false\n  zodex local config set context.skills.paths '[\"~/team-skills\"]'\n  zodex local config set history.max-age 60d\n  zodex local config set tunnel.id <tunnel-id>\n\nContext settings can be changed while Local is running. Tunnel and history settings still require Local to be stopped.")]
     Set { key: String, value: String },
 }
 

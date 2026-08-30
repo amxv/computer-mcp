@@ -24,6 +24,7 @@ pub struct LocalContextConfig {
     pub enabled: bool,
     pub global_agents: bool,
     pub repo_agents: bool,
+    pub repo_skills: bool,
     pub skills: LocalContextSkillsConfig,
 }
 
@@ -33,6 +34,7 @@ impl Default for LocalContextConfig {
             enabled: true,
             global_agents: true,
             repo_agents: true,
+            repo_skills: true,
             skills: LocalContextSkillsConfig::default(),
         }
     }
@@ -153,6 +155,7 @@ impl LocalConfig {
             "context.enabled" => self.context.enabled = parse_bool(value)?,
             "context.global-agents" => self.context.global_agents = parse_bool(value)?,
             "context.repo-agents" => self.context.repo_agents = parse_bool(value)?,
+            "context.repo-skills" => self.context.repo_skills = parse_bool(value)?,
             "context.skills.enabled" => self.context.skills.enabled = parse_bool(value)?,
             "context.skills.agents" => self.context.skills.agents = parse_bool(value)?,
             "context.skills.codex" => self.context.skills.codex = parse_bool(value)?,
@@ -171,6 +174,7 @@ impl LocalConfig {
         key == "context.enabled"
             || key == "context.global-agents"
             || key == "context.repo-agents"
+            || key == "context.repo-skills"
             || key.starts_with("context.skills.")
     }
 
@@ -181,6 +185,7 @@ impl LocalConfig {
             "context.enabled" => Ok(self.context.enabled.to_string()),
             "context.global-agents" => Ok(self.context.global_agents.to_string()),
             "context.repo-agents" => Ok(self.context.repo_agents.to_string()),
+            "context.repo-skills" => Ok(self.context.repo_skills.to_string()),
             "context.skills.enabled" => Ok(self.context.skills.enabled.to_string()),
             "context.skills.agents" => Ok(self.context.skills.agents.to_string()),
             "context.skills.codex" => Ok(self.context.skills.codex.to_string()),
@@ -277,6 +282,7 @@ mod tests {
         assert_eq!(config.get("context.enabled").unwrap(), "true");
         assert_eq!(config.get("context.global-agents").unwrap(), "true");
         assert_eq!(config.get("context.repo-agents").unwrap(), "true");
+        assert_eq!(config.get("context.repo-skills").unwrap(), "true");
         assert_eq!(config.get("context.skills.enabled").unwrap(), "true");
         assert_eq!(config.get("context.skills.agents").unwrap(), "true");
         assert_eq!(config.get("context.skills.codex").unwrap(), "true");
@@ -286,6 +292,7 @@ mod tests {
         config.set("history.max-age", "2d").unwrap();
         config.set("history.max-size", "1gb").unwrap();
         config.set("context.repo-agents", "off").unwrap();
+        config.set("context.repo-skills", "off").unwrap();
         config
             .set(
                 "context.skills.paths",
@@ -311,6 +318,7 @@ mod tests {
         assert!(raw.contains("max_age = \"2d\""));
         assert!(raw.contains("max_size = \"1gb\""));
         assert!(raw.contains("repo_agents = false"));
+        assert!(raw.contains("repo_skills = false"));
         assert!(raw.contains("/opt/team-skills"));
         assert!(!raw.contains("api_key"));
         assert!(!raw.contains("runtime_key"));
@@ -341,11 +349,21 @@ mod tests {
     }
 
     #[test]
+    fn legacy_context_config_defaults_repo_skills_on() {
+        let config = toml::from_str::<LocalConfig>(
+            "[context]\nenabled = true\nglobal_agents = true\nrepo_agents = true\n",
+        )
+        .unwrap();
+        assert!(config.context.repo_skills);
+    }
+
+    #[test]
     fn only_context_settings_are_live_mutable() {
         for key in [
             "context.enabled",
             "context.global-agents",
             "context.repo-agents",
+            "context.repo-skills",
             "context.skills.enabled",
             "context.skills.agents",
             "context.skills.codex",

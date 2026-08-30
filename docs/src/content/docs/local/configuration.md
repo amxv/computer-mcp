@@ -29,6 +29,7 @@ Context settings can be changed while Local is running:
 ```bash
 zodex local config set context.enabled false
 zodex local config set context.repo-agents false
+zodex local config set context.repo-skills false
 zodex local config set context.skills.codex false
 ```
 
@@ -55,6 +56,7 @@ The defaults are:
 enabled = true
 global_agents = true
 repo_agents = true
+repo_skills = true
 
 [context.skills]
 enabled = true
@@ -164,13 +166,42 @@ Disable workdir hints with:
 zodex local config set context.repo-agents false
 ```
 
+### Workdir repo-local skills
+
+For `exec_command` and `apply_patch`, Local also checks the exact absolute `workdir` supplied by ChatGPT for:
+
+```text
+<workdir>/.agents/skills
+```
+
+There is no parent-directory or repository-root traversal. Only the `.agents/skills` directory directly under the requested workdir is considered.
+
+On the first successful Zodex invocation by an Agent in that workdir, Local discovers skills with the same parser and bounded recursive scanner used by the global skill catalog. If valid skills are present, the result gets one compact catalog such as:
+
+```text
+Repo-local skills in /Users/me/code/project:
+- review — Review this repository's changes. — /Users/me/code/project/.agents/skills/review/SKILL.md
+```
+
+Only each skill's parsed `name`, `description`, and `SKILL.md` path are included; skill bodies are not injected. Entries with the same normalized `name` and `description` are listed once.
+
+The check is performed at most once for that Agent and normalized workdir, independently from the workdir `AGENTS` check. If the directory is missing or contains no parseable skills, nothing is appended and the repo-skill check is still considered consumed. A Zodex/tool execution failure does not consume the check, so a later successful invocation can still receive the catalog. A command that runs normally and exits non-zero still counts as a successful invocation of the workdir.
+
+Disable repo-local skill discovery independently while keeping the global skill catalog enabled:
+
+```bash
+zodex local config set context.repo-skills false
+```
+
+`context.skills.*` controls the conversation-global skill catalog and its global discovery roots. `context.repo-skills` controls this exact-workdir `.agents/skills` catalog separately.
+
 ### Turn all automatic context off
 
 ```bash
 zodex local config set context.enabled false
 ```
 
-This master switch suppresses global instructions, the global skill catalog, and workdir hints without changing the individual settings underneath it.
+This master switch suppresses global instructions, the global skill catalog, workdir `AGENTS` hints, and workdir repo-local skills without changing the individual settings underneath it.
 
 The global instructions/skills block is delivered at most once per ChatGPT conversation. Zodex keeps only small hashed delivery markers for this purpose, so restarting Local or pruning old Local history does not make the context repeat and does not require retaining the raw OpenAI session key or old workdir path in the delivery-state tables.
 

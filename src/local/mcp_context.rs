@@ -56,18 +56,7 @@ impl LocalMcpContextProvider {
         }
         if config.context.skills.enabled {
             let skills = self.skill_catalog(config);
-            if !skills.is_empty() {
-                let mut section = String::from("Global skills on this machine:\n");
-                for skill in skills {
-                    section.push_str("- ");
-                    section.push_str(&skill.name);
-                    section.push_str(" — ");
-                    section.push_str(&skill.description);
-                    section.push_str(" — ");
-                    section.push_str(&skill.path.display().to_string());
-                    section.push('\n');
-                }
-                section.pop();
+            if let Some(section) = render_skill_catalog("Global skills on this machine:", &skills) {
                 sections.push(section);
             }
         }
@@ -126,26 +115,14 @@ impl LocalMcpContextProvider {
             }
         }
 
-        let mut entries = Vec::new();
-        let mut seen_skills = HashSet::new();
-        let mut seen_dirs = HashSet::new();
-        for (root, follow_symlinks) in roots {
-            let mut scanned_dirs = 0usize;
-            scan_skill_root(
-                &root,
-                0,
-                follow_symlinks,
-                &mut scanned_dirs,
-                &mut seen_dirs,
-                &mut seen_skills,
-                &mut entries,
-            );
-        }
-        entries.sort_by(|left, right| {
-            left.name
-                .cmp(&right.name)
-                .then_with(|| left.path.cmp(&right.path))
-        });
+        scan_skill_roots(roots)
+    }
+
+    fn repo_skill_catalog(&self, workdir: &Path) -> Vec<SkillCatalogEntry> {
+        let mut entries = scan_skill_roots([(workdir.join(".agents/skills"), true)]);
+        let mut seen_metadata = HashSet::new();
+        entries
+            .retain(|entry| seen_metadata.insert((entry.name.clone(), entry.description.clone())));
         entries
     }
 }
@@ -161,7 +138,9 @@ impl McpResultContextProvider for LocalMcpContextProvider {
             return Ok(None);
         };
         if !context.global_context_pending
-            && !(tool_succeeded && context.repo_context_pending && workdir.is_some())
+            && !(tool_succeeded
+                && (context.repo_agents_context_pending || context.repo_skills_context_pending)
+                && workdir.is_some())
         {
             return Ok(None);
         }
@@ -180,19 +159,36 @@ impl McpResultContextProvider for LocalMcpContextProvider {
             }
         }
 
-        if context.repo_context_pending
-            && tool_succeeded
-            && config.context.repo_agents
+        if tool_succeeded
+            && ((context.repo_agents_context_pending && config.context.repo_agents)
+                || (context.repo_skills_context_pending && config.context.repo_skills))
             && let Some(workdir) = workdir
             && let Some(normalized_workdir) = normalize_declared_workdir(workdir)
         {
-            let instruction = repo_instruction_filename(Path::new(workdir));
-            if self
-                .history
-                .claim_repo_agents_check(provider, &normalized_workdir)?
-                && let Some(filename) = instruction
+            let workdir_path = Path::new(workdir);
+
+            if context.repo_agents_context_pending
+                && config.context.repo_agents
+                && self
+                    .history
+                    .claim_repo_agents_check(provider, &normalized_workdir)?
+                && let Some(filename) = repo_instruction_filename(workdir_path)
             {
                 sections.push(format!("{workdir} contains an {filename}."));
+            }
+
+            if context.repo_skills_context_pending && config.context.repo_skills {
+                let repo_skills = self.repo_skill_catalog(workdir_path);
+                if self
+                    .history
+                    .claim_repo_skills_check(provider, &normalized_workdir)?
+                    && let Some(section) = render_skill_catalog(
+                        &format!("Repo-local skills in {workdir}:"),
+                        &repo_skills,
+                    )
+                {
+                    sections.push(section);
+                }
             }
         }
 
@@ -205,6 +201,49 @@ struct SkillCatalogEntry {
     name: String,
     description: String,
     path: PathBuf,
+}
+
+fn scan_skill_roots(roots: impl IntoIterator<Item = (PathBuf, bool)>) -> Vec<SkillCatalogEntry> {
+    let mut entries = Vec::new();
+    let mut seen_skills = HashSet::new();
+    let mut seen_dirs = HashSet::new();
+    for (root, follow_symlinks) in roots {
+        let mut scanned_dirs = 0usize;
+        scan_skill_root(
+            &root,
+            0,
+            follow_symlinks,
+            &mut scanned_dirs,
+            &mut seen_dirs,
+            &mut seen_skills,
+            &mut entries,
+        );
+    }
+    entries.sort_by(|left, right| {
+        left.name
+            .cmp(&right.name)
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    entries
+}
+
+fn render_skill_catalog(heading: &str, skills: &[SkillCatalogEntry]) -> Option<String> {
+    if skills.is_empty() {
+        return None;
+    }
+    let mut section = String::from(heading);
+    section.push('\n');
+    for skill in skills {
+        section.push_str("- ");
+        section.push_str(&skill.name);
+        section.push_str(" — ");
+        section.push_str(&skill.description);
+        section.push_str(" — ");
+        section.push_str(&skill.path.display().to_string());
+        section.push('\n');
+    }
+    section.pop();
+    Some(section)
 }
 
 fn scan_skill_root(
@@ -680,6 +719,103 @@ mod tests {
     }
 
     #[test]
+    fn repo_skills_are_exact_workdir_deduplicated_and_independently_toggleable() {
+        let dir = tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        let child = repo.join("child");
+        let skills = repo.join(".agents/skills");
+        fs::create_dir_all(skills.join("demo")).unwrap();
+        fs::create_dir_all(skills.join("duplicate")).unwrap();
+        fs::create_dir_all(skills.join("variant")).unwrap();
+        fs::create_dir_all(&child).unwrap();
+        let skill = "---\nname: demo\ndescription: Demo skill.\n---\n";
+        fs::write(skills.join("demo/SKILL.md"), skill).unwrap();
+        fs::write(skills.join("duplicate/SKILL.md"), skill).unwrap();
+        fs::write(
+            skills.join("variant/SKILL.md"),
+            "---\nname: demo\ndescription: Different description.\n---\n",
+        )
+        .unwrap();
+
+        let config_path = dir.path().join("local.toml");
+        let mut config = LocalConfig::default();
+        config.context.global_agents = false;
+        config.context.repo_agents = false;
+        config.context.repo_skills = false;
+        config.context.skills.enabled = false;
+        config.save(&config_path).unwrap();
+        let history = LocalHistoryRuntime::open(LocalHistoryRuntimeConfig::new(
+            dir.path().join("history.sqlite3"),
+            "context-test-runtime",
+            365 * 24 * 60 * 60,
+            1024 * 1024 * 1024,
+        ))
+        .unwrap();
+        let invocation_for = |workdir: &std::path::Path| {
+            InvocationEvidenceRecorder::begin(
+                history.as_ref(),
+                InvocationContext::default().with_provider(ProviderCallMetadata::new(
+                    "openai/session",
+                    "conversation-repo-skills",
+                )),
+                InvocationStart::new(
+                    "exec_command",
+                    json!({"cmd":"true","workdir":workdir.display().to_string()}),
+                ),
+            )
+            .unwrap()
+        };
+        let repo_invocation = invocation_for(&repo);
+        let provider = LocalMcpContextProvider::new(config_path.clone(), &[], history.clone());
+
+        assert!(
+            provider
+                .appended_context(&repo_invocation, repo.to_str(), true)
+                .unwrap()
+                .is_none(),
+            "disabled repo skills must not inject or consume the workdir skill check"
+        );
+
+        config.context.repo_skills = true;
+        config.save(&config_path).unwrap();
+        assert!(
+            provider
+                .appended_context(&repo_invocation, repo.to_str(), false)
+                .unwrap()
+                .is_none(),
+            "failed tool invocations must not consume repo-local skill context"
+        );
+        let context = provider
+            .appended_context(&repo_invocation, repo.to_str(), true)
+            .unwrap()
+            .unwrap();
+        assert!(context.contains(&format!("Repo-local skills in {}:", repo.display())));
+        assert_eq!(context.matches("demo — Demo skill.").count(), 1);
+        assert_eq!(context.matches("demo — Different description.").count(), 1);
+        assert!(context.contains("/.agents/skills/demo/SKILL.md"));
+        assert!(
+            provider
+                .appended_context(&repo_invocation, repo.to_str(), true)
+                .unwrap()
+                .is_none(),
+            "repo skills must be injected at most once per conversation and normalized workdir"
+        );
+        let repo_again = invocation_for(&repo);
+        assert!(!repo_again.repo_skills_context_pending);
+
+        let child_invocation = invocation_for(&child);
+        assert!(
+            provider
+                .appended_context(&child_invocation, child.to_str(), true)
+                .unwrap()
+                .is_none(),
+            "repo skill discovery must not walk up from the exact requested workdir"
+        );
+
+        history.shutdown_blocking().unwrap();
+    }
+
+    #[test]
     fn delivered_context_survives_local_runtime_restart() {
         let dir = tempdir().unwrap();
         let codex_home = dir.path().join("codex");
@@ -762,7 +898,8 @@ mod tests {
         )
         .unwrap();
         assert!(!second_invocation.global_context_pending);
-        assert!(!second_invocation.repo_context_pending);
+        assert!(!second_invocation.repo_agents_context_pending);
+        assert!(!second_invocation.repo_skills_context_pending);
         let second_provider =
             LocalMcpContextProvider::new(config_path, &environment, second_runtime.clone());
         assert!(
