@@ -596,6 +596,103 @@ fn locked_database_degrades_history_without_poisoning_later_envelopes() {
 }
 
 #[test]
+fn brief_sqlite_writer_contention_does_not_drop_an_invocation_envelope() {
+    let dir = tempdir().unwrap();
+    let path = history_path(dir.path());
+    let runtime = LocalHistoryRuntime::open(LocalHistoryRuntimeConfig::new(
+        path.clone(),
+        "runtime",
+        365 * 86_400,
+        1024 * 1024 * 1024,
+    ))
+    .unwrap();
+    let barrier = Arc::new(Barrier::new(2));
+    let locker_path = path.clone();
+    let locker_barrier = barrier.clone();
+    let locker = std::thread::spawn(move || {
+        let connection = Connection::open(locker_path).unwrap();
+        connection.execute_batch("BEGIN IMMEDIATE").unwrap();
+        locker_barrier.wait();
+        std::thread::sleep(Duration::from_millis(20));
+        connection.execute_batch("ROLLBACK").unwrap();
+    });
+    barrier.wait();
+
+    let started = Instant::now();
+    let context = runtime
+        .begin(
+            provider_context("provider", "brief-contention-envelope"),
+            patch_start(dir.path(), "must survive brief writer contention"),
+        )
+        .expect("brief SQLite writer contention should be absorbed");
+    assert!(
+        started.elapsed() < Duration::from_millis(350),
+        "bounded history admission waited too long: {:?}",
+        started.elapsed()
+    );
+    locker.join().unwrap();
+    runtime
+        .complete(&context, InvocationOutcome::Success(json!({"ok":true})))
+        .unwrap();
+    runtime.flush_for_test().unwrap();
+    runtime.shutdown_blocking().unwrap();
+
+    let record = LocalHistoryReader::query(
+        &path,
+        &HistoryQuery {
+            last: 1,
+            invocation_id: context.invocation_id,
+            ..HistoryQuery::default()
+        },
+    )
+    .unwrap()
+    .pop()
+    .expect("briefly contended invocation should remain observable");
+    assert_eq!(record.evidence_state, "complete");
+}
+
+#[test]
+fn concurrent_foreground_invocation_burst_keeps_every_envelope() {
+    let dir = tempdir().unwrap();
+    let path = history_path(dir.path());
+    let store = Arc::new(HistoryStore::open(path, Arc::from("runtime")).unwrap());
+    let workdir = dir.path().to_path_buf();
+    let workers = 8;
+    let barrier = Arc::new(Barrier::new(workers + 1));
+    let mut handles = Vec::with_capacity(workers);
+    for index in 0..workers {
+        let store = store.clone();
+        let workdir = workdir.clone();
+        let barrier = barrier.clone();
+        handles.push(std::thread::spawn(move || {
+            let correlation = format!("concurrent-envelope-{index}");
+            let marker = format!("parallel patch {index}");
+            barrier.wait();
+            store.begin(
+                provider_context("parallel-provider", &correlation),
+                patch_start(&workdir, &marker),
+            )
+        }));
+    }
+    barrier.wait();
+
+    let mut invocation_ids = handles
+        .into_iter()
+        .map(|handle| {
+            handle
+                .join()
+                .expect("foreground history thread panicked")
+                .expect("ordinary concurrent invocation burst should remain observable")
+                .invocation_id
+                .expect("persisted invocation must have a durable ID")
+        })
+        .collect::<Vec<_>>();
+    invocation_ids.sort_unstable();
+    invocation_ids.dedup();
+    assert_eq!(invocation_ids.len(), workers);
+}
+
+#[test]
 fn foreground_history_never_waits_for_the_background_connection_mutex() {
     let dir = tempdir().unwrap();
     let path = history_path(dir.path());

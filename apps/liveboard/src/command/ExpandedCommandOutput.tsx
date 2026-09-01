@@ -63,6 +63,10 @@ export function ExpandedCommandOutput(props: {
     revision()
     return props.state.recoveryErrorMessage()
   }
+  const loading = () => {
+    revision()
+    return props.state.isLoading()
+  }
   const outputText = () => {
     revision()
     return props.state.materialize()
@@ -108,6 +112,16 @@ export function ExpandedCommandOutput(props: {
       </Show>
       <Show when={recoveryError()}>
         {(message) => <div class="output-notice output-notice-warning">{message()}</div>}
+      </Show>
+      <Show
+        when={
+          loading() &&
+          outputText().length === 0 &&
+          !displayUnavailable() &&
+          !recoveryError()
+        }
+      >
+        <div class="output-notice">Loading output…</div>
       </Show>
       <pre
         ref={outputElement}

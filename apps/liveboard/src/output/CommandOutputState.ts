@@ -23,6 +23,7 @@ export class CommandOutputState {
   private hydrated = false
   private final = false
   private complete = false
+  private loading = false
   private displayState: string | undefined
   private displayReason: string | undefined
   private recoveryError: string | undefined
@@ -122,6 +123,10 @@ export class CommandOutputState {
     return this.recoveryError
   }
 
+  isLoading() {
+    return this.loading
+  }
+
   hasDroppedPrefix() {
     return this.buffer.hasDroppedPrefix()
   }
@@ -138,8 +143,12 @@ export class CommandOutputState {
     if (!this.needsRecovery()) return
     if (this.hydration) return this.hydration
     this.recoveryError = undefined
+    this.loading = true
+    this.notify()
     this.hydration = this.hydrateRecentTail().finally(() => {
+      this.loading = false
       this.hydration = undefined
+      this.notify()
     })
     return this.hydration
   }

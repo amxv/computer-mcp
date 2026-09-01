@@ -439,8 +439,32 @@ impl LocalHistoryReader {
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .context("failed to summarize Local invocation output")?;
+        let fallback_output = if chunk_count == 0 {
+            result_output_for_invocation(&connection, invocation_id)?
+                .filter(|output| !output.is_empty())
+        } else {
+            None
+        };
+        let (available, chunk_count, size_bytes, first_cursor, last_cursor) =
+            if let Some(output) = fallback_output {
+                (
+                    true,
+                    1,
+                    i64::try_from(output.len()).unwrap_or(i64::MAX),
+                    Some(0),
+                    Some(0),
+                )
+            } else {
+                (
+                    chunk_count > 0,
+                    chunk_count,
+                    size_bytes,
+                    first_cursor,
+                    last_cursor,
+                )
+            };
         Ok(Some(HistoryOutputMetadata {
-            available: chunk_count > 0,
+            available,
             chunk_count: u64::try_from(chunk_count).unwrap_or(0),
             size_bytes: u64::try_from(size_bytes).unwrap_or(0),
             capture_state,
@@ -461,16 +485,18 @@ impl LocalHistoryReader {
         }
         let connection = open_read_only(path)?;
         verify_readable_schema(&connection)?;
-        let exists: bool = connection
+        let invocation = connection
             .query_row(
-                "SELECT EXISTS(SELECT 1 FROM invocations WHERE id = ?1)",
+                "SELECT COALESCE(completed_at_ms, started_at_ms)
+                 FROM invocations WHERE id = ?1",
                 [invocation_id],
-                |row| row.get(0),
+                |row| row.get::<_, i64>(0),
             )
+            .optional()
             .context("failed to check Local invocation for output page")?;
-        if !exists {
+        let Some(result_observed_at_ms) = invocation else {
             return Ok(None);
-        }
+        };
         let limit = limit.max(1);
         let sql_limit = i64::try_from(limit.saturating_add(1)).unwrap_or(i64::MAX);
         let cursor = i64::try_from(cursor).unwrap_or(i64::MAX);
@@ -498,6 +524,17 @@ impl LocalHistoryReader {
         } else {
             None
         };
+        if chunks.is_empty()
+            && cursor == 0
+            && let Some(output) = result_output_for_invocation(&connection, invocation_id)?
+            && !output.is_empty()
+        {
+            chunks.push(HistoryOutputChunk {
+                sequence: 0,
+                observed_at_ms: result_observed_at_ms,
+                text: output,
+            });
+        }
         Ok(Some(HistoryOutputPage {
             chunks,
             next_cursor,
@@ -574,6 +611,33 @@ impl LocalHistoryReader {
             HistoryFormat::Markdown => Ok(render_markdown(records, raw)),
         }
     }
+}
+
+pub(super) fn result_output_from_json(raw: Option<&str>) -> Option<String> {
+    raw.and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+        .and_then(|value| {
+            value
+                .get("output")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+}
+
+pub(super) fn result_output_for_invocation(
+    connection: &Connection,
+    invocation_id: i64,
+) -> Result<Option<String>> {
+    let raw = connection
+        .query_row(
+            "SELECT result_json FROM invocations
+             WHERE id = ?1 AND tool_name = 'exec_command'",
+            [invocation_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()
+        .context("failed to query exact Local invocation result output")?
+        .flatten();
+    Ok(result_output_from_json(raw.as_deref()))
 }
 
 pub(super) fn open_read_only(path: &Path) -> Result<Connection> {

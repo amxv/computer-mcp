@@ -1,4 +1,4 @@
-import { Show, createSignal, onCleanup } from 'solid-js'
+import { Show, createEffect, createSignal, onCleanup } from 'solid-js'
 
 import type { PresentationRecord } from '../api/client'
 import type { AgentStreamController } from '../streams/AgentStreamController'
@@ -67,6 +67,7 @@ export function CommandCard(props: {
   const [auditOpen, setAuditOpen] = createSignal(false)
   const [commandCopied, setCommandCopied] = createSignal(false)
   let commandCopyFeedbackTimeout: ReturnType<typeof setTimeout> | undefined
+  let lastAvailabilityProbeRecord: CommandRecord | undefined
   const outcome = () => commandOutcome(props.record)
   const durationMs = () =>
     props.record.duration_ms ??
@@ -80,10 +81,27 @@ export function CommandCard(props: {
     outcome().compact !== 'Running'
   const hasOutput = () => {
     if ((props.record.output?.length ?? 0) > 0) return true
-    const streamed = streamedOutputAvailability()
-    if (streamed !== undefined) return streamed
-    return props.record.started_at_ms < props.controller.attachWatermarkMs
+    return streamedOutputAvailability() === true
   }
+
+  createEffect(() => {
+    const record = props.record
+    const availability = streamedOutputAvailability()
+    if (
+      record.status === 'running' ||
+      (record.output?.length ?? 0) > 0 ||
+      availability === true ||
+      lastAvailabilityProbeRecord === record
+    ) {
+      return
+    }
+    lastAvailabilityProbeRecord = record
+    void props.controller.probeCommandOutputAvailability(
+      record.presentation_id,
+      record.primary_invocation_id,
+      availability === false,
+    )
+  })
 
   onCleanup(() => {
     if (commandCopyFeedbackTimeout !== undefined) clearTimeout(commandCopyFeedbackTimeout)

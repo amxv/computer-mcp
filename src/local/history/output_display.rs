@@ -6,7 +6,7 @@ use rusqlite::OptionalExtension;
 use crate::local::presentation::StreamingDisplaySanitizer;
 
 use super::LocalHistoryReader;
-use super::query::{HistoryOutputChunk, open_read_only};
+use super::query::{HistoryOutputChunk, open_read_only, result_output_for_invocation};
 use super::schema::verify_readable_schema;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,18 +34,18 @@ impl LocalHistoryReader {
         }
         let connection = open_read_only(path)?;
         verify_readable_schema(&connection)?;
-        let exists = connection
+        let invocation = connection
             .query_row(
-                "SELECT 1 FROM invocations WHERE id = ?1",
+                "SELECT COALESCE(completed_at_ms, started_at_ms)
+                 FROM invocations WHERE id = ?1",
                 [invocation_id],
-                |_| Ok(()),
+                |row| row.get::<_, i64>(0),
             )
             .optional()
-            .context("failed to check Local invocation for display output page")?
-            .is_some();
-        if !exists {
+            .context("failed to check Local invocation for display output page")?;
+        let Some(result_observed_at_ms) = invocation else {
             return Ok(None);
-        }
+        };
 
         let limit = limit.max(1);
         let mut statement = connection
@@ -100,6 +100,18 @@ impl LocalHistoryReader {
                 sequence,
                 observed_at_ms,
                 text: sanitizer.push(&raw),
+            });
+        }
+
+        if expected_sequence == 0
+            && cursor == 0
+            && let Some(output) = result_output_for_invocation(&connection, invocation_id)?
+            && !output.is_empty()
+        {
+            chunks.push(HistoryOutputChunk {
+                sequence: 0,
+                observed_at_ms: result_observed_at_ms,
+                text: sanitizer.push(&output),
             });
         }
 

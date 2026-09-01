@@ -19,8 +19,8 @@ use crate::invocation::{
 
 const AGENT_ID_ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
 const AGENT_ID_ATTEMPTS: usize = 128;
-const FOREGROUND_GATE_TIMEOUT: Duration = Duration::from_millis(10);
-const FOREGROUND_SQLITE_BUSY_TIMEOUT: Duration = Duration::from_millis(5);
+const FOREGROUND_GATE_TIMEOUT: Duration = Duration::from_millis(250);
+const FOREGROUND_SQLITE_BUSY_TIMEOUT: Duration = Duration::from_millis(50);
 
 pub(super) type AgentIdSource = Arc<dyn Fn() -> String + Send + Sync>;
 
@@ -606,7 +606,6 @@ impl HistoryStore {
         // evidence writes are briefly serialized so normal multi-Agent bursts
         // retain evidence atomically, but both this gate and SQLite writer-lock
         // waiting are hard-bounded. After either bound, the caller fails open.
-        let _foreground = self.lock_foreground_gate()?;
         let mut connection = Connection::open(&self.path).with_context(|| {
             format!(
                 "failed to open foreground Local history connection {}",
@@ -619,6 +618,11 @@ impl HistoryStore {
         connection
             .pragma_update(None, "foreign_keys", "ON")
             .context("failed to enable foreground Local history foreign keys")?;
+        // Opening/configuring independent SQLite handles does not need the
+        // foreground writer gate. Acquire it only for the actual evidence
+        // mutation so concurrent model tool calls spend as little time as
+        // possible serialized behind one another.
+        let _foreground = self.lock_foreground_gate()?;
         operation(&mut connection)
     }
 }

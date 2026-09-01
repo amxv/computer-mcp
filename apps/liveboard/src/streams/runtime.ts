@@ -463,7 +463,6 @@ export function createRuntimeConnection(
 
   const synchronizeAfterOpen = async (firstOpen: boolean) => {
     if (disposed) return
-    setConnectionState(firstOpen ? 'connecting' : 'recovering')
     setConnectionError(undefined)
     try {
       if (!firstOpen) {
@@ -494,7 +493,7 @@ export function createRuntimeConnection(
     } catch (error) {
       const message = messageFrom(error)
       setConnectionError(message)
-      setConnectionState(message.includes('incompatible') ? 'incompatible' : 'disconnected')
+      if (message.includes('incompatible')) setConnectionState('incompatible')
     }
   }
 
@@ -502,7 +501,6 @@ export function createRuntimeConnection(
     const boundary = safeRecoveryWatermark()
     synchronization = synchronization.then(async () => {
       if (disposed) return
-      setConnectionState('recovering')
       try {
         for (const controller of controllers.values()) {
           controller.markOutputRecoveryNeeded()
@@ -514,7 +512,6 @@ export function createRuntimeConnection(
         setConnectionState('connected')
       } catch (error) {
         setConnectionError(`Gap recovery failed: ${messageFrom(error)}`)
-        setConnectionState('disconnected')
       }
     })
   }
@@ -658,12 +655,15 @@ export function createRuntimeConnection(
       }
       const wasReconnect = openedOnce
       openedOnce = true
+      // The connection indicator describes the live SSE transport. Durable
+      // timeline catch-up can continue in the background without making an
+      // already-open observer look disconnected or perpetually "Connecting".
+      setConnectionState('connected')
+      setConnectionError(undefined)
       if (purpose === 'handover' && pendingSource === source) {
         activeSource?.close()
         activeSource = source
         pendingSource = undefined
-        setConnectionState('connected')
-        setConnectionError(undefined)
         return
       }
       synchronization = synchronization.then(() => synchronizeAfterOpen(!wasReconnect && !initialRecoveryComplete))

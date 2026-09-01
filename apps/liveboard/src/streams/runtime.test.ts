@@ -165,6 +165,56 @@ afterEach(() => {
 })
 
 describe('runtime connection', () => {
+  it('reports the SSE transport connected while initial durable recovery is still pending', async () => {
+    const sources: FakeEventSource[] = []
+    let resolveTimeline: ((page: ApiTimelinePage) => void) | undefined
+    const api: RuntimeApi = {
+      fetchStatus: async () => status(),
+      fetchCurrentAgents: async () => ({ agents: [agent('a111')] }),
+      fetchTimeline: (_query, runtimeId) =>
+        new Promise<ApiTimelinePage>((resolve) => {
+          resolveTimeline = resolve
+        }).then((result) => ({ ...result, runtime_id: runtimeId })),
+      fetchTimelineDetail: async () => {
+        throw new Error('timeline detail not expected')
+      },
+      fetchTimelineDiffBatch: async (_presentationIds, runtimeId) => ({
+        schema_version: 1,
+        presentation_version: 3,
+        runtime_id: runtimeId,
+        records: [],
+      }),
+      fetchOutputMetadata: async () => {
+        throw new Error('output metadata not expected')
+      },
+      fetchOutputPage: async () => {
+        throw new Error('output page not expected')
+      },
+      openEventSource: (url) => {
+        const source = new FakeEventSource(url)
+        sources.push(source)
+        return source
+      },
+    }
+    const runtime = createRuntimeConnection({
+      initialStatus: status(),
+      initialAgents: [agent('a111')],
+      initialVisibleAgentIds: ['a111'],
+      viewerAttachWatermarkMs: 1_000,
+      api,
+    })
+
+    runtime.start()
+    sources[0]!.open()
+    expect(runtime.connectionState()).toBe('connected')
+    await vi.waitFor(() => expect(resolveTimeline).toBeDefined())
+    expect(runtime.connectionState()).toBe('connected')
+
+    resolveTimeline!(page('runtime-one', []))
+    await vi.waitFor(() => expect(runtime.connectionState()).toBe('connected'))
+    runtime.dispose()
+  })
+
   it('keeps focused recovery, SSE, and visible state scoped to one Agent', async () => {
     const sources: FakeEventSource[] = []
     const timelineQueries: TimelineQuery[] = []
@@ -301,7 +351,7 @@ describe('runtime connection', () => {
     expect(sources[0]?.url).toBe('api/events?output_agent_ids=a111&diffs=full')
     sources[0]!.open()
     await vi.waitFor(() => expect(runtime.connectionState()).toBe('connected'))
-    expect(firstController.orderedIds()).toEqual(['inv-1'])
+    await vi.waitFor(() => expect(firstController.orderedIds()).toEqual(['inv-1']))
     expect(timelineQueries).toContainEqual({
       agentId: 'a111',
       recoverySinceMs: 1_000,
@@ -592,12 +642,14 @@ describe('runtime connection', () => {
     expect(sources[0]?.url).toBe('api/events?output_agent_ids=a111&diffs=summary')
     sources[0]!.open()
     await vi.waitFor(() => expect(runtime.connectionState()).toBe('connected'))
-    const initialSummary = controller.record('inv-10')
-    expect(
-      initialSummary?.kind === 'file_changes'
-        ? initialSummary.changes[0]?.diff_lines_included
-        : undefined,
-    ).toBe(false)
+    await vi.waitFor(() => {
+      const initialSummary = controller.record('inv-10')
+      expect(
+        initialSummary?.kind === 'file_changes'
+          ? initialSummary.changes[0]?.diff_lines_included
+          : undefined,
+      ).toBe(false)
+    })
 
     const live = fileRecord(11, 'a111', false)
     sources[0]!.emit(

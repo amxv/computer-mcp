@@ -432,7 +432,7 @@ describe('command card', () => {
       ),
       container,
     )
-    expect(metadata).not.toHaveBeenCalled()
+    await vi.waitFor(() => expect(metadata).toHaveBeenCalledTimes(1))
     expect(page).not.toHaveBeenCalled()
 
     const header = container.querySelector<HTMLElement>('.command-card-header')!
@@ -458,7 +458,135 @@ describe('command card', () => {
     )
     header.click()
     await vi.waitFor(() => expect(metadata).toHaveBeenCalledTimes(2))
-    expect(page).toHaveBeenCalledTimes(2)
+    await vi.waitFor(() => expect(page).toHaveBeenCalledTimes(2))
+  })
+
+  it('keeps final commands with no durable or exact output non-expandable', async () => {
+    const metadata = vi.fn(async () => noOutputMetadata())
+    const page = vi.fn(async () => emptyDisplayPage())
+    const stream = createAgentStreamController({
+      agentId: 'a111',
+      attachWatermarkMs: 2_000,
+      loadHistoryPage: async () => ({
+        schema_version: 1,
+        presentation_version: 3,
+        runtime_id: 'runtime-one',
+        records: [],
+        has_more: false,
+        next_cursor: null,
+      }),
+      loadOutputMetadata: metadata,
+      loadDisplayOutputPage: page,
+    })
+    const finalRecord = command({
+      status: 'exited',
+      duration_ms: 20,
+      exit_code: 0,
+      termination_reason: 'exit',
+    })
+    const container = document.createElement('div')
+    document.body.append(container)
+    containerCurrent = container
+    disposeCurrent = render(
+      () => (
+        <CommandCard
+          record={finalRecord}
+          controller={stream}
+          runtimeId="runtime-one"
+          nowMs={10_000}
+        />
+      ),
+      container,
+    )
+
+    await vi.waitFor(() => expect(metadata).toHaveBeenCalledTimes(1))
+    const header = container.querySelector<HTMLElement>('.command-card-header')!
+    expect(header.classList.contains('command-card-header-expandable')).toBe(false)
+    header.click()
+    expect(container.querySelector('[aria-label="Command output"]')).toBeNull()
+    expect(page).not.toHaveBeenCalled()
+  })
+
+  it('shows an explicit loading state while lazy durable output is being fetched', async () => {
+    let resolvePage: ((page: ApiOutputPage) => void) | undefined
+    const metadata = vi.fn(async (): Promise<ApiOutputMetadataDocument> => ({
+      schema_version: 1,
+      runtime_id: 'runtime-one',
+      invocation_id: 10,
+      output: {
+        available: true,
+        chunk_count: 1,
+        size_bytes: 12,
+        capture_state: 'complete',
+        capture_reason: null,
+        first_cursor: 0,
+        last_cursor: 0,
+      },
+    }))
+    const page = vi.fn(
+      async () =>
+        new Promise<ApiOutputPage>((resolve) => {
+          resolvePage = resolve
+        }),
+    )
+    const stream = createAgentStreamController({
+      agentId: 'a111',
+      attachWatermarkMs: 2_000,
+      loadHistoryPage: async () => ({
+        schema_version: 1,
+        presentation_version: 3,
+        runtime_id: 'runtime-one',
+        records: [],
+        has_more: false,
+        next_cursor: null,
+      }),
+      loadOutputMetadata: metadata,
+      loadDisplayOutputPage: page,
+    })
+    const finalRecord = command({
+      status: 'exited',
+      duration_ms: 20,
+      exit_code: 0,
+      termination_reason: 'exit',
+    })
+    const container = document.createElement('div')
+    document.body.append(container)
+    containerCurrent = container
+    disposeCurrent = render(
+      () => (
+        <CommandCard
+          record={finalRecord}
+          controller={stream}
+          runtimeId="runtime-one"
+          nowMs={10_000}
+        />
+      ),
+      container,
+    )
+
+    const header = container.querySelector<HTMLElement>('.command-card-header')!
+    await vi.waitFor(() =>
+      expect(header.classList.contains('command-card-header-expandable')).toBe(true),
+    )
+    header.click()
+    await vi.waitFor(() => expect(container.textContent).toContain('Loading output…'))
+    expect(container.querySelector('[aria-label="Command output"]')?.textContent).toBe('')
+
+    resolvePage!({
+      schema_version: 1,
+      runtime_id: 'runtime-one',
+      invocation_id: 10,
+      view: 'display',
+      chunks: [{ sequence: 0, observed_at_ms: 1, text: 'loaded output\n' }],
+      next_cursor: null,
+      display_state: 'available',
+    })
+    await vi.waitFor(() =>
+      expect(container.querySelector('[aria-label="Command output"]')?.textContent).toContain(
+        'loaded output',
+      ),
+    )
+    expect(container.textContent).not.toContain('Loading output…')
   })
 
   it('renders stdin and kill as distinct compact interaction cards with cross-Agent context', () => {

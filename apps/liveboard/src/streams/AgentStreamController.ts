@@ -82,6 +82,11 @@ export interface AgentStreamController {
   ) => void
   outputState: (presentationId: string, invocationId: number) => CommandOutputState
   commandOutputAvailability: (presentationId: string) => Accessor<boolean | undefined>
+  probeCommandOutputAvailability: (
+    presentationId: string,
+    invocationId: number,
+    force?: boolean,
+  ) => Promise<boolean | undefined>
   markOutputRecoveryNeeded: () => void
   lastLiveOutputSequence: (presentationId: string) => number | undefined
   commandExpanded: (presentationId: string) => Accessor<boolean>
@@ -113,7 +118,9 @@ export function createAgentStreamController(
 ): AgentStreamController {
   const cards = new Map<string, CardSlot>()
   const outputStates = new Map<string, CommandOutputState>()
+  const outputMetadataCache = new Map<number, ApiOutputMetadataDocument>()
   const [outputAvailability, setOutputAvailability] = createSignal(new Map<string, boolean>())
+  const outputAvailabilityProbes = new Map<string, Promise<boolean | undefined>>()
   const commandExpansion = new Map<string, ExpansionSlot>()
   const diffExpansion = new Map<string, ExpansionSlot>()
   const unseenIds = new Set<string>()
@@ -220,8 +227,51 @@ export function createAgentStreamController(
   }
 
   const outputLoader: CommandOutputLoader = {
-    loadMetadata: options.loadOutputMetadata,
+    loadMetadata: async (invocationId) => {
+      const cached = outputMetadataCache.get(invocationId)
+      if (cached) {
+        outputMetadataCache.delete(invocationId)
+        return cached
+      }
+      return options.loadOutputMetadata(invocationId)
+    },
     loadDisplayPage: options.loadDisplayOutputPage,
+  }
+
+  const probeCommandOutputAvailability = (
+    presentationId: string,
+    invocationId: number,
+    force = false,
+  ): Promise<boolean | undefined> => {
+    const known = outputAvailability().get(presentationId)
+    if (!force && known !== undefined) return Promise.resolve(known)
+    const pending = outputAvailabilityProbes.get(presentationId)
+    if (pending) return pending
+    const probe = options
+      .loadOutputMetadata(invocationId)
+      .then((document) => {
+        if (document.output.available && document.output.capture_state !== 'pending') {
+          outputMetadataCache.set(invocationId, document)
+        }
+        if (document.output.available) {
+          markOutputAvailability(presentationId, true)
+          return true
+        }
+        // A final process event can beat the PTY reader's durable EOF. Keep
+        // availability unknown while capture is still pending so a transient
+        // empty metadata read never permanently disables a real output card.
+        if (document.output.capture_state === 'pending') return undefined
+        markOutputAvailability(presentationId, false)
+        return false
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (outputAvailabilityProbes.get(presentationId) === probe) {
+          outputAvailabilityProbes.delete(presentationId)
+        }
+      })
+    outputAvailabilityProbes.set(presentationId, probe)
+    return probe
   }
 
   const outputState = (presentationId: string, invocationId: number) => {
@@ -337,14 +387,27 @@ export function createAgentStreamController(
       const state = outputStates.get(presentationId)
       if (displayState === 'unavailable') {
         markOutputAvailability(presentationId, true)
-      } else if (outputAvailability().get(presentationId) !== true) {
-        markOutputAvailability(presentationId, (state?.materialize().length ?? 0) > 0)
+      } else if ((state?.materialize().length ?? 0) > 0) {
+        markOutputAvailability(presentationId, true)
       }
       state?.markComplete(displayState, displayReason)
+      const record = cards.get(presentationId)?.record()
+      if (
+        displayState !== 'unavailable' &&
+        outputAvailability().get(presentationId) !== true &&
+        record?.kind === 'command'
+      ) {
+        void probeCommandOutputAvailability(
+          presentationId,
+          record.primary_invocation_id,
+          true,
+        )
+      }
     },
     outputState,
     commandOutputAvailability: (presentationId) => () =>
       outputAvailability().get(presentationId),
+    probeCommandOutputAvailability,
     markOutputRecoveryNeeded: () => {
       for (const state of outputStates.values()) state.markRecoveryNeeded()
     },
@@ -399,6 +462,8 @@ export function createAgentStreamController(
       disposed = true
       cards.clear()
       outputStates.clear()
+      outputMetadataCache.clear()
+      outputAvailabilityProbes.clear()
       setOutputAvailability(new Map())
       commandExpansion.clear()
       diffExpansion.clear()

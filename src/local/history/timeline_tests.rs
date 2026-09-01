@@ -821,3 +821,62 @@ fn lean_timeline_projection_never_selects_exact_result_or_pty_bodies() {
     assert!(!projection.contains("invocation_output_chunks"));
     assert!(!projection.contains("output_preview"));
 }
+
+#[test]
+fn output_views_fall_back_to_exact_tool_result_when_no_pty_chunk_was_captured() {
+    let dir = tempdir().unwrap();
+    let database = dir.path().join("history.sqlite3");
+    let history = open_history(&database, "runtime-result-output-fallback");
+    let command = history
+        .begin(
+            provider_context("result-output-fallback"),
+            InvocationStart::new("exec_command", json!({"cmd": "synthetic-timeout"})),
+        )
+        .unwrap();
+    let invocation_id = command.invocation_id.unwrap();
+    history.observe_output_complete(SessionOutputCompletion {
+        internal_session_id: 42,
+        session_handle: Arc::from("result-output-fallback-handle"),
+        invocation: command.clone(),
+    });
+    complete(
+        &history,
+        &command,
+        json!({
+            "status": "exited",
+            "exit_code": -1,
+            "termination_reason": "timeout",
+            "output": "\n[zodexd] process timed out and was terminated\n"
+        }),
+    );
+    history.flush_for_test().unwrap();
+
+    let metadata = LocalHistoryReader::output_metadata(&database, invocation_id)
+        .unwrap()
+        .unwrap();
+    assert!(metadata.available);
+    assert_eq!(metadata.chunk_count, 1);
+    assert_eq!(metadata.first_cursor, Some(0));
+    assert_eq!(metadata.last_cursor, Some(0));
+
+    let raw = LocalHistoryReader::output_page(&database, invocation_id, 0, 8)
+        .unwrap()
+        .unwrap();
+    assert_eq!(raw.chunks.len(), 1);
+    assert_eq!(
+        raw.chunks[0].text,
+        "\n[zodexd] process timed out and was terminated\n"
+    );
+
+    let display = LocalHistoryReader::display_output_page(&database, invocation_id, 0, 8)
+        .unwrap()
+        .unwrap();
+    assert_eq!(display.display_state, "available");
+    assert_eq!(display.chunks.len(), 1);
+    assert_eq!(
+        display.chunks[0].text,
+        "\n[zodexd] process timed out and was terminated\n"
+    );
+
+    history.shutdown_blocking().unwrap();
+}
