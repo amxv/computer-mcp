@@ -4,13 +4,26 @@
         body: &str,
     ) -> (ProxyDeployCommandSpec, PathBuf) {
         let runner = dir.join("fake-wrangler");
+        let staged_runner = dir.join("fake-wrangler.tmp");
         let log = dir.join("wrangler-calls.log");
         let log_literal = shell_escape_single_quotes(&log.display().to_string());
         let script = format!(
             "#!/bin/sh\nset -eu\nLOG={log_literal}\nprintf '%s\\n' \"$*\" >> \"$LOG\"\n{body}\n"
         );
-        fs::write(&runner, script).expect("write fake Wrangler");
-        fs::set_permissions(&runner, fs::Permissions::from_mode(0o755)).expect("chmod fake Wrangler");
+        // Linux can return ETXTBSY if a just-written executable is spawned
+        // while the write handle is still being torn down. Stage the script,
+        // close it explicitly, then atomically publish the executable path so
+        // the command runner never observes a file that is open for writing.
+        {
+            use std::io::Write as _;
+
+            let mut file = fs::File::create(&staged_runner).expect("create fake Wrangler");
+            file.write_all(script.as_bytes()).expect("write fake Wrangler");
+            file.sync_all().expect("sync fake Wrangler");
+            file.set_permissions(fs::Permissions::from_mode(0o755))
+                .expect("chmod fake Wrangler");
+        }
+        fs::rename(&staged_runner, &runner).expect("publish fake Wrangler");
         (
             ProxyDeployCommandSpec {
                 program: runner.display().to_string(),
