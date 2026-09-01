@@ -8,6 +8,13 @@ summary: "Version-by-version changes across the Zodex CLI, Sprite runtime/workfl
 
 This changelog tracks code and product changes in zodex. It intentionally skips docs-site-only updates.
 
+## 0.3.16 — 2026-09-01
+
+- Fixed Local invocation-history admission under short SQLite writer contention so successful `exec_command` and `apply_patch` calls no longer disappear from Liveboard while the underlying tool continues normally.
+- Made the Liveboard connection indicator track the live SSE transport independently from slower durable-history recovery, preventing a healthy board from remaining stuck on **Connecting** while catch-up work continues in the background.
+- Fixed lazy command-output hydration so completed commands only expand when output is actually available, show an explicit loading state during recovery, and fall back to the exact tool result when PTY chunks were not retained instead of rendering an empty output box.
+- Added regression coverage for concurrent invocation bursts, zero-PTY exact-result recovery, outputless commands, delayed output hydration, and the Liveboard connection state.
+
 ## 0.3.15 — 2026-08-30
 
 - Added default-on, independently configurable repo-local skill discovery for Zodex Local. On the first successful invocation in an exact workdir, Local can advertise parsed skills found under `<workdir>/.agents/skills` once per ChatGPT conversation/workdir without traversing parent directories or changing the underlying tool result.
